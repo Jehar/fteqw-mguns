@@ -250,7 +250,7 @@ typedef struct {
 #ifndef R_MAX_RECURSE
 #define R_MAX_RECURSE	6
 #endif
-#define RDFD_FOV 1
+#define RDFD_FOV	1
 typedef struct
 {
 	vrect_t		grect;				// game rectangle. fullscreen except for csqc/splitscreen/hud.
@@ -267,7 +267,7 @@ typedef struct
 	vec3_t		base_angles, base_origin; /*for vr output, overrides per-eye viewangles according to that eye's matrix.*/
 
 	float		fov_x, fov_y, afov;
-	float		fovv_x, fovv_y;	//viewmodel fovs
+	float		fovv_x, fovv_y, afovv;	//viewmodel fovs
 	float		mindist, maxdist;	//maxdist may be 0, for 'infinite', in which case mindist probably isn't valid either.
 
 	qboolean	drawsbar;

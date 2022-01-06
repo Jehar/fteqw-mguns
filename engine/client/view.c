@@ -1341,7 +1341,7 @@ void V_ApplyAFov(playerview_t *pv)
 
 	if (!r_refdef.fovv_x || !r_refdef.fovv_y)
 	{
-		float afov = scr_fov_viewmodel.value;
+		float afov = r_refdef.afovv;
 		if (afov)
 			V_CalcAFov(afov, &r_refdef.fovv_x, &r_refdef.fovv_y, (r_refdef.vrect.width*r_refdef.pxrect.width)/vid.fbvwidth, (r_refdef.vrect.height*r_refdef.pxrect.height)/vid.fbvheight);
 		else
@@ -1549,6 +1549,8 @@ void V_ClearRefdef(playerview_t *pv)
 	r_refdef.afov = scr_fov.value;	//will have a better value applied if fov is bad. this allows setting.
 	r_refdef.fov_x = 0;
 	r_refdef.fov_y = 0;
+
+	r_refdef.afovv = scr_fov_viewmodel.value;
 	r_refdef.fovv_x = 0;
 	r_refdef.fovv_y = 0;
 	r_refdef.projectionoffset[0] = r_refdef.projectionoffset[1] = 0;

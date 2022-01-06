@@ -2484,6 +2484,21 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 		r_refdef.dirty |= RDFD_FOV;
 		break;
 
+	case VF_VIEWMODEL_AFOV:
+		// if we have 2 args, use x y fov, otherwise afov
+		if (prinst->callargc > 2)
+		{
+			r_refdef.fovv_x = G_FLOAT(OFS_PARM1);
+			r_refdef.fovv_y = G_FLOAT(OFS_PARM2);
+		}
+		else
+		{
+			r_refdef.afovv = G_FLOAT(OFS_PARM1);
+			r_refdef.fovv_x = r_refdef.fovv_y = 0;
+		}
+		r_refdef.dirty |= RDFD_FOV;
+		break;
+
 	case VF_SKYROOM_CAMERA:
 		r_refdef.skyroom_enabled = true;
 		VectorCopy(p, r_refdef.skyroom_pos);

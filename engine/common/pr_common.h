@@ -797,6 +797,7 @@ typedef enum
 	VF_PIXELPSCALE		= 223,	//[dpi_x, dpi_y, dpi_y/dpi_x]
 	VF_PROJECTIONOFFSET	= 224,	//allows for off-axis projections.
 	VF_VRBASEORIENTATION= 225,	//specifies the worldspace coords+angles of the VR room space.
+	VF_VIEWMODEL_AFOV	= 226,	//approximate fov for RF_VIEWMODEL entities
 	//WARNING: update fteqcc when new entries are added.
 
 
