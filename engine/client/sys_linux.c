@@ -30,16 +30,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <dlfcn.h>
 #include <dirent.h>
-#if !defined(__CYGWIN__) && !defined(__DJGPP__)
-# include <sys/ipc.h>
-# include <sys/shm.h>
-#endif
 #include <sys/stat.h>
 #include <string.h>
 #include <ctype.h>
@@ -776,8 +771,8 @@ static int Sys_EnumerateFiles2 (const char *truepath, int apathofs, const char *
 						return false;
 					}
 				}
-				else
-					Con_DPrintf("Stat failed for \"%s\"\n", file);	//can happen with dead symlinks
+//				else
+//					Con_DPrintf("Stat failed for \"%s\"\n", file);	//can happen with dead symlinks
 			}
 		}
 	} while(1);

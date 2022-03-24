@@ -698,6 +698,7 @@ typedef struct client_s
 	enum serverprotocols_e protocol;
 	unsigned int	supportedprotocols;
 	qboolean proquake_angles_hack;	//expect 16bit client->server angles .
+	qboolean qex;	//qex sends strange clc inputs and needs workarounds for its prediction. it also favours fitzquake's protocol but violates parts of it.
 
 	unsigned int lastruncmd;	//for non-qw physics. timestamp they were last run, so switching between physics modes isn't a (significant) cheat
 //speed cheat testing
@@ -1183,6 +1184,7 @@ typedef struct
 	enum serverprotocols_e protocol;		//protocol used to talk to this client.
 #ifdef NQPROT
 	qboolean proquakeanglehack;				//specifies that the client will expect proquake angles if we give a proquake CCREP_ACCEPT response.
+	qboolean isqex;							//yay quirks...
 	unsigned int expectedreliablesequence;	//required for nq connection cookies (like tcp's syn cookies).
 	unsigned int supportedprotocols;		//1<<SCP_* bitmask
 #endif
@@ -1240,7 +1242,6 @@ void SSV_SavePlayerStats(client_t *cl, int reason);	//initial, periodic (in case
 void SSV_RequestShutdown(void); //asks the cluster to not send us new players
 
 vfsfile_t *Sys_ForkServer(void);
-void Sys_InstructMaster(sizebuf_t *cmd);	//first two bytes will always be the length of the data
 vfsfile_t *Sys_GetStdInOutStream(void);		//obtains a bi-directional pipe for reading/writing via stdin/stdout. make sure the system code won't be using it.
 
 qboolean MSV_NewNetworkedNode(vfsfile_t *stream, qbyte *reqstart, qbyte *buffered, size_t buffersize, const char *remoteaddr);	//call to register a pipe to a newly discovered node.

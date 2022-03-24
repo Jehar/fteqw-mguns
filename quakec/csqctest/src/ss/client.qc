@@ -474,6 +474,7 @@ float(entity to, float fl) SendPlayer =
 {
 	float ef;
 	float f;
+	float mt;
 
 //encode the current weapon in the lower 4 bits.
 	for (f = 1, ef = 0; ef < 16; ef=ef+1,f*=2)
@@ -488,9 +489,12 @@ float(entity to, float fl) SendPlayer =
 		ef |= 64;
 	if (self.items & IT_QUAD)
 		ef |= 32;
-//and the final bit takes an indication to switch of prediction.
-	if (self.movetype != MOVETYPE_WALK)
-		ef |= 16;	//tells the csqc to stop trying to predict (I can't be bothered to send the real movetype)
+//and the final bit takes an indication to switch off prediction.
+	mt = self.movetype;
+	if (self.pmove_flags&1)
+		mt |= 128;
+	if (mt != MOVETYPE_WALK)
+		ef |= 16;
 
 
 	WriteByte(MSG_ENTITY, CLASS_PLAYER);
@@ -504,6 +508,8 @@ float(entity to, float fl) SendPlayer =
 	WriteShort(MSG_ENTITY, self.velocity_y);
 	WriteShort(MSG_ENTITY, self.velocity_z);
 	WriteByte(MSG_ENTITY, ef);
+	if (ef & 16)
+		WriteByte(MSG_ENTITY, mt);
 	return TRUE;
 };
 
@@ -903,8 +909,8 @@ void() WaterMove =
 		self.dmgtime = 0;
 	}
 	
-	if (! (self.flags & FL_WATERJUMP) )
-		self.velocity = self.velocity - 0.8*self.waterlevel*frametime*self.velocity;
+//	if (! (self.flags & FL_WATERJUMP) )
+//		self.velocity = self.velocity - 0.8*self.waterlevel*frametime*self.velocity;
 };
 
 void() CheckWaterJump =
@@ -1205,15 +1211,16 @@ void() ClientConnect =
 	if (intermission_running)
 		ExitIntermission ();
 
+	__using dimension_see;	//csqc support checks are safe. just mute the splitscreen/mvd warnings.
 	self.usingcsqc = stof(infokey(self, INFOKEY_P_CSQCACTIVE));
 	if (self.usingcsqc)
 	{
-		self.dimension_see = 1;
+		self.dimension_see = DIMENSION_HASCSQC;
 		sprint(self, "Welcome to csqctest!\n");
 	}
 	else
 	{
-		self.dimension_see = 3;
+		self.dimension_see = DIMENSION_NOCSQC;
 
 		bprint(self.netname);
 		bprint(" is not using csqc!\n");
@@ -1559,5 +1566,27 @@ void() SV_RunClientCommand =
 #else
 	runstandardplayerphysics(self);
 #endif
+};
+
+void(string cmd) SV_ParseClientCommand =
+{
+	tokenize(cmd);
+	switch(argv(0))
+	{
+	case "give":	//we have our own additions/behaviours.
+		GiveCommand_f();
+		break;
+
+	//case "god":
+	//case "noclip":
+	//case "fly":
+	//case "setpos":
+	//case "notarget":
+	//case "spiderpig":
+	//case "6dof":
+	default:	//fallback. let the engine handle it.
+		clientcommand(self, cmd);
+		break;
+	}
 };
 

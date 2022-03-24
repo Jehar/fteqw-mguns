@@ -476,6 +476,14 @@ ifeq ($(FTE_TARGET),linux_arm64)
 	BITS=arm64
 	USE_SPEEX=0 #fails to compile due to neon asm, I'm just going to disable it (will still soft-link).
 endif
+ifeq ($(FTE_TARGET),linux_aarch64)
+	FTE_TARGET=linux
+	CC=aarch64-linux-gnu-gcc
+	CXX=aarch64-linux-gnu-g++
+	STRIP=aarch64-linux-gnu-strip
+	BITS=aarch64
+	USE_SPEEX=0 #fails to compile due to neon asm, I'm just going to disable it (will still soft-link).
+endif
 ifeq ($(FTE_TARGET),linux_x32)
 	#DO NOT CONFUSE WITH linux_x86. this target is amd64-with-32bit-pointers
 	#note: the x32 abi is still not finished or something.
@@ -685,7 +693,7 @@ endif
 PKGCONFIG?=$(ARCH)-pkg-config
 ifeq ($(shell which $(PKGCONFIG) 2> /dev/null),)
 	FFS:=$(shell echo $(PKGCONFIG) not found 1>&2 )
-	PKGCONFIG=/bin/true #don't end up using eg /usr/include when cross-compiling. makelibs is a valid workaround.
+	PKGCONFIG=/bin/false #don't end up using eg /usr/include when cross-compiling. makelibs is a valid workaround.
 endif
 #try to statically link
 ifeq ($(COMPILE_SYS),Darwin)
@@ -901,6 +909,7 @@ COMMON_OBJS = \
 	com_bih.o	\
 	com_mesh.o	\
 	common.o 		\
+	json.o		\
 	cvar.o 		\
 	cmd.o 		\
 	crc.o 		\
@@ -2456,7 +2465,7 @@ $(RELEASE_DIR)/httpserver$(BITS)$(EXEPOSTFIX): $(HTTP_OBJECTS)
 	$(CC) -o $@ -Icommon -Iclient -Iqclib -Igl -Iserver -DWEBSERVER -DWEBSVONLY -Dstricmp=strcasecmp -Dstrnicmp=strncasecmp -DNO_PNG $(HTTP_OBJECTS)
 httpserver: $(RELEASE_DIR)/httpserver$(BITS)$(EXEPOSTFIX)
 
-IQM_OBJECTS=../iqm/iqm.cpp ../imgtool.c client/image.c ../plugins/models/gltf.c
+IQM_OBJECTS=../iqm/iqm.cpp ../imgtool.c client/image.c common/json.c ../plugins/models/gltf.c
 $(RELEASE_DIR)/iqmtool$(BITS)$(EXEPOSTFIX): $(IQM_OBJECTS)
 ifeq (win,$(findstring win,$(FTE_TARGET)))
 	$(CC) -o $@ $(IQM_OBJECTS) -Icommon -Iclient -Iqclib -Igl -Iserver $(ALL_CFLAGS) $(CLIENTLIBFLAGS) -DIQMTOOL $(BASELDFLAGS) $(CLIENTLDDEPS) --static -static-libgcc -static-libstdc++ -lstdc++ -lm -Os

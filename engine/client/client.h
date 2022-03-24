@@ -474,6 +474,9 @@ typedef struct
 	#define CPNQ_IS_DP (cls.protocol_nq >= CPNQ_DP5)
 	#define CPNQ_IS_BJP (cls.protocol_nq >= CPNQ_BJP1 && cls.protocol_nq <= CPNQ_BJP3)
 	qboolean proquake_angles_hack;	//angles are always 16bit
+#ifdef NQPROT
+	qboolean qex;	//we're connected to a QuakeEx server, which means lots of special workarounds that are not controlled via the actual protocol version.
+#endif
 
 	int protocol_q2;
 
@@ -854,6 +857,7 @@ typedef struct
 								// is rendering at.  always <= realtime
 	double		lasttime;		//cl.time from last frame.
 	double		lastlinktime;	//cl.time from last frame.
+	double		mapstarttime;	//for computing csqc's cltime.
 
 	float servertime;	//current server time, bound between gametime and gametimemark
 	float mtime;		//server time as on the server when we last received a packet. not allowed to decrease.
@@ -1144,7 +1148,6 @@ void CL_SaveInfo(vfsfile_t *f);
 void CL_SetInfo (int pnum, const char *key, const char *value);
 void CL_SetInfoBlob (int pnum, const char *key, const char *value, size_t valuesize);
 
-void CL_BeginServerConnect(const char *host, int port, qboolean noproxy);
 char *CL_TryingToConnect(void);
 
 void CL_ExecInitialConfigs(char *defaultexec);
@@ -1263,7 +1266,6 @@ void CL_ReadPacket(void);
 
 int  CL_ReadFromServer (void);
 void CL_WriteToServer (usercmd_t *cmd);
-void CL_BaseMove (usercmd_t *cmd, int pnum, float priortime, float extratime);
 
 int Master_FindBestRoute(char *server, char *out, size_t outsize, int *directcost, int *chainedcost);
 

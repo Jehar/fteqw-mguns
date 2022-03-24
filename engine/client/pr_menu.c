@@ -939,6 +939,7 @@ void QCBUILTIN PF_CL_readimage (pubprogfuncs_t *prinst, struct globalvars_s *pr_
 				G_INT(OFS_RETURN) = (char*)ptr - prinst->stringtable;
 				G_INT(OFS_PARM1) = imagewidth;	//out width
 				G_INT(OFS_PARM2) = imageheight;	//out height
+				G_INT(OFS_PARM3) = PR_UnTranslateTextureFormat(format);	//out format...
 			}
 			BZ_Free(imagedata);
 		}
@@ -2322,6 +2323,19 @@ static struct {
 	{"vtos",					PF_vtos,					19},
 	{"etos",					PF_etos,					20},
 	{"stof",					PF_stof,					21},
+
+	{"json_parse",				PF_json_parse,				0},
+	{"json_free",				PF_memfree,					0},
+	{"json_get_value_type",		PF_json_get_value_type,		0},
+	{"json_get_integer",		PF_json_get_integer,		0},
+	{"json_get_float",			PF_json_get_float,			0},
+	{"json_get_string",			PF_json_get_string,			0},
+	{"json_find_object_child",	PF_json_find_object_child,	0},
+	{"json_get_length",			PF_json_get_length,			0},
+	{"json_get_child_at_index",	PF_json_get_child_at_index,	0},
+	{"json_get_name",			PF_json_get_name,			0},
+
+	{"js_run_script",			PF_js_run_script,			0},
 	
 	{"stoi",					PF_stoi,					0},
 	{"itos",					PF_itos,					0},

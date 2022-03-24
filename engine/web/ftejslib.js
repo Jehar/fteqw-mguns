@@ -69,6 +69,7 @@ mergeInto(LibraryManager.library,
 		ctxwarned:0,
 		pointerislocked:0,
 		pointerwantlock:0,
+		clipboard:"",
 		linebuffer:'',
 		localstorefailure:false,
 		w: -1,
@@ -187,11 +188,27 @@ mergeInto(LibraryManager.library,
 					if (!document.fullscreenElement)
 						if (FTEC.evcb.wantfullscreen != 0)
 							if ({{{makeDynCall('i')}}}(FTEC.evcb.wantfullscreen))
-								Module['canvas'].requestFullscreen();
+							{
+								try
+								{
+									Module['canvas'].requestFullscreen();
+								}
+								catch(e)
+								{
+									console.log("requestFullscreen:");
+									console.log(e);
+								}
+							}
 					if (FTEC.pointerwantlock != 0 && FTEC.pointerislocked == 0)
 					{
 						FTEC.pointerislocked = -1;  //don't repeat the request on every click. firefox has a fit at that, so require the mouse to leave the element or something before we retry.
-						Module['canvas'].requestPointerLock({unadjustedMovement: true});
+						Module['canvas'].requestPointerLock({unadjustedMovement: true}).catch(()=>{
+							Module['canvas'].requestPointerLock().then(()=>{
+								console.log("Your shitty browser doesn't support disabling mouse acceleration.");
+							}).catch(()=>{
+								FTEC.pointerislocked = 0;	//failure. no real idea why. try again next frame though...
+							});
+						});
 					}
 					//fallthrough
 				case 'mouseup':
@@ -306,6 +323,7 @@ mergeInto(LibraryManager.library,
 							{{{makeDynCall('viiii')}}}(FTEC.evcb.jbutton, gp.index, j, 0, true);
 					console.log("Gamepad disconnected from index %d: %s", gp.index, gp.id);
 					break;
+				case 'pointerlockerror':
 				case 'pointerlockchange':
 				case 'mozpointerlockchange':
 				case 'webkitpointerlockchange':
@@ -405,7 +423,7 @@ mergeInto(LibraryManager.library,
 						'touchstart', 'touchend', 'touchcancel', 'touchleave', 'touchmove',
 						'dragenter', 'dragover', 'drop',
 						'message', 'resize',
-						'pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange',
+						'pointerlockerror', 'pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange',
 						'focus', 'blur'];   //try to fix alt-tab
 			events.forEach(function(event)
 			{
@@ -413,7 +431,7 @@ mergeInto(LibraryManager.library,
 			});
 
 			var docevents = ['keypress', 'keydown', 'keyup',
-							'pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
+							'pointerlockerror', 'pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
 			docevents.forEach(function(event)
 			{
 				document.addEventListener(event, FTEC.handleevent, true);
@@ -774,6 +792,8 @@ mergeInto(LibraryManager.library,
 			return -1;
 		if (s.con == 0)
 			return 0; //not connected yet
+		if (len == 0)
+			return 0; //...
 		s.ws.send(HEAPU8.subarray(data, data+len));
 		return len;
 	},
@@ -838,60 +858,35 @@ mergeInto(LibraryManager.library,
 		s.ws.binaryType = 'arraybuffer';
 		s.ws.onclose = function(event)
 			{
-//console.log("webrtc datachannel closed:")
-//console.log(event);
 				s.con = 0;
 				s.err = 1;
 			};
 		s.ws.onopen = function(event)
 			{
-//console.log("webrtc datachannel opened:");
-//console.log(event);
 				s.con = 1;
 			};
 		s.ws.onmessage = function(event)
 			{
-//console.log("webrtc datachannel message:");
-//console.log(event);
 				assert(typeof event.data !== 'string' && event.data.byteLength);
 				s.inq.push(new Uint8Array(event.data));
 			};
 			
 		s.pc.onicecandidate = function(e)
 			{
-//console.log("onicecandidate: ");
-//console.log(e);
 				var desc;
 				if (1)
 					desc = JSON.stringify(e.candidate);
 				else
 					desc = e.candidate.candidate;
+				if (desc == null)
+					return;	//no more...
 				s.callcb(4, desc);
-			};
-		s.pc.oniceconnectionstatechange = function(e)
-			{
-//console.log("oniceconnectionstatechange: ");
-//console.log(e);
-			};
-		s.pc.onaddstream = function(e)
-			{
-//console.log("onaddstream: ");
-//console.log(e);
 			};
 		s.pc.ondatachannel = function(e)
 			{
-//console.log("ondatachannel: ");
-//console.log(e);
-
-			s.recvchan = e.channel;
-			s.recvchan.binaryType = 'arraybuffer';
-			s.recvchan.onmessage = s.ws.onmessage;
-
-			};
-		s.pc.onnegotiationneeded = function(e)
-			{
-//console.log("onnegotiationneeded: ");
-//console.log(e);
+				s.recvchan = e.channel;
+				s.recvchan.binaryType = 'arraybuffer';
+				s.recvchan.onmessage = s.ws.onmessage;
 			};
 
 		if (clientside)
@@ -900,8 +895,6 @@ mergeInto(LibraryManager.library,
 				function(desc)
 				{
 					s.pc.setLocalDescription(desc);
-//					console.log("gotlocaldescription: ");
-//					console.log(desc);
 
 					if (1)
 						desc = JSON.stringify(desc);
@@ -912,8 +905,6 @@ mergeInto(LibraryManager.library,
 				},
 				function(event)
 				{
-//					console.log("createOffer error:");
-//					console.log(event);
 					s.err = 1;
 				}
 			);
@@ -945,8 +936,6 @@ mergeInto(LibraryManager.library,
 				function(desc)
 				{
 					s.pc.setLocalDescription(desc);
-//					console.log("gotlocaldescription: ");
-//					console.log(desc);
 
 					if (1)
 						desc = JSON.stringify(desc);
@@ -957,7 +946,6 @@ mergeInto(LibraryManager.library,
 				},
 				function(event)
 				{
-//					console.log("createAnswer error:" + event.toString());
 					s.err = 1;
 				}
 			);
@@ -977,8 +965,6 @@ mergeInto(LibraryManager.library,
 				desc = JSON.parse(offer);
 			else
 				desc = {candidate:offer, sdpMid:null, sdpMLineIndex:0};
-//console.log("addIceCandidate:");
-//console.log(desc);
 			s.pc.addIceCandidate(desc);
 		} catch(err) { console.log(err); }
 	},
@@ -1135,6 +1121,52 @@ mergeInto(LibraryManager.library,
 		};
 		img.crossorigin = true;
 		img.src = "data:image/png;base64," + encode64(HEAPU8.subarray(dataptr, dataptr+datasize));
+	},
+
+	Sys_Clipboard_PasteText: function(cbt, callback, ctx)
+	{
+		if (cbt != 0)
+			return;	//don't do selections.
+
+		let docallback = function(text)
+		{
+			FTEC.clipboard = text;
+			try{
+				let stringlen = (text.length*3)+1;
+				let dataptr = _malloc(stringlen);
+				stringToUTF8(text, dataptr, stringlen);
+				{{{makeDynCall('vii')}}}(callback, ctx, dataptr);
+				_free(dataptr);
+			}catch(e){
+			}
+		};
+
+		//try pasting. if it fails then use our internal string.
+		try
+		{
+			navigator.clipboard.readText()
+				.then(docallback)
+				.catch((e)=>{docallback(FTEC.clipboard)});
+		}
+		catch(e)
+		{	//clipboard API not supported at all.
+			console.log(e);	//happens in firefox. lets print it so we know WHY its failing.
+			docallback(FTEC.clipboard);	
+		}
+	},
+	Sys_SaveClipboard: function(cbt, text)
+	{
+		if (cbt != 0)
+			return;	//don't do selections.
+
+		FTEC.clipboard = UTF8ToString(text);
+
+		try
+		{
+			//try and copy it to the system clipboard too.
+			navigator.clipboard.writeText(FTEC.clipboard);
+		}
+		catch {}
 	}
 });
 

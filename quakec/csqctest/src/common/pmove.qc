@@ -21,7 +21,9 @@ Any fields that are read need to be the same between csqc and ssqc code somehow.
 #define movevars_accelerate 10
 #define movevars_stopspeed 100
 #define movevars_maxspeed 320
-#define movevars_jumpheight 270
+#define movevars_maxairspeed 30
+#define movevars_jumpspeed 270
+#define movevars_watersinkspeed 60
 
 .float pmove_flags;
 
@@ -29,6 +31,7 @@ Any fields that are read need to be the same between csqc and ssqc code somehow.
 .float gravity;
 #endif
 .entity groundentity;
+static vector groundnormal;
 
 enumflags
 {
@@ -118,7 +121,7 @@ void(void) PMove_Move =	//move forwards (preferably on the level) (does step ups
 
 					self.origin = trace_endpos;
 
-
+					self.groundentity = trace_ent;
 					continue;
 				}
 			}
@@ -132,26 +135,6 @@ void(void) PMove_Move =	//move forwards (preferably on the level) (does step ups
 			break;
 	}
 };
-/*
-void(vector dest) PMove_StepMove =
-{
-	//we hit something...
-
-	//step up
-	src = trace_endpos;
-	trace_endpos_z += movevars_stepheight;
-	tracebox(src, self.mins, self.maxs, dest, false, self);
-	stepped = trace_endpos_z - src_z;
-	dest_z += stepped;
-
-	//move forwards
-	tracebox(trace_endpos, self.mins, self.maxs, dest, false, self);
-
-	//move down
-	dest_z -= stepped;
-	tracebox(trace_endpos, self.mins, self.maxs, dest, false, self);
-}
-*/
 void() PMove_ApplyFriction =
 {
 	float newspeed, oldspeed;
@@ -174,9 +157,9 @@ void() PMove_ApplyFriction =
 void(vector wishdir, float wishspeed, float accel) PMove_Accelerate =
 {
 	float addspeed, accelspeed;
-	float d;
-	d = self.velocity*wishdir;
-	addspeed = wishspeed - (d);
+	float curspeed;
+	curspeed = self.velocity*wishdir;	//This is wrong, but allows us to replicate many of Quake's old physics bugs... yay...
+	addspeed = wishspeed - (curspeed);
 	if (addspeed <= 0)
 		return;
 	accelspeed = accel*input_timelength*wishspeed;
@@ -213,8 +196,12 @@ void() PMove_InAirAccelerate =
 		{
 			if (!(self.pmove_flags & PMF_JUMP_HELD))
 			{
-				self.velocity_z += movevars_jumpheight;
-				self.pmove_flags |= PMF_ONGROUND;
+				//make sure we get at least jumpspeed upwards from the ground plane by clamping it first.
+				if (self.velocity*groundnormal < 0)
+					self.velocity = self.velocity - groundnormal*(self.velocity*groundnormal);
+				self.velocity_z += movevars_jumpspeed;
+				self.pmove_flags &~= PMF_ONGROUND;
+				self.pmove_flags |= PMF_JUMP_HELD;
 			}
 		}
 	}
@@ -227,8 +214,8 @@ void() PMove_InAirAccelerate =
 	else
 	{
 		//there's no friction in air...
-		if (desiredspeed > 30)
-			desiredspeed = 30;
+		if (desiredspeed > movevars_maxairspeed)
+			desiredspeed = movevars_maxairspeed;
 		PMove_Accelerate(desireddir, desiredspeed, movevars_accelerate);
 
 #ifdef HAVE_DOTGRAVITY
@@ -240,13 +227,17 @@ void() PMove_InAirAccelerate =
 	}
 };
 
-void() PMove_NoclipAccelerate =
+void(float scale) PMove_NoclipAccelerate =
 {
 	vector desireddir;
 	float desiredspeed;
 
 	desireddir = v_forward*input_movevalues_x + v_right*input_movevalues_y+v_up*input_movevalues_z;
-	desiredspeed = vlen(desireddir);
+	if (input_buttons & 2)
+		desireddir_z = max(movevars_maxspeed, desireddir_z);	//should be water:100, slime:80, lava:50, but lets just bake smartjump in here instead (we don't have the client's cl_upspeed value in ssqc though).
+	else if (desireddir == '0 0 0' && scale<1)
+		desireddir_z = -movevars_watersinkspeed;
+	desiredspeed = vlen(desireddir)*scale;
 	desireddir = normalize(desireddir);
 
 	PMove_ApplyFriction();
@@ -256,7 +247,7 @@ void() PMove_NoclipAccelerate =
 void() PMove_Categorise =
 {
 	//if we're moving up, we're not on the ground
-	if (self.velocity_z > 0)
+	if (0)//self.velocity_z > 0)
 	{
 		self.pmove_flags &= ~PMF_ONGROUND;
 	}
@@ -264,6 +255,7 @@ void() PMove_Categorise =
 	{
 		//don't know, maybe we are, maybe we're not
 		tracebox(self.origin, self.mins, self.maxs, self.origin-'0 0 1', false, self);
+		groundnormal = trace_plane_normal;
 		if (trace_fraction == 1 || trace_plane_normal_z < 0.7)
 		{
 			self.pmove_flags &= ~PMF_ONGROUND;
@@ -274,12 +266,28 @@ void() PMove_Categorise =
 			self.groundentity = trace_ent;
 		}
 	}
+
+	self.waterlevel = 0;
+	float c = pointcontents(self.origin + [0,0,1]);
+	self.watertype = c;
+	if (c <= CONTENT_WATER)
+	{
+		self.waterlevel = 1;
+		c = pointcontents(self.origin + [0,0,(self.maxs_z+self.mins_z)*0.5]);
+		if (c <= CONTENT_WATER)
+		{
+			self.watertype = c;
+			self.waterlevel = 2;
+
+			//don't bother checking eyes. who cares.
+		}
+	}
 };
 
 float roundcoordf(float f)
 {	//round this coord like the networking will... ish...
 	//coord rounding is often client-specific. which makes life fun.
-	return rint(f*8)/8;
+	return f;//rint(f*8)/8;
 }
 vector roundcoordv(vector v)
 {
@@ -320,40 +328,64 @@ static void Pmove_Nudge(void)
 	self.origin = org;
 };
 
+#ifdef SSQC
+//small hack to make sure our cvars are actually stored as serverinfo (we then access them via serverkey for consistency between ssqc+csqc, safe in the knowledge that they'll be networked for us)
+__accumulate void() worldspawn =
+{
+	if (autocvar(test_qwphys, "0") != serverkey("test_qwphys"))
+		localcmd(sprintf("setfl test_qwphys %S s\n", autocvar(test_qwphys, "0")));
+	if (autocvar(test_autobunny, "0") != serverkey("test_autobunny"))
+		localcmd(sprintf("setfl test_autobunny %S s\n", autocvar(test_autobunny, "0")));
+};
+#endif
+
 void(entity ent) PMove =
 {
+	if (stof(serverkey("test_qwphys")) && checkbuiltin(runstandardplayerphysics))
+	{
+		runstandardplayerphysics(ent);
+		return;
+	}
+
 	self = ent;
 	makevectors(input_angles);
 
 	Pmove_Nudge();
 
-	if (!(input_buttons & PMF_JUMP_HELD))
+	if (!(input_buttons & 2) || serverkey("test_autobunny"))
 		self.pmove_flags &= ~PMF_JUMP_HELD;
 
 	PMove_Categorise();
 
-	self.movetype = MOVETYPE_WALK;
+//	self.movetype = MOVETYPE_WALK;
 
 	if (input_timelength >= 0)
 	{
 		switch(self.movetype)
 		{
 		case MOVETYPE_WALK:
-			PMove_InAirAccelerate();
+			if (self.waterlevel >= 2)
+			{
+				PMove_NoclipAccelerate(0.7);
+				self.velocity = self.velocity - 0.8*self.waterlevel*input_timelength*self.velocity;	//water friction.
+			}
+			else
+				PMove_InAirAccelerate();
 			PMove_Move();
 			break;
 		case MOVETYPE_FLY:
-			PMove_NoclipAccelerate();
+			PMove_NoclipAccelerate(1.0);
 			PMove_Move();
 			break;
 		case MOVETYPE_NOCLIP:
-			PMove_NoclipAccelerate();
+			PMove_NoclipAccelerate(1.0);
 			self.origin += self.velocity*input_timelength;
 			break;
 		case MOVETYPE_NONE:
 			break;
 		}
 
+		dotouch(self.groundentity);
 		touchtriggers(self);
 	}
 	else print(sprintf("timelength %g\n", input_timelength));

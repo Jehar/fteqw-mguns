@@ -3042,6 +3042,23 @@ int glowsize=0, glowcolour=0, colourmod=0;
 
 		if (baseline->dpflags & RENDER_STEP)
 			bits |= FITZU_LERPFINISH;
+
+
+		if (host_client->qex)
+		{
+			if (host_client->edict == ed)
+			{	//only send some bloated things to yourself.
+				bits |= QE_U_FLOATCOORDS;	//when predicting, you'll need more precision to avoid errors
+
+				if (ed->v->flags)
+					bits |= QE_U_ENTFLAGS;
+			}
+			if (ed->v->solid)
+				bits |= QE_U_SOLIDTYPE;
+			if (ed->v->health)
+				bits |= QE_U_HEALTH;
+			//bits |= QE_U_UNKNOWN26;
+		}
 	}
 	else if (host_client->protocol == SCP_BJP3)
 	{
@@ -3126,12 +3143,24 @@ int glowsize=0, glowcolour=0, colourmod=0;
 	if (bits & NQU_COLORMAP)	MSG_WriteByte (msg, ent->colormap & 0xff);
 	if (bits & NQU_SKIN)		MSG_WriteByte (msg, ent->skinnum & 0xff);
 	if (bits & NQU_EFFECTS)		MSG_WriteByte (msg, eff & 0x00ff);
-	if (bits & NQU_ORIGIN1)		MSG_WriteCoord (msg, ent->origin[0]);
-	if (bits & NQU_ANGLE1)		MSG_WriteAngle(msg, ent->angles[0]);
-	if (bits & NQU_ORIGIN2)		MSG_WriteCoord (msg, ent->origin[1]);
-	if (bits & NQU_ANGLE2)		MSG_WriteAngle(msg, ent->angles[1]);
-	if (bits & NQU_ORIGIN3)		MSG_WriteCoord (msg, ent->origin[2]);
-	if (bits & NQU_ANGLE3)		MSG_WriteAngle(msg, ent->angles[2]);
+	if (host_client->qex && (bits & QE_U_FLOATCOORDS))
+	{
+		if (bits & NQU_ORIGIN1)		MSG_WriteFloat (msg, ent->origin[0]);
+		if (bits & NQU_ANGLE1)		MSG_WriteAngle (msg, ent->angles[0]);
+		if (bits & NQU_ORIGIN2)		MSG_WriteFloat (msg, ent->origin[1]);
+		if (bits & NQU_ANGLE2)		MSG_WriteAngle (msg, ent->angles[1]);
+		if (bits & NQU_ORIGIN3)		MSG_WriteFloat (msg, ent->origin[2]);
+		if (bits & NQU_ANGLE3)		MSG_WriteAngle (msg, ent->angles[2]);
+	}
+	else
+	{
+		if (bits & NQU_ORIGIN1)		MSG_WriteCoord (msg, ent->origin[0]);
+		if (bits & NQU_ANGLE1)		MSG_WriteAngle (msg, ent->angles[0]);
+		if (bits & NQU_ORIGIN2)		MSG_WriteCoord (msg, ent->origin[1]);
+		if (bits & NQU_ANGLE2)		MSG_WriteAngle (msg, ent->angles[1]);
+		if (bits & NQU_ORIGIN3)		MSG_WriteCoord (msg, ent->origin[2]);
+		if (bits & NQU_ANGLE3)		MSG_WriteAngle (msg, ent->angles[2]);
+	}
 
 	if (host_client->protocol == SCP_FITZ666)
 	{
@@ -3140,6 +3169,14 @@ int glowsize=0, glowcolour=0, colourmod=0;
 		if (bits & FITZU_FRAME2)	MSG_WriteByte(msg, ent->frame>>8);
 		if (bits & FITZU_MODEL2)	MSG_WriteByte(msg, ent->modelindex>>8);
 		if (bits & FITZU_LERPFINISH)MSG_WriteByte(msg, bound(0, (int)((ed->v->nextthink - sv.world.physicstime) * 255), 255));
+
+		if (host_client->qex)
+		{
+			if (bits & QE_U_SOLIDTYPE)	MSG_WriteByte(msg, ed->v->solid);
+			if (bits & QE_U_ENTFLAGS)	MSG_WriteULEB128(msg, ed->v->flags);
+			if (bits & QE_U_HEALTH)		MSG_WriteSignedQEX(msg, ed->v->health);
+			if (bits & QE_U_UNKNOWN26)	MSG_WriteByte(msg, 0);
+		}
 	}
 	else if (host_client->protocol == SCP_BJP3)
 	{
@@ -3690,7 +3727,7 @@ void SV_Snapshot_BuildQ1(client_t *client, packet_entities_t *pack, pvscamera_t 
 #define DEPTHOPTIMISE
 #ifdef DEPTHOPTIMISE
 	vec3_t org;
-	static float distances[32768];
+	float *distances = NULL;
 	float dist;
 #endif
 	globalvars_t *pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
@@ -3698,6 +3735,22 @@ void SV_Snapshot_BuildQ1(client_t *client, packet_entities_t *pack, pvscamera_t 
 	int limit;
 	int c, maxc = cameras?cameras->numents:0;
 	client_t *seat;
+
+	limit = sv.world.num_edicts;
+	if (client->max_net_ents < limit)
+	{
+		limit = client->max_net_ents;
+		if (!(client->plimitwarned & PLIMIT_ENTITIES))
+		{
+			client->plimitwarned |= PLIMIT_ENTITIES;
+			SV_ClientPrintf(client, PRINT_HIGH, "WARNING: Your client's network protocol only supports %i entities. Please upgrade or enable extensions.\n", client->max_net_ents);
+		}
+	}
+
+#ifdef DEPTHOPTIMISE
+	if (clent && ISQWCLIENT(client) && client->max_net_ents<=512)	//the vanilla QW client is shite and only supports 64 visible ents at a time... it can get cpu-heavy though, so don't waste time with other clients.
+		distances = alloca(sizeof(*distances)*limit);
+#endif
 
 	//this entity is watching from outside themselves. The client is tricked into thinking that they themselves are in the view ent, and a new dummy ent (the old them) must be spawned.
 	if (clent && ISQWCLIENT(client))
@@ -3709,7 +3762,8 @@ void SV_Snapshot_BuildQ1(client_t *client, packet_entities_t *pack, pvscamera_t 
 				continue;
 //FIXME: this hack needs cleaning up
 #ifdef DEPTHOPTIMISE
-			distances[pack->num_entities] = 0;
+			if (distances)
+				distances[pack->num_entities] = 0;
 #endif
 			state = &pack->entities[pack->num_entities];
 			pack->num_entities++;
@@ -3751,17 +3805,6 @@ void SV_Snapshot_BuildQ1(client_t *client, packet_entities_t *pack, pvscamera_t 
 		e = min(sv.allocated_client_slots+1, client->max_net_clients);
 	else
 		e = 1;
-
-	limit = sv.world.num_edicts;
-	if (client->max_net_ents < limit)
-	{
-		limit = client->max_net_ents;
-		if (!(client->plimitwarned & PLIMIT_ENTITIES))
-		{
-			client->plimitwarned |= PLIMIT_ENTITIES;
-			SV_ClientPrintf(client, PRINT_HIGH, "WARNING: Your client's network protocol only supports %i entities. Please upgrade or enable extensions.\n", client->max_net_ents);
-		}
-	}
 
 	if (client->penalties & BAN_BLIND)
 	{
@@ -3954,7 +3997,7 @@ void SV_Snapshot_BuildQ1(client_t *client, packet_entities_t *pack, pvscamera_t 
 		if (ent->v->modelindex >= client->maxmodels)
 			continue;
 #ifdef DEPTHOPTIMISE
-		if (clent)
+		if (distances)
 		{
 			//find distance based upon absolute mins/maxs so bsps are treated fairly.
 			//org = clentorg + -0.5*(max+min)

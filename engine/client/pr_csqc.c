@@ -59,8 +59,6 @@ static csqctreadstate_t *csqcthreads;
 qboolean csqc_resortfrags;
 world_t csqc_world;
 
-float csqc_starttime;	//reset on each csqc reload to restore lost precision of cltime on each map restart.
-
 int	csqc_playerseat;	//can be negative.
 static playerview_t *csqc_playerview;
 qboolean csqc_dp_lastwas3d;	//to emulate DP correctly, we need to track whether drawpic/drawfill or clearscene was called last. blame 515.
@@ -228,6 +226,11 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 #define ensurevector(name)	if (!csqcg.name) csqcg.name = junk._vector;
 #define ensureentity(name)	if (!csqcg.name) csqcg.name = &junk.edict;
 
+#define ensureprivfloat(name)	if (!csqcg.name) {static pvec_t f; csqcg.name = &f;}
+#define ensureprivint(name)		if (!csqcg.name) {static pint_t i; csqcg.name = &i;}
+#define ensureprivvector(name)	if (!csqcg.name) {static pvec3_t v; csqcg.name = v;}
+#define ensurepriventity(name)	if (!csqcg.name) {static pint_t e; csqcg.name = &e;}
+
 	if (csqc_nogameaccess)
 	{
 		csqcg.CSQC_UpdateView = 0;	//would fail
@@ -307,11 +310,17 @@ static void CSQC_FindGlobals(qboolean nofuncs)
 	ensurefloat(trace_networkentity);
 	ensureentity(trace_ent);
 
+	ensureprivfloat(clientcommandframe);
+	ensureprivfloat(input_timelength);
+	ensureprivvector(input_angles);
+	ensureprivvector(input_movevalues);
+	ensureprivfloat(input_buttons);
+//	ensureprivfloat(input_impulse);
 
 	if (csqcg.time)
 		*csqcg.time = cl.servertime;
 	if (csqcg.cltime)
-		*csqcg.cltime = realtime-csqc_starttime;
+		*csqcg.cltime = realtime-cl.mapstarttime;
 
 	if (!csqcg.global_gravitydir)
 		csqcg.global_gravitydir = defaultgravity;
@@ -2369,7 +2378,36 @@ uploadfmt_t PR_TranslateTextureFormat(int qcformat)
 	case 13: return PTI_RG8;
 	case 14: return PTI_RGB32F;
 
-	default:return PTI_INVALID;
+	default:
+		qcformat = -qcformat;
+		if (qcformat < PTI_MAX)
+			return qcformat;
+		return PTI_INVALID;
+	}
+}
+int PR_UnTranslateTextureFormat(uploadfmt_t pixelformat)
+{
+	switch(pixelformat)
+	{
+	case PTI_RGBA8:		return 1;
+	case PTI_RGBA16F:	return 2;
+	case PTI_RGBA32F:	return 3;
+
+	case PTI_DEPTH16:	return 4;
+	case PTI_DEPTH24:	return 5;
+	case PTI_DEPTH32:	return 6;
+
+	case PTI_R8:		return 7;
+	case PTI_R16F:		return 8;
+	case PTI_R32F:		return 9;
+
+	case PTI_A2BGR10:	return 10;
+	case PTI_RGB565:	return 11;
+	case PTI_RGBA4444:	return 12;
+	case PTI_RG8:		return 13;
+	case PTI_RGB32F:	return 14;
+
+	default:return -pixelformat;
 	}
 }
 void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7046,6 +7084,19 @@ static struct {
 	{"sqlversion",				PF_NoCSQC,			257},	// #257 string(float serveridx) sqlversion (FTE_SQL)
 	{"sqlreadfloat",			PF_NoCSQC,			258},	// #258 float(float serveridx, float queryidx, float row, float column) sqlreadfloat (FTE_SQL)
 
+	{"json_parse",				PF_json_parse,				0},
+	{"json_free",				PF_memfree,					0},
+	{"json_get_value_type",		PF_json_get_value_type,		0},
+	{"json_get_integer",		PF_json_get_integer,		0},
+	{"json_get_float",			PF_json_get_float,			0},
+	{"json_get_string",			PF_json_get_string,			0},
+	{"json_find_object_child",	PF_json_find_object_child,	0},
+	{"json_get_length",			PF_json_get_length,			0},
+	{"json_get_child_at_index",	PF_json_get_child_at_index,	0},
+	{"json_get_name",			PF_json_get_name,			0},
+
+	{"js_run_script",			PF_js_run_script,	0},
+
 	{"stoi",					PF_stoi,			259},
 	{"itos",					PF_itos,			260},
 	{"stoh",					PF_stoh,			261},
@@ -7069,8 +7120,9 @@ static struct {
 //	{"skel_postmul_bones",		PF_skel_postmul_bones,	0},//void(float skel, float startbone, float endbone, vector org) skel_mul_bone = #273; // (FTE_CSQC_SKELETONOBJECTS) (reads v_forward etc)
 	{"skel_copybones",			PF_skel_copybones,		274},//void(float skeldst, float skelsrc, float startbone, float entbone) skel_copybones = #274; // (FTE_CSQC_SKELETONOBJECTS)
 	{"skel_delete",				PF_skel_delete,			275},//void(float skel) skel_delete = #275; // (FTE_CSQC_SKELETONOBJECTS)
-	{"frameforname",			PF_frameforname,		276},//void(float modidx, string framename) frameforname = #276 (FTE_CSQC_SKELETONOBJECTS)
-	{"frameduration",			PF_frameduration,		277},//void(float modidx, float framenum) frameduration = #277 (FTE_CSQC_SKELETONOBJECTS)
+	{"frameforname",			PF_frameforname,		276},//float(float modidx, string framename) frameforname = #276 (FTE_CSQC_SKELETONOBJECTS)
+	{"frameduration",			PF_frameduration,		277},//float(float modidx, float framenum) frameduration = #277 (FTE_CSQC_SKELETONOBJECTS)
+	{"frameforaction",			PF_frameforaction,		0},//float(float modidx, int actionid) frameforaction = #0
 	{"processmodelevents",		PF_processmodelevents,	0},
 	{"getnextmodelevent",		PF_getnextmodelevent,	0},
 	{"getmodeleventidx",		PF_getmodeleventidx,	0},
@@ -8271,7 +8323,7 @@ qboolean CSQC_Init (qboolean anycsqc, const char *csprogsname, unsigned int chec
 		int csaddonnum = -1;
 		in_sensitivityscale = 1;
 		csqcmapentitydataloaded = true;
-		csqc_starttime = realtime;
+		cl.mapstarttime = realtime;
 		csqcprogs = InitProgs(&csqcprogparms);
 		csqc_world.progs = csqcprogs;
 		csqc_world.usesolidcorpse = true;
@@ -8833,7 +8885,7 @@ qboolean CSQC_DrawView(void)
 	if (!csqcg.CSQC_UpdateView || !csqcprogs)
 		return false;
 
-	if (cls.state < ca_active && !CSQC_UnconnectedOkay(false))
+	if (cls.state < ca_active && !CSQC_UnconnectedOkay(false) && !CSQC_UseGamecodeLoadingScreen())
 		return false;
 
 	r_secondaryview = 0;
@@ -8918,7 +8970,7 @@ qboolean CSQC_DrawView(void)
 		CL_PredictMove ();
 
 	if (csqcg.cltime)
-		*csqcg.cltime = realtime-csqc_starttime;
+		*csqcg.cltime = realtime-cl.mapstarttime;
 	if (csqcg.time)
 		*csqcg.time = cl.servertime;
 	if (csqcg.clientcommandframe)
@@ -8958,6 +9010,8 @@ qboolean CSQC_DrawView(void)
 #endif
 
 	{
+		extern qboolean	scr_drawloading;
+		extern int		loading_stage;
 		void *pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 		if (csqc_isdarkplaces)
 		{	//fucked for compatibility.
@@ -8971,7 +9025,7 @@ qboolean CSQC_DrawView(void)
 		}
 		G_FLOAT(OFS_PARM2) = !Key_Dest_Has(kdm_menu|kdm_cwindows) && !r_refdef.eyeoffset[0] && !r_refdef.eyeoffset[1];
 
-		if (csqcg.CSQC_UpdateViewLoading && cls.state && cls.state < ca_active)
+		if (csqcg.CSQC_UpdateViewLoading && ((cls.state && cls.state < ca_active) || scr_drawloading || loading_stage))
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateViewLoading);
 		else
 			PR_ExecuteProgram(csqcprogs, csqcg.CSQC_UpdateView);
@@ -9007,7 +9061,7 @@ qboolean CSQC_DrawHud(playerview_t *pv)
 		if (csqcg.frametime)
 			*csqcg.frametime = host_frametime;
 		if (csqcg.cltime)
-			*csqcg.cltime = realtime-csqc_starttime;
+			*csqcg.cltime = realtime-cl.mapstarttime;
 
 		G_FLOAT(OFS_PARM0+0) = r_refdef.grect.width;
 		G_FLOAT(OFS_PARM0+1) = r_refdef.grect.height;
@@ -9051,7 +9105,7 @@ qboolean CSQC_DrawScores(playerview_t *pv)
 		if (csqcg.frametime)
 			*csqcg.frametime = host_frametime;
 		if (csqcg.cltime)
-			*csqcg.cltime = realtime-csqc_starttime;
+			*csqcg.cltime = realtime-cl.mapstarttime;
 
 		G_FLOAT(OFS_PARM0+0) = r_refdef.grect.width;
 		G_FLOAT(OFS_PARM0+1) = r_refdef.grect.height;
@@ -9322,7 +9376,10 @@ qboolean CSQC_ParseGamePacket(int seat, qboolean sized)
 		if (!csqcprogs || !parsefnc)
 		{
 			int next = MSG_ReadByte();
-			Host_EndGame("CSQC not running or is unable to parse events (lead byte %i).\n", next);
+			if (!csqcprogs)
+				Host_EndGame("This server requires CSQC support, but \"csprogsvers/%x.dat\" wasn't loaded.\n", csprogs_checksum);
+			else
+				Host_EndGame("Loaded CSQC module is unable to parse events (lead byte %i).\n", next);
 			return false;
 		}
 		csqc_mayread = true;
@@ -9504,7 +9561,7 @@ void CSQC_Input_Frame(int seat, usercmd_t *cmd)
 	if (csqcg.time)
 		*csqcg.time = cl.servertime;
 	if (csqcg.cltime)
-		*csqcg.cltime = realtime-csqc_starttime;
+		*csqcg.cltime = realtime-cl.mapstarttime;
 
 	if (csqcg.clientcommandframe)
 		*csqcg.clientcommandframe = cl.movesequence;
@@ -9618,7 +9675,7 @@ void CSQC_ParseEntities(qboolean sized)
 	if (csqcg.time)		//estimated server time
 		*csqcg.time = cl.servertime;
 	if (csqcg.cltime)	//smooth client time.
-		*csqcg.cltime = realtime-csqc_starttime;
+		*csqcg.cltime = realtime-cl.mapstarttime;
 
 	if (csqcg.servertime)
 		*csqcg.servertime = cl.gametime;

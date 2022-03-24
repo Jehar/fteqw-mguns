@@ -73,7 +73,7 @@ cvar_t	pr_ssqc_memsize = CVARD("pr_ssqc_memsize", "-1", "The ammount of memory a
 cvar_t	pr_imitatemvdsv = CVARFD("pr_imitatemvdsv", "0", CVAR_MAPLATCH, "Enables mvdsv-specific builtins, and fakes identifiers so that mods made for mvdsv can run properly and with the full feature set.");
 
 /*other stuff*/
-cvar_t	pr_maxedicts = CVARAFD("pr_maxedicts", "32768", "max_edicts", CVAR_MAPLATCH, "Maximum number of entities spawnable on the map at once. Low values will crash the server on some maps/mods. High values will result in excessive memory useage (see pr_ssqc_memsize). Illegible server messages may occur with old/other clients above 32k. FTE's network protocols have a maximum at a little over 4 million. Please don't ever make a mod that actually uses that many...");
+cvar_t	pr_maxedicts = CVARAFD("pr_maxedicts", "131072", "max_edicts", CVAR_MAPLATCH, "Maximum number of entities spawnable on the map at once. Low values will crash the server on some maps/mods. High values will result in excessive memory useage (see pr_ssqc_memsize). Illegible server messages may occur with old/other clients above 32k. FTE's network protocols have a maximum at a little over 4 million. Please don't ever make a mod that actually uses that many...");
 
 #ifndef HAVE_LEGACY
 cvar_t	pr_no_playerphysics = CVARFD("pr_no_playerphysics", "1", CVAR_MAPLATCH, "Prevents support of the 'SV_PlayerPhysics' QC function. This allows servers to prevent needless breakage of player prediction.");
@@ -11367,6 +11367,23 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"sqlreadblob",		PF_sqlreadblob,		0,		0,		0,		0,		"int(float serveridx, float queryidx, float row, float column, __variant *ptr, int maxsize)"},
 	{"sqlescapeblob",	PF_sqlescapeblob,	0,		0,		0,		0,		"string(float serveridx, __variant *ptr, int maxsize)"},
 
+	//basic API is from Joshua Ashton, though uses FTE's json parser instead.
+	{"json_parse",		PF_json_parse,		0,		0,		0,		0,		D("typedef struct json_s *json_t;\n"
+																			  "accessor jsonnode : json_t;\n"
+																			  "jsonnode(string)", "Parses the given JSON string.")},
+	{"json_free",		PF_memfree,			0,		0,		0,		0,		D("void(jsonnode)", "Frees a json tree and all of its children. Must only be called on the root node.")},
+	{"json_get_value_type",PF_json_get_value_type,0,0,		0,		0,		D("enum json_type_e : int\n{\n\tJSON_TYPE_STRING,\n\tJSON_TYPE_NUMBER,\n\tJSON_TYPE_OBJECT,\n\tJSON_TYPE_ARRAY,\n\tJSON_TYPE_TRUE,\n\tJSON_TYPE_FALSE,\n\tJSON_TYPE_NULL\n};\n"
+																			  "json_type_e(jsonnode node)", "Get type of a JSON value.")},
+	{"json_get_integer",PF_json_get_integer,0,		0,		0,		0,		D("int(jsonnode node)", "Get an integer from a json node.")},
+	{"json_get_float",	PF_json_get_float,	0,		0,		0,		0,		D("float(jsonnode node)", "Get a float from a json node.")},
+	{"json_get_string",	PF_json_get_string,	0,		0,		0,		0,		D("string(jsonnode node)", "Get a string from a value. Returns a null string if its not a string type.")},
+	{"json_find_object_child",PF_json_find_object_child,0,0,0,		0,		D("jsonnode(jsonnode node, string)", "Find a child of a json object by name. Returns NULL if the handle couldn't be found.")},
+	{"json_get_length",	PF_json_get_length,	0,		0,		0,		0,		D("int(jsonnode node)", "Get the length of a json array or object. Returns 0 if its not an array.")},
+	{"json_get_child_at_index",PF_json_get_child_at_index,0,0,0,	0,		D("jsonnode(jsonnode node, int childindex)", "Get the nth child of a json array or object. Returns NULL if the index is out of range.")},
+	{"json_get_name",	PF_json_get_name,	0,		0,		0,		0,		D("string(jsonnode node)", "Gets the object's name (useful if you're using json_get_child_at_index to walk an object's children for whatever reason).")},
+
+	{"js_run_script",	PF_js_run_script,	0,		0,		0,		0,		D("string(string javascript)", "Runs the provided javascript snippet. This builtin functions only in emscripten builds, returning a null string on other systems (or if the script evaluates to null).")},
+
 	{"stoi",			PF_stoi,			0,		0,		0,		259,	D("int(string)", "Converts the given string into a true integer. Base 8, 10, or 16 is determined based upon the format of the string.")},
 	{"itos",			PF_itos,			0,		0,		0,		260,	D("string(int)", "Converts the passed true integer into a base10 string.")},
 	{"stoh",			PF_stoh,			0,		0,		0,		261,	D("int(string)", "Reads a base-16 string (with or without 0x prefix) as an integer. Bugs out if given a base 8 or base 10 string. :P")},
@@ -11407,6 +11424,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"skel_delete",		PF_skel_delete,		0,		0,		0,		275,	D("void(float skel)", "Deletes a skeletal object. The actual delete is delayed, allowing the skeletal object to be deleted in an entity's predraw function yet still be valid by the time the addentity+renderscene builtins need it. Also uninstanciates any ragdoll currently in effect on the skeletal object.")}, // (FTE_CSQC_SKELETONOBJECTS)
 	{"frameforname",	PF_frameforname,	0,		0,		0,		276,	D("float(float modidx, string framename)", "Looks up a framegroup from a model by name, avoiding the need for hardcoding. Returns -1 on error.")},// (FTE_CSQC_SKELETONOBJECTS)
 	{"frameduration",	PF_frameduration,	0,		0,		0,		277,	D("float(float modidx, float framenum)", "Retrieves the duration (in seconds) of the specified framegroup.")},// (FTE_CSQC_SKELETONOBJECTS)
+	{"frameforaction",	PF_frameforaction,	0,		0,		0,		0,		D("float(float modidx, int actionid)", "Returns a random frame/animation for the specified mod-defined action, or -1 if no animations have the specified action.")},
 	{"processmodelevents",PF_processmodelevents,0,	0,		0,		0,		D("void(float modidx, float framenum, __inout float basetime, float targettime, void(float timestamp, int code, string data) callback)", "Calls a callback for each event that has been reached. Basetime is set to targettime.")},
 	{"getnextmodelevent",PF_getnextmodelevent,0,	0,		0,		0,		D("float(float modidx, float framenum, __inout float basetime, float targettime, __out int code, __out string data)", "Reports the next event within a model's animation. Returns a boolean if an event was found between basetime and targettime. Writes to basetime,code,data arguments (if an event was found, basetime is set to the event's time, otherwise to targettime).\nWARNING: this builtin cannot deal with multiple events with the same timestamp (only the first will be reported).")},
 	{"getmodeleventidx",PF_getmodeleventidx,0,		0,		0,		0,		D("float(float modidx, float framenum, int eventidx, __out float timestamp, __out int code, __out string data)", "Reports an indexed event within a model's animation. Writes to timestamp,code,data arguments on success. Returns false if the animation/event/model was out of range/invalid. Does not consider looping animations (retry from index 0 if it fails and you know that its a looping animation). This builtin is more annoying to use than getnextmodelevent, but can be made to deal with multiple events with the exact same timestamp.")},
@@ -11522,7 +11540,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"iscachedpic",		PF_Fixme,	0,		0,		0,		316,	D("float(string name)", "Checks to see if the image is currently loaded. Engines might lie, or cache between maps.")},// (EXT_CSQC)
 	{"precache_pic",	PF_Fixme,	0,		0,		0,		317,	D("string(string name, optional float flags)", "Forces the engine to load the named image. Flags are a bitmask of the PRECACHE_PIC_* flags.")},// (EXT_CSQC)
 	{"r_uploadimage",	PF_Fixme,	0,		0,		0,		0,		D("void(string imagename, int width, int height, void *pixeldata, optional int datasize, optional int format)", "Updates a texture with the specified rgba data (uploading it to the gpu). Will be created if needed. If datasize is specified then the image is decoded (eg .ktx or .dds data) instead of being raw R8G8B8A data. You'll typically want shaderforname to also generate a shader to use the texture.")},
-	{"r_readimage",		PF_Fixme,	0,		0,		0,		0,		D("int*(string filename, __out int width, __out int height)", "Reads and decodes an image from disk, providing raw R8G8B8A8 pixel data. Should not be used for dds or ktx etc formats. Returns __NULL__ if the image could not be read for any reason. Use memfree to free the data once you're done with it.")},
+	{"r_readimage",		PF_Fixme,	0,		0,		0,		0,		D("int*(string filename, __out int width, __out int height, __out int format)", "Reads and decodes an image from disk, providing raw R8G8B8A8 pixel data. Should not be used for dds or ktx etc formats. Returns __NULL__ if the image could not be read for any reason. Use memfree to free the data once you're done with it.")},
 	{"drawgetimagesize",PF_Fixme,	0,		0,		0,		318,	D("#define draw_getimagesize drawgetimagesize\nvector(string picname)", "Returns the dimensions of the named image. Images specified with .lmp should give the original .lmp's dimensions even if texture replacements use a different resolution. WARNING: this function may be slow if used without or directly after its initial precache_pic.")},// (EXT_CSQC)
 	{"freepic",			PF_Fixme,	0,		0,		0,		319,	D("void(string name)", "Tells the engine that the image is no longer needed. The image will appear to be new the next time its needed.")},// (EXT_CSQC)
 	{"spriteframe",		PF_Fixme,	0,		0,		0,		0,		D("string(string modelname, int frame, float frametime)", "Obtains a suitable shader name to draw a sprite's shader via drawpic/R_BeginPolygon/etc, instead of needing to create a scene.")},
@@ -11635,7 +11653,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"gp_rumble",	PF_Fixme,	0,		0,		0,		0,		D("void(float devid, float amp_low, float amp_high, float duration)", "Sends a single rumble event to the game-pad specified in devid. Every time you call this, the previous effect is cancelled out.")},
 	{"gp_rumbletriggers",	PF_Fixme,	0,		0,		0,		0,		D("void(float devid, float left, float right, float duration)", "Makes the analog triggers rumble of the specified game-pad, like gp_rumble() one call cancels out the previous one on the device.")},
 	{"gp_setledcolor",	PF_Fixme,	0,		0,		0,		0,		D("void(float devid, vector color)", "Updates the game-pad LED color.")},
-	{"gp_settriggerfx",	PF_Fixme,	0,		0,		0,		0,		D("void(float devid, const void *data, int size)", "Sends a specific effect packet to the controller. On the PlayStation 5's DualSense that can adjust the tension on the analog triggers.")},
+	{"gp_settriggerfx",	PF_Fixme,	0,		0,		0,		0,		D("void(float devid, /*const*/ void *data, int size)", "Sends a specific effect packet to the controller. On the PlayStation 5's DualSense that can adjust the tension on the analog triggers.")},
 //END EXT_CSQC
 
 	{"memalloc",		PF_memalloc,		0,		0,		0,		384,	D("__variant*(int size)", "Allocate an arbitary block of memory")},
@@ -11879,7 +11897,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"log",				PF_Logarithm,		0,		0,		0,		532,	D("float(float v, optional float base)", "Determines the logarithm of the input value according to the specified base. This can be used to calculate how much something was shifted by.")},
 	{"soundupdate",		PF_Fixme,			0,		0,		0,		0,		D("float(entity e, float channel, string newsample, float volume, float attenuation, float pitchpct, float flags, float timeoffset)", "Changes the properties of the current sound being played on the given entity channel. newsample may be empty, and will be ignored in this case. timeoffset is relative to the current position (subtract the result of getsoundtime for absolute positions). Negative volume can be used to stop the sound. Return value is a fractional value based upon the number of audio devices that could be updated - test against TRUE rather than non-zero.")},
 	{"getsoundtime",	PF_Ignore,			0,		0,		0,		533,	D("float(entity e, float channel)", "Returns the current playback time of the sample on the given entity's channel. Beware CHAN_AUTO (in csqc, channels are not limited by network protocol).")},
-	{"getchannellevel",	PF_Ignore,			0,		0,		0,		0,		D("float(entity e, float channel)", "")},
+	{"getchannellevel",	PF_Ignore,			0,		0,		0,		0,		D("float(entity e, float channel)", "Reports how load the sound's sample is at its current offset.")},
 	{"soundlength",		PF_Ignore,			0,		0,		0,		534,	D("float(string sample)", "Provides a way to query the duration of a sound sample, allowing you to set up a timer to chain samples.")},
 	{"buf_loadfile",	PF_buf_loadfile,	0,		0,		0,		535,	D("float(string filename, strbuf bufhandle)", "Appends the named file into a string buffer (which must have been created in advance). The return value merely says whether the file was readable.")},
 	{"buf_writefile",	PF_buf_writefile,	0,		0,		0,		536,	D("float(filestream filehandle, strbuf bufhandle, optional float startpos, optional float numstrings)", "Writes the contents of a string buffer onto the end of the supplied filehandle (you must have already used fopen). Additional optional arguments permit you to constrain the writes to a subsection of the stringbuffer.")},
@@ -11923,7 +11941,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"addwantedhostcachekey",PF_Fixme,		0,		0,		0,		623,	"void(string key)"},
 	{"getextresponse",	PF_Fixme,			0,		0,		0,		624,	"string()"},
 	{"netaddress_resolve",PF_netaddress_resolve,0,	0,		0,		625,	"string(string dnsname, optional float defport)"},
-	{"getgamedirinfo",	PF_Fixme,			0,		0,		0,		626,	"string(float n, float prop)"},
+	{"getgamedirinfo",	PF_Fixme,			0,		0,		0,		626,	D("string(float n, float prop)", "Queries properties about an indexed gamedir (or -1 for the current gamedir). Returns null strings when out of bounds. Use the GDDI_* constants for the prop arg.")},
 	{"getpackagemanagerinfo",PF_Fixme,		0,		0,		0,		0,		D("string(int n, int prop)", "Queries information about a package from the engine's package manager subsystem. Actions can be taken via the pkg console command.")},
 	{"sprintf",			PF_sprintf,			0,		0,		0,		627,	D("string(string fmt, ...)",	"'prints' to a formatted temp-string. Mostly acts as in C, however %d assumes floats (fteqcc has arg checking. Use it.).\ntype conversions: l=arg is an int, h=arg is a float, and will work as a prefix for any float or int representation.\nfloat representations: d=decimal, e,E=exponent-notation, f,F=floating-point notation, g,G=terse float, c=char code, x,X=hex\nother representations: i=int, s=string, S=quoted and marked-up string, v=vector, p=pointer\nso %ld will accept an int arg, while %hi will expect a float arg.\nentities, fields, and functions will generally need to be printed as ints with %i.")},
 	{"getsurfacenumtriangles",PF_getsurfacenumtriangles,0,0,0,		628,	"float(entity e, float s)"},
@@ -14261,6 +14279,18 @@ void PR_DumpPlatform_f(void)
 			"\tinline set string = {fputs(this,value);};\n"
 		"};\n");
 	VFS_PRINTF(f, "#endif\n");
+
+	VFS_PRINTF(f,
+		"accessor jsonnode : json_t\n{\n"
+			"\tinline get json_type_e type = json_get_value_type;\n"
+			"\tinline get string s = json_get_string;\n"
+			"\tinline get float f = json_get_float;\n"
+			"\tinline get __int i = json_get_integer;\n"
+			"\tinline get __int length = json_get_length;\n"
+			"\tinline get jsonnode a[__int key] = json_get_child_at_index;\n"	//FIXME: remove this name when fteqcc can cope with dupes, for array[idx]
+			"\tinline get jsonnode[string key] = json_find_object_child;\n"
+			"\tinline get string name = json_get_name;\n"
+		"};\n");
 
 	VFS_PRINTF(f, "#undef DEP_CSQC\n");
 	VFS_PRINTF(f, "#undef FTEDEP\n");

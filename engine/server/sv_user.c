@@ -173,9 +173,7 @@ qboolean SV_CheckRealIP(client_t *client, qboolean force)
 		return true;	//we know that the ip is authentic
 	if (client->realip_status == 2)
 	{
-		ClientReliableWrite_Begin(client, svc_print, 256);
-		ClientReliableWrite_Byte(client, PRINT_HIGH);
-		ClientReliableWrite_String(client, "Couldn't verify your real ip\n");
+		SV_PrintToClient(client, PRINT_HIGH, "Couldn't verify your real ip\n");
 		return true;	//client doesn't support certainty.
 	}
 	if (client->realip_status == -1)
@@ -183,12 +181,10 @@ qboolean SV_CheckRealIP(client_t *client, qboolean force)
 
 	if (realtime - client->connection_started > sv_realip_timeout.value)
 	{
-		ClientReliableWrite_Begin(client, svc_print, 256);
-		ClientReliableWrite_Byte(client, PRINT_HIGH);
 		if (client->realip_status > 0)
-			ClientReliableWrite_String(client, "Couldn't verify your real ip\n");
+			SV_PrintToClient(client, PRINT_HIGH, "Couldn't verify your real ip\n");
 		else
-			ClientReliableWrite_String(client, "Couldn't determine your real ip\n");
+			SV_PrintToClient(client, PRINT_HIGH, "Couldn't determine your real ip\n");
 		if (sv_realip_kick.value > host_client->realip_status)
 		{
 			client->drop = true;
@@ -529,7 +525,7 @@ void SVNQ_New_f (void)
 	if (host_client->drop)
 		return;
 
-	if (!host_client->pextknown && sv_listen_nq.ival != 1)	//1 acts as a legacy mode, used for clients that can't cope with cmd before serverdata (either because they crash out or because they refuse to send reliables until after they got the first serverdata)
+	if (!host_client->pextknown && sv_listen_nq.ival != 1 && !host_client->qex)	//1 acts as a legacy mode, used for clients that can't cope with cmd before serverdata (either because they crash out or because they refuse to send reliables until after they got the first serverdata)
 	{
 		if (!host_client->supportedprotocols && host_client->netchan.remote_address.type != NA_LOOPBACK)
 		{	//don't override cl_loopbackprotocol's choice
@@ -544,6 +540,8 @@ void SVNQ_New_f (void)
 		}
 		return;
 	}
+	else
+		host_client->pextknown = true;	//just in case.
 
 	if (dpcompat_nopreparse.ival && progstype == PROG_QW)
 	{
@@ -629,12 +627,12 @@ void SVNQ_New_f (void)
 			{
 				protext1 &= ~PEXT_FLOATCOORDS;		//never report floatcoords when using rmq protocol, as the base protocol allows us to be more specific anyway.
 				protmain = PROTOCOL_VERSION_RMQ;
-				protoname = "RMQ";
+				protoname = host_client->qex?"QE999":"RMQ";
 			}
 			else
 			{
 				protmain = PROTOCOL_VERSION_FITZ;
-				protoname = "666";
+				protoname = host_client->qex?"QE666":"666";
 			}
 		}
 		else if (host_client->protocol == SCP_BJP3)
@@ -658,14 +656,13 @@ void SVNQ_New_f (void)
 						"!!! EXPECT MISSING MODELS, SOUNDS, OR ENTITIES\n");
 						//if you're reading this message to try to avoid your client being described as shitty, implement support for 'cmd protocol' and maybe 'cmd pext' stuffcmds.
 						//simply put, I can't use 666 if I don't know that its safe to do so.
-					MSG_WriteByte (&host_client->netchan.message, svc_print);
-					MSG_WriteString (&host_client->netchan.message,message);
+					SV_PrintToClient(host_client, PRINT_HIGH, message);
 				}
 			}
 
 			host_client->protocol = SCP_NETQUAKE;	//identical other than the client->server angles
 			protmain = PROTOCOL_VERSION_NQ;
-			protoname = "NQ";
+			protoname = host_client->qex?"QE15":"NQ";
 		}
 		break;
 	case SCP_DARKPLACES6:
@@ -728,8 +725,7 @@ void SVNQ_New_f (void)
 				protoname,(protext1||(protext2&~PEXT2_VOICECHAT))?"+":"",(protext2&PEXT2_VOICECHAT)?"Voip":"",
 				build,gamedir, mapname);
 		}
-		MSG_WriteByte (&host_client->netchan.message, svc_print);
-		MSG_WriteString (&host_client->netchan.message,message);
+		SV_PrintToClient(host_client, PRINT_HIGH, message);
 	}
 
 	if (host_client->protocol == SCP_DARKPLACES6 || host_client->protocol == SCP_DARKPLACES7)
@@ -797,8 +793,9 @@ void SVNQ_New_f (void)
 
 	if (protext2 & PEXT2_PREDINFO)
 		MSG_WriteString(&host_client->netchan.message, gamedir);
-
 	MSG_WriteByte (&host_client->netchan.message, (sv.allocated_client_slots>host_client->max_net_clients)?host_client->max_net_clients:sv.allocated_client_slots);
+	if (host_client->qex)
+		MSG_WriteString(&host_client->netchan.message, gamedir);
 
 	if (!coop.value && deathmatch.value)
 		MSG_WriteByte (&host_client->netchan.message, GAME_DEATHMATCH);
@@ -826,6 +823,41 @@ void SVNQ_New_f (void)
 		for (i = 1; sv.strings.sound_precache[i] ; i++)
 			MSG_WriteString (&host_client->netchan.message, sv.strings.sound_precache[i]);
 		MSG_WriteByte (&host_client->netchan.message, 0);
+	}
+
+	if (host_client->qex)
+	{	//FIXME: these may change mid-map.
+		extern cvar_t sv_friction, sv_stopspeed, sv_maxvelocity, sv_accelerate, sv_gravity;
+		unsigned int bits = QEX_GV_ALL;
+
+		MSG_WriteByte (&host_client->netchan.message, svcqex_servervars);
+		MSG_WriteULEB128 (&host_client->netchan.message, bits);
+		if (bits & QEX_GV_DEATHMATCH)
+			MSG_WriteByte (&host_client->netchan.message, deathmatch.ival);
+		if (bits & QEX_GV_IDEALPITCHSCALE)
+			MSG_WriteFloat (&host_client->netchan.message, 0);
+		if (bits & QEX_GV_FRICTION)
+			MSG_WriteFloat (&host_client->netchan.message, sv_friction.value);
+		if (bits & QEX_GV_EDGEFRICTION)
+			MSG_WriteFloat (&host_client->netchan.message, *pm_edgefriction.string?pm_edgefriction.value:2);
+		if (bits & QEX_GV_STOPSPEED)
+			MSG_WriteFloat (&host_client->netchan.message, sv_stopspeed.value);
+		if (bits & QEX_GV_MAXVELOCITY)
+			MSG_WriteFloat (&host_client->netchan.message, sv_maxvelocity.value);
+		if (bits & QEX_GV_GRAVITY)
+			MSG_WriteFloat (&host_client->netchan.message, sv_gravity.value);
+		if (bits & QEX_GV_NOSTEP)
+			MSG_WriteByte (&host_client->netchan.message, false);
+		if (bits & QEX_GV_MAXSPEED)
+			MSG_WriteFloat (&host_client->netchan.message, sv_maxspeed.value);
+		if (bits & QEX_GV_ACCELERATE)
+			MSG_WriteFloat (&host_client->netchan.message, sv_accelerate.value);
+		if (bits & QEX_GV_CONTROLLERONLY)
+			MSG_WriteByte (&host_client->netchan.message, 0);
+		if (bits & QEX_GV_TIMELIMIT)
+			MSG_WriteFloat (&host_client->netchan.message, timelimit.value);
+		if (bits & QEX_GV_FRAGLIMIT)
+			MSG_WriteFloat (&host_client->netchan.message, fraglimit.value);
 	}
 
 // set view
@@ -1875,7 +1907,7 @@ void SVQW_PreSpawn_f (void)
 		{
 			char *msg;
 			SV_ClientTPrintf (host_client, PRINT_HIGH,
-				"Map model file does not match (%s), %i != %i/%i.\nYou may need a new version of the map, or the proper install files.\n",
+				"Map model file does not match (%s), %#X != %#X/%#X.\nYou may need a new version of the map, or the proper install files.\n",
 				sv.modelname, check, sv.world.worldmodel->checksum, sv.world.worldmodel->checksum2);
 
 
@@ -3111,6 +3143,10 @@ void SV_Voice_MuteAll_f(void)
 void SV_Voice_UnmuteAll_f(void)
 {
 	host_client->voice_active = true;
+}
+#else
+void SV_Voice_UnmuteAll_f(void)
+{	//no-op
 }
 #endif
 
@@ -5973,13 +6009,13 @@ static void SVNQ_PreSpawn_f (void)
 			default:
 				break;
 			case SCP_NETQUAKE:
-				prot = " (nq)";
+				prot = host_client->qex?" (qe15)":" (nq)";
 				break;
 			case SCP_BJP3:
 				prot = " (bjp3)";
 				break;
 			case SCP_FITZ666:
-				prot = " (fitz)";
+				prot = host_client->qex?" (qe666)":" (fitz)";
 				break;
 			case SCP_DARKPLACES6:
 				prot = " (dpp6)";
@@ -6353,8 +6389,8 @@ ucmd_t ucmds[] =
 	{"voicetarg",	SV_Voice_Target_f},
 	{"vignore",		SV_Voice_Ignore_f},	/*ignore/mute specific player*/
 	{"muteall",		SV_Voice_MuteAll_f},	/*disables*/
-	{"unmuteall",	SV_Voice_UnmuteAll_f}, /*reenables*/
 #endif
+	{"unmuteall",	SV_Voice_UnmuteAll_f}, /*reenables*/
 
 	{NULL, NULL}
 };
@@ -8156,6 +8192,12 @@ void SV_ExecuteClientMessage (client_t *cl)
 			SV_DropClient (cl);
 			return;
 		}
+		if (cl->state < cs_connected)
+		{	//something went badly... just give up instead of crashing.
+			host_client = NULL;
+			sv_player = NULL;
+			return;
+		}
 
 		c = MSG_ReadByte ();
 		if (c == -1)
@@ -8351,7 +8393,6 @@ void SV_ExecuteClientMessage (client_t *cl)
 #ifdef NETPREPARSE
 			NPP_Flush();	//flush it just in case there was an error and we stopped preparsing. This is only really needed while debugging.
 #endif
-
 			host_client = cl;
 			sv_player = cl->edict;
 			break;
@@ -8406,6 +8447,19 @@ void SV_ExecuteClientMessage (client_t *cl)
 	sv_player = NULL;
 }
 #ifdef Q2SERVER
+static void SVQ2_ClientThink(q2edict_t *ed, usercmd_t *cmd)
+{
+	q2usercmd_t q2;
+	q2.msec = cmd->msec;
+	q2.buttons = cmd->buttons;
+	VectorCopy(cmd->angles, q2.angles);
+	q2.forwardmove = cmd->forwardmove;
+	q2.sidemove = cmd->sidemove;
+	q2.upmove = cmd->upmove;
+	q2.impulse = cmd->impulse;
+	q2.lightlevel = cmd->lightlevel;
+	ge->ClientThink (ed, &q2);
+}
 void SVQ2_ExecuteClientMessage (client_t *cl)
 {
 	int		c;
@@ -8562,15 +8616,15 @@ void SVQ2_ExecuteClientMessage (client_t *cl)
 					{
 						while (net_drop > 2)
 						{
-							ge->ClientThink (split->q2edict, (q2usercmd_t*)&split->lastcmd);
+							SVQ2_ClientThink (split->q2edict, &split->lastcmd);
 							net_drop--;
 						}
 						if (net_drop > 1)
-							ge->ClientThink (split->q2edict, (q2usercmd_t*)&oldest);
+							SVQ2_ClientThink (split->q2edict, &oldest);
 						if (net_drop > 0)
-							ge->ClientThink (split->q2edict, (q2usercmd_t*)&oldcmd);
+							SVQ2_ClientThink (split->q2edict, &oldcmd);
 					}
-					ge->ClientThink (split->q2edict, (q2usercmd_t*)&newcmd);
+					SVQ2_ClientThink (split->q2edict, &newcmd);
 				}
 
 				split->lastcmd = newcmd;
@@ -8622,7 +8676,7 @@ void SVQ2_ExecuteClientMessage (client_t *cl)
 }
 #endif
 #ifdef NQPROT
-void SVNQ_ReadClientMove (qboolean forceangle16)
+void SVNQ_ReadClientMove (qboolean forceangle16, qboolean quakeex)
 {
 	int		i;
 	client_frame_t	*frame;
@@ -8633,7 +8687,9 @@ void SVNQ_ReadClientMove (qboolean forceangle16)
 
 	frame = &host_client->frameunion.frames[host_client->netchan.incoming_acknowledged & UPDATE_MASK];
 
-	if (host_client->protocol == SCP_DARKPLACES7)
+	if (quakeex)
+		;
+	else if (host_client->protocol == SCP_DARKPLACES7)
 		host_client->last_sequence = MSG_ReadLong ();
 	else if (host_client->fteprotocolextensions2 & PEXT2_PREDINFO)
 	{
@@ -8658,6 +8714,16 @@ void SVNQ_ReadClientMove (qboolean forceangle16)
 	if (cmd.fservertime < sv.time - 2)	//if you do lag more than this, you won't get your free time.
 		cmd.fservertime = sv.time - 2;
 	cmd.servertime = cmd.fservertime*1000;
+
+	if (quakeex)
+	{	//I'm guessing this has something to do with splitscreen.
+		if (MSG_ReadByte() != 1)
+		{
+			Con_Printf("Unknown byte wasn't 1\n");
+			msg_badread = true;
+		}
+	}
+
 
 	//read angles
 	for (i=0 ; i<3 ; i++)
@@ -8806,7 +8872,8 @@ void SVNQ_ReadClientMove (qboolean forceangle16)
 		}
 		else
 		{
-			host_client->last_sequence = 0;	//let the client know that prediction is fucked, by not acking any input frames.
+			if (!host_client->qex)
+				host_client->last_sequence = 0;	//let the client know that prediction is fucked, by not acking any input frames.
 			if (cmd.impulse)
 				host_client->edict->v->impulse = cmd.impulse;
 			host_client->isindependant = false;
@@ -8951,7 +9018,7 @@ void SVNQ_ExecuteClientMessage (client_t *cl)
 				break;
 			}
 				
-			SVNQ_ReadClientMove (forceangle16);
+			SVNQ_ReadClientMove (forceangle16, cl->qex);
 //			cmd = host_client->lastcmd;
 //			SV_ClientThink();
 			break;
@@ -9004,6 +9071,17 @@ void SVNQ_ExecuteClientMessage (client_t *cl)
 			break;
 #endif
 
+		case clc_delta://clcqex_sequence:
+			host_client->last_sequence = MSG_ReadULEB128();
+			break;
+
+		case clc_tmove://clcqex_auth
+			//This allows for the client's positions to be slightly wrong, with the client being authoritive instead of the server (within tolerances anyway).
+			host_client->last_sequence = MSG_ReadULEB128();
+			/*host_client->edict->v->origin[0] =*/ MSG_ReadFloat();
+			/*host_client->edict->v->origin[1] =*/ MSG_ReadFloat();
+			/*host_client->edict->v->origin[2] =*/ MSG_ReadFloat();
+			break;
 		safedefault:
 			Con_Printf ("SVNQ_ReadClientMessage: unknown command char %i\n", c);
 			SV_DropClient (cl);

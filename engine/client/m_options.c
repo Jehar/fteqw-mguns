@@ -1025,7 +1025,7 @@ const char *presetexec[] =
 	"r_part_classic_expgrav 10;"	//gives a slightly more dynamic feel to them
 	"r_part_classic_opaque 0;"
 	"gl_load24bit 1;"
-	"r_replacemodels \"md3 md2\";"
+	"r_replacemodels \"md3 md2 md5mesh\";"
 	"r_coronas 1;"
 	"r_dynamic 1;"
 	"r_softwarebanding 0;"
@@ -3799,9 +3799,13 @@ static void M_ModelViewerDraw(int x, int y, struct menucustom_s *c, struct emenu
 		int numframes = 0;
 		float duration = 0;
 		qboolean loop = false;
-		if (!Mod_FrameInfoForNum(ent.model, mods->surfaceidx, mods->framegroup, &fname, &numframes, &duration, &loop))
+		int act = -1;
+		if (!Mod_FrameInfoForNum(ent.model, mods->surfaceidx, mods->framegroup, &fname, &numframes, &duration, &loop, &act))
 			fname = "Unknown Sequence";
-		Draw_FunString(0, y, va("Frame%i: %s (%i poses, %f of %f secs, %s)", mods->framegroup, fname, numframes, ent.framestate.g[FS_REG].frametime[0], duration, loop?"looped":"unlooped"));
+		if (act != -1)
+			Draw_FunString(0, y, va("Frame%i[%i]: %s (%i poses, %f of %f secs, %s)", mods->framegroup, act, fname, numframes, ent.framestate.g[FS_REG].frametime[0], duration, loop?"looped":"unlooped"));
+		else
+			Draw_FunString(0, y, va("Frame%i: %s (%i poses, %f of %f secs, %s)", mods->framegroup, fname, numframes, ent.framestate.g[FS_REG].frametime[0], duration, loop?"looped":"unlooped"));
 		y+=8;
 	}
 

@@ -363,32 +363,43 @@ endif
 
 #small plugins with simpler build rules...
 
+######################################
+#Mostly for a joke.
 $(PLUG_PREFIX)mpq$(PLUG_NATIVE_EXT): mpq/fs_mpq.c mpq/blast.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Impq $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS_ZLIB) $(PLUG_LDFLAGS)
-	$(call EMBEDMETA,mpq,$@)
-NATIVE_PLUGINS+=mpq
+	$(call EMBEDMETA,mpq,$@,MPQ Archives,Provides support for Blizzard's .mpq archive format used in eg Diablo 2)
+#NATIVE_PLUGINS+=mpq
+######################################
 
+######################################
+# XMPP aka Jabber chat-protocol support. requires manual account configuration.
 $(PLUG_PREFIX)xmpp$(PLUG_NATIVE_EXT): jabber/jabberclient.c jabber/jingle.c jabber/sift.c jabber/xml.c plugin.c ../engine/common/sha1.c ../engine/common/sha2.c emailnot/md5.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Ijabber $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS) $(LIBRESOLV)
-	$(call EMBEDMETA,xmpp,$@)
+	$(call EMBEDMETA,xmpp,$@,XMPP Chat,A slightly more modern alternative to IRC. Requires manual account configuration.)
 NATIVE_PLUGINS+=xmpp
+######################################
 
+######################################
+# Quake Injector plugin.
 $(PLUG_PREFIX)qi$(PLUG_NATIVE_EXT): qi/qi.c jabber/xml.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Ijabber $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
-	$(call EMBEDMETA,qi,$@)
+	$(call EMBEDMETA,qi,$@,Quake-Injector Plugin,Provides easy access to the Quaddicted mod database.)
 NATIVE_PLUGINS+=qi
+######################################
 
-
-
+######################################
+# Internet Relay Chat (IRC) plugin.
 $(PLUG_PREFIX)irc$(PLUG_NATIVE_EXT): irc/ircclient.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Iirc $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
-	$(call EMBEDMETA,irc,$@)
+	$(call EMBEDMETA,irc,$@,IRC Chat,Internet Relay Chat plugin - requires extra server/nick/channel configuration)
 NATIVE_PLUGINS+=irc
+######################################
 
-#OpenXR plugin...
+######################################
+#OpenXR plugin, for use with VR headsets.
 $(PLUG_PREFIX)openxr$(PLUG_NATIVE_EXT): openxr.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS) -DXR_NO_PROTOTYPES `$(PKGCONFIG) --cflags openxr` -DGLQUAKE -DVKQUAKE -DD3D11QUAKE
-	$(call EMBEDMETA,openxr,$@)
+	$(call EMBEDMETA,openxr,$@,OpenXR Support,Enables the use of Virtual Reality headsets and inputs.)
 ifeq ($(shell $(PKGCONFIG) --exists openxr && echo 1),1)
 NATIVE_PLUGINS+=openxr
 
@@ -398,34 +409,69 @@ $(PLUG_PREFIX)steam$(PLUG_NATIVE_EXT): steam/steam.c plugin.c
 	$(call EMBEDMETA,steam,$@)
 NATIVE_PLUGINS+=steam
 endif
+######################################
 
+######################################
 #for compat with ezquake
 $(PLUG_PREFIX)ezhud$(PLUG_NATIVE_EXT): ezhud/ezquakeisms.c ezhud/hud.c ezhud/hud_common.c ezhud/hud_editor.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Iezhud $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,ezhud,$@,EzHud Plugin,Provides compat with ezquake's hud scripts.)
 NATIVE_PLUGINS+=ezhud
+######################################
 
+######################################
 #not really relevant now that gltf was made an internal plugin
-$(PLUG_PREFIX)models$(PLUG_NATIVE_EXT): models/gltf.c models/exportiqm.c models/models.c plugin.c
+$(PLUG_PREFIX)models$(PLUG_NATIVE_EXT): models/gltf.c models/exportiqm.c models/models.c plugin.c ../engine/common/json.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) -Imodels $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,models,$@,Models Plugin,Kinda redundant now that the engine has gltf2 loading)
 #NATIVE_PLUGINS+=models
+######################################
 
+######################################
 #Openssl crypto plugin, to replace microsoft's shoddy dtls implementation. could also be useful on the BSDs, yay system components?
-$(PLUG_PREFIX)openssl$(PLUG_NATIVE_EXT): net_ssl_openssl.c plugin.c
-	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS) `$(PKGCONFIG) --libs --cflags openssl`
-	$(call EMBEDMETA,openssl,$@,OpenSSL,Provides OpenSSL support for dtls/tls/https support. The crypto library that is actually used is controlled via the tls_provider cvar.)
-#ifeq ($(shell $(PKGCONFIG) --exists openssl && echo 1),1)
-#Disabled due to licensing issues #NATIVE_PLUGINS+=openssl
-#endif
 
-#####################
+ifeq ($(FTE_TARGET),win32)
+    OSSL_ARCH=mingw
+endif
+ifeq ($(FTE_TARGET),win64)
+    OSSL_ARCH=mingw64
+endif
+#statically link openssl on the above systems (instead of depending on system libs)
+ifneq ($(OSSL_ARCH),)
+OSSL_VERSION=3.0.1
+ARCHLIBS=../engine/libs-$(ARCH)
+#../engine/libs-$(ARCH)/openssl-$(OSSL_VERSION).tar.gz:
+../engine/openssl-$(OSSL_VERSION).tar.gz:
+	wget -O $@ -N https://github.com/openssl/openssl/archive/refs/tags/openssl-$(OSSL_VERSION).tar.gz
+$(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION)/libssl.a $(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION)/libcrypto.a: ../engine/openssl-$(OSSL_VERSION).tar.gz
+	(cd $(ARCHLIBS) && tar xvfz ../openssl-$(OSSL_VERSION).tar.gz)
+	(cd $(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION) && CFLAGS=-Os ./Configure --release no-filenames no-legacy no-shared no-stdio no-asm $(OSSL_ARCH) --cross-compile-prefix=$(ARCH)- && $(MAKE))
+$(PLUG_PREFIX)openssl$(PLUG_NATIVE_EXT): $(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION)/libssl.a $(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION)/libcrypto.a
+
+#we should be using openssl's no-sock option, but that also disables core dtls functionality (despite us using our own BIOs).
+OPENSSL_LDCFLAGS=-I$(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION)/include -L$(ARCHLIBS)/openssl-openssl-$(OSSL_VERSION) -lssl -lcrypto -lws2_32
+OPENSSL_AVAILABLE=1
+endif
+
+OPENSSL_LDCFLAGS?=`$(PKGCONFIG) --libs --cflags openssl`
+OPENSSL_AVAILABLE?=$(shell $(OPENSSLPKGPATH) $(PKGCONFIG) --atleast-version=3.0.0 openssl && echo 1)
+$(PLUG_PREFIX)openssl$(PLUG_NATIVE_EXT): net_ssl_openssl.c plugin.c
+	$(CC) -s $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS) $(OPENSSL_LDCFLAGS)
+	$(call EMBEDMETA,openssl,$@,OpenSSL,Provides OpenSSL support for dtls/tls/https support. The crypto library that is actually used is controlled via the tls_provider cvar.)
+#OpenSSL 3.0.0 is apache2 and thus GPL3-compatible, earlier versions are NOT GPL-compatible at all, so only enable it if its okay.
+#(you can still force it, but don't distribute)
+ifeq ($(OPENSSL_AVAILABLE),1)
+NATIVE_PLUGINS+=openssl
+endif
+######################################
+
+######################################
 #for compat with half-life 2's file formats
 $(PLUG_PREFIX)hl2$(PLUG_NATIVE_EXT): hl2/fs_vpk.c hl2/img_vtf.c hl2/mod_hl2.c hl2/mat_vmt.c hl2/mod_vbsp.c hl2/hl2.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -DMULTITHREAD -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,hl2,$@,HL2 Formats,Provides support for various formats used by Valve's Source engine.)
 NATIVE_PLUGINS+=hl2
-
+######################################
 
 
 

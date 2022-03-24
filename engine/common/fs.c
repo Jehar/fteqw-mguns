@@ -223,6 +223,7 @@ void FS_Manifest_Free(ftemanifest_t *man)
 	Z_Free(man->downloadsurl);
 	Z_Free(man->installupd);
 #endif
+	Z_Free(man->mainconfig);
 	Z_Free(man->schemes);
 	Z_Free(man->protocolname);
 	Z_Free(man->eula);
@@ -1197,6 +1198,93 @@ static void COM_Locate_f (void)
 	}
 	else
 		Con_Printf("Not found\n");
+}
+
+static void COM_CalcHash_Thread(void *ctx, void *fname, size_t a, size_t b)
+{
+	int h;
+	struct
+	{
+		const char *name;
+		hashfunc_t *hash;
+		void *ctx;
+	} hashes[] =
+	{
+//		{"crc16", &hash_crc16},
+		{"sha1", &hash_sha1},
+#if defined(HAVE_SERVER) || defined(HAVE_CLIENT)
+//		{"sha224", &hash_sha224},
+		{"sha256", &hash_sha256},
+//		{"sha384", &hash_sha384},
+//		{"sha512", &hash_sha512},
+#endif
+	};
+	qbyte digest[DIGEST_MAXSIZE];
+	qbyte digesttext[DIGEST_MAXSIZE*2+1];
+	qbyte block[65536];
+	int csize;
+	quint64_t fsize = 0;
+	quint64_t tsize = 0;
+	unsigned int pct, opct=~0;
+	vfsfile_t *f = FS_OpenVFS(fname, "rb", FS_GAME);
+
+	if (f)
+	{
+		tsize = VFS_GETLEN(f);
+		Con_Printf("%s: Processing...\r", (char*)fname);
+
+		for (h = 0; h < countof(hashes); h++)
+		{
+			hashes[h].ctx = Z_Malloc(hashes[h].hash->contextsize);
+			hashes[h].hash->init(hashes[h].ctx);
+		}
+
+		for(;;)
+		{
+			csize = VFS_READ(f, block, sizeof(block));
+			if (csize <= 0)
+				break;
+			fsize += csize;
+			for (h = 0; h < countof(hashes); h++)
+			{
+				hashes[h].hash->process(hashes[h].ctx, block, csize);
+			}
+			pct = (100*fsize)/tsize;
+			if (pct != opct)
+			{
+				Con_Printf("%s: %i%%...\r", (char*)fname, pct);
+				opct = pct;
+			}
+		}
+
+		VFS_CLOSE(f);
+
+		Con_Printf("%s: ", (char*)fname);
+		if (fsize > 1024*1024*1024*(quint64_t)16)
+			Con_Printf("%g GB\n", fsize/(1024.0*1024*1024));
+		else if (fsize > 1024*1024*16)
+			Con_Printf("%g MB\n", fsize/(1024.0*1024));
+		else if (fsize > 1024*16)
+			Con_Printf("%g KB\n", fsize/(1024.0));
+		else
+			Con_Printf("%u bytes\n", (unsigned)fsize);
+		for (h = 0; h < countof(hashes); h++)
+		{
+			hashes[h].hash->terminate(digest, hashes[h].ctx);
+			Z_Free(hashes[h].ctx);
+
+			digesttext[Base16_EncodeBlock(digest, hashes[h].hash->digestsize, digesttext, sizeof(digesttext)-1)] = 0;
+			Con_Printf("  %s: %s\n", hashes[h].name, digesttext);
+		}
+	}
+	Z_Free(fname);
+}
+static void COM_CalcHash_f(void)
+{
+	if (Cmd_Argc() != 2)
+		Con_Printf("%s <FILENAME>: computes various hashes of the specified file\n", Cmd_Argv(0));
+	else
+		COM_AddWork(WG_LOADER, COM_CalcHash_Thread, NULL, Z_StrDup(Cmd_Argv(1)), 0, 0);
 }
 
 /*
@@ -3836,7 +3924,7 @@ void COM_Gamedir (const char *dir, const struct gamepacks *packagespaths)
 #define QUAKESPASMSUCKS "set mod_h2holey_bugged 1\n"
 #define QUAKEOVERRIDES "set v_gammainverted 1\nset con_stayhidden 0\nset allow_download_pakcontents 1\nset allow_download_refpackages 0\nset r_meshpitch -1\nr_sprite_backfacing 1\nset sv_bigcoords \"\"\nmap_autoopenportals 1\n"  "sv_port "STRINGIFY(PORT_QWSERVER)" "STRINGIFY(PORT_NQSERVER)"\n" ZFIXHACK EZQUAKECOMPETITIVE QUAKESPASMSUCKS
 #define QCFG "//schemes quake qw\n"   QUAKEOVERRIDES "set com_parseutf8 0\n" QRPCOMPAT
-#define KEXCFG "//schemes quake_r2\n" QUAKEOVERRIDES "set com_parseutf8 1\nset campaign 0\n"
+#define KEXCFG "//schemes quake_r2\n" QUAKEOVERRIDES "set com_parseutf8 1\nset campaign 0\nset net_enable_dtls 1\nset sv_mintic 0.016666667\nset sv_maxtic $sv_mintic\nset cl_netfps 60\n"
 /*NetQuake reconfiguration, to make certain people feel more at home...*/
 #define NQCFG "//disablehomedir 1\n//mainconfig ftenq\n" QCFG "cfg_save_auto 1\nset sv_nqplayerphysics 1\nset cl_loopbackprotocol auto\ncl_sbar 1\nset plug_sbar 0\nset sv_port "STRINGIFY(PORT_NQSERVER)"\ncl_defaultport "STRINGIFY(PORT_NQSERVER)"\nset m_preset_chosen 1\nset vid_wait 1\nset cl_demoreel 1\n"
 #define SPASMCFG NQCFG "fps_preset builtin_spasm\nset cl_demoreel 0\ncl_sbar 2\nset gl_load24bit 1\n"
@@ -3912,7 +4000,7 @@ static const gamemode_info_t gamemode_info[] = {
 #ifdef HAVE_LEGACY
 	//cmdline switch exename    protocol name(dpmaster)  identifying file				exec     dir1       dir2    dir3       dir(fte)     full name
 	//use rerelease behaviours if we seem to be running from that dir.
-	{"-quake_rerel",NULL,		"FTE-QuakeRerelease",	{"QuakeEX.kpf"},				KEXCFG,	{"id1",							"*fte"},	"RerelQuake",						UPDATEURL(Q1)},
+	{"-quake_rerel",NULL,		"FTE-QuakeRerelease",	{"QuakeEX.kpf"},				KEXCFG,	{"id1",							"*fte"},	"Quake Re-Release",					UPDATEURL(Q1)},
 	//standard quake
 	{"-quake",		"q1",		QUAKEPROT,				{"id1/pak0.pak","id1/quake.rc"},QCFG,	{"id1",		"qw",				"*fte"},	"Quake",							UPDATEURL(Q1)},
 	//alternative name, because fmf file install names are messy when a single name is used for registry install path.
@@ -5129,32 +5217,77 @@ qboolean Sys_FindGameData(const char *poshname, const char *gamename, char *base
 #if defined(__linux__) || defined(__unix__) || defined(__apple__)
 #include <sys/stat.h>
 
+static qboolean Sys_SteamLibraryHasFile(char *basepath, int basepathlen, char *librarypath, char *steamdir, char *fname)	//returns the base system path
+{
+	Q_snprintfz(basepath, basepathlen, "%s/steamapps/common/%s", librarypath, steamdir);
+	if (0==access(va("%s/%s", basepath, fname), R_OK))
+		return true;
+	return false;
+}
+static qboolean Sys_SteamParseLibraries(char *basepath, int basepathlen, char *libraryfile, char *steamdir, char *fname)	//returns the base system path
+{
+	qboolean success = false;
+	char key[1024], *end;
+	char value[1024];
+	char *lib = libraryfile;
+	int depth = 0;
+	if (!libraryfile)
+		return false;
+	lib = COM_ParseCString(lib, key, sizeof(key), NULL);
+	lib = COM_ParseCString(lib, value, sizeof(value), NULL);
+	if (!strcmp(key, "libraryfolders") && !strcmp(value, "{"))
+	{
+		depth=1;
+		while(lib && !success)
+		{
+			lib = COM_ParseCString(lib, key, sizeof(key), NULL);
+			if (!strcmp(key, "}"))
+			{
+				if (!--depth)
+					break;
+				continue;
+			}
+			lib = COM_ParseCString(lib, value, sizeof(value), NULL);
+
+			if (!strcmp(value, "{"))
+				depth++;
+			else if (depth == 1 && *key)
+			{	//older format...
+				strtoul(key, &end, 10);
+				if (!*end)
+				{
+					//okay, its strictly base10
+					if (Sys_SteamLibraryHasFile(basepath, basepathlen, value, steamdir,fname))
+						success = true;
+				}
+			}
+			else if (depth == 2 && !strcmp(key, "path"))
+			{	//newer format...
+				if (Sys_SteamLibraryHasFile(basepath, basepathlen, value, steamdir,fname))
+					success = true;
+			}
+		}
+	}
+	FS_FreeFile(libraryfile);
+	return success;
+}
 static qboolean Sys_SteamHasFile(char *basepath, int basepathlen, char *steamdir, char *fname)	//returns the base system path
 {
 	/*
 	Find where Valve's Steam distribution platform is installed.
 	Then take a look at that location for the relevent installed app.
 	*/
-	//FIXME: we ought to parse steamapps/libraryfolders.vdf (json) and read the "1" etc for games installed on different drives. default drive only for now.
-	FILE *f;
 
 	char *userhome = getenv("HOME");
 	if (userhome && *userhome)
 	{
-		Q_snprintfz(basepath, basepathlen, "%s/.steam/steam/steamapps/common/%s", userhome, steamdir);
-		if ((f = fopen(va("%s/%s", basepath, fname), "rb")))
-		{
-			fclose(f);
+		Q_snprintfz(basepath, basepathlen, "%s/.steam/steam/steamapps/libraryfolders.vdf", userhome);
+		if (Sys_SteamParseLibraries(basepath, basepathlen, FS_MallocFile(basepath, FS_SYSTEM, NULL), steamdir, fname))
 			return true;
-		}
 
-		//steam apparently used to be more standard, or something? FIXME: yet still not xdg? no idea.
-		Q_snprintfz(basepath, basepathlen, "%s/.local/share/Steam/SteamApps/common/%s", userhome, steamdir);
-		if ((f = fopen(va("%s/%s", basepath, fname), "rb")))
-		{
-			fclose(f);
+		Q_snprintfz(basepath, basepathlen, "%s/.local/share/Steam/SteamApps/libraryfolders.vdf", userhome);
+		if (Sys_SteamParseLibraries(basepath, basepathlen, FS_MallocFile(basepath, FS_SYSTEM, NULL), steamdir, fname))
 			return true;
-		}
 	}
 	return false;
 }
@@ -7223,6 +7356,8 @@ void COM_InitFilesystem (void)
 	Cmd_AddCommandD("path", COM_Path_f,			"prints a list of current search paths.");
 	Cmd_AddCommandAD("flocate", COM_Locate_f,	FS_ArbitraryFile_c, "Searches for a named file, and displays where it can be found in the OS's filesystem");	//prints the pak or whatever where this file can be found.
 	Cmd_AddCommandAD("which", COM_Locate_f,	FS_ArbitraryFile_c, "Searches for a named file, and displays where it can be found in the OS's filesystem");	//prints the pak or whatever where this file can be found.
+
+	Cmd_AddCommandAD("fs_hash", COM_CalcHash_f,	FS_ArbitraryFile_c, "Computes a hash of the specified file.");
 
 
 //

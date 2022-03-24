@@ -190,6 +190,9 @@ static plugin_t *Plug_Load(const char *file)
 			return newplug;
 	}
 
+	if (COM_CheckParm("-noplugins"))
+		return NULL;
+
 	newplug = Z_Malloc(sizeof(plugin_t)+strlen(temp)+1);
 	newplug->name = (char*)(newplug+1);
 	strcpy(newplug->name, temp);
@@ -1896,6 +1899,18 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			Plug_Net_Close,
 			Plug_Net_SetTLSClient,
 			Plug_Net_GetTLSBinding,
+
+			Sys_RandomBytes,
+#ifdef HAVE_DTLS
+			TLS_GetKnownCertificate,
+#else
+			NULL,
+#endif
+#if defined(HAVE_DTLS) && defined(HAVE_CLIENT)
+			CertLog_ConnectOkay,
+#else
+			NULL,
+#endif
 		};
 		if (structsize == sizeof(funcs))
 			return &funcs;

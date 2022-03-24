@@ -2622,10 +2622,16 @@ static void Cmd_List_f (void)
 {
 	cmd_function_t	*cmd;
 	int num=0;
+	const char *search = (Cmd_Argc()>1)?Cmd_Argv(1):NULL;
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
 	{
 		if ((cmd->restriction?cmd->restriction:rcon_level.ival) > Cmd_ExecLevel)
 			continue;
+
+		if (search)
+			if (!wildcmp(search, cmd->name))
+				continue;	//nope, no match
+
 		if (!num)
 			Con_TPrintf("Command list:\n");
 		Con_Printf("(%2i) %s\n", (int)(cmd->restriction?cmd->restriction:rcon_level.ival), cmd->name);
@@ -3794,16 +3800,21 @@ static void Cmd_set_f(void)
 	char name[256];
 	const char *desc = NULL;
 
-	if (Cmd_Argc()<3)
-	{
-		Con_TPrintf("%s %s <equation>\n", Cmd_Argv(0), *Cmd_Argv(1)?Cmd_Argv(1):"<var>");
-		return;
-	}
-
 	if (!strcmp(Cmd_Argv(0), "set_calc") || !strcmp(Cmd_Argv(0), "seta_calc"))
 		docalc = true;
 	else
 		docalc = false;
+
+	if (Cmd_Argc()<3)
+	{
+		if (docalc)
+			Con_TPrintf("%s %s <equation>\n", Cmd_Argv(0), *Cmd_Argv(1)?Cmd_Argv(1):"<var>");
+		else if (!strcmp(Cmd_Argv(0), "setfl"))
+			Con_TPrintf("%s %s <value> <a|u|s>\n", Cmd_Argv(0), *Cmd_Argv(1)?Cmd_Argv(1):"<var>");
+		else
+			Con_TPrintf("%s %s <value>\n", Cmd_Argv(0), *Cmd_Argv(1)?Cmd_Argv(1):"<var>");
+		return;
+	}
 
 	if (!strncmp(Cmd_Argv(0), "seta", 4) && !Cmd_FromGamecode())
 		forceflags |= CVAR_ARCHIVE;

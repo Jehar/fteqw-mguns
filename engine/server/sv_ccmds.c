@@ -2156,7 +2156,7 @@ static void SV_Status_f (void)
 				continue;	//free, and older than the zombie time
 			count++;
 		}
-		Con_TPrintf("entities         : %i/%i/%i (mem: %.1f%%)\n", count, sv.world.num_edicts, sv.world.max_edicts, 100*(float)(sv.world.progs->stringtablesize/(double)sv.world.progs->stringtablemaxsize));
+		Con_TPrintf("entities         : %i/%i/%i (mem: %.1f%%)\n", count, sv.world.num_edicts, sv.world.max_edicts, 100.0*(sv.world.progs->stringtablesize/(double)sv.world.progs->stringtablemaxsize));
 		for (count = 1; count < MAX_PRECACHE_MODELS; count++)
 			if (!sv.strings.model_precache[count])
 				break;
@@ -2246,7 +2246,7 @@ static void SV_Status_f (void)
 #define C_DROP		COLUMN(6, "drop", Con_Printf("%4.1f ", 100.0*cl->netchan.drop_count / cl->netchan.incoming_sequence))
 #define C_DLP		COLUMN(7, "dl ", if (!cl->download)Con_Printf("    ");else Con_Printf("%3g ", (cl->downloadcount*100.0)/cl->downloadsize))
 #define C_DLS		COLUMN(8, "dls", if (!cl->download)Con_Printf("    ");else Con_Printf("%3u ", (unsigned int)(cl->downloadsize/1024)))
-#define C_PROT		COLUMN(9, "prot", Con_Printf("%-5.5s", p))
+#define C_PROT		COLUMN(9, "prot ", Con_Printf("%-6.6s", p))
 #define C_ADDRESS2	COLUMN(10, "address        ", Con_Printf("%s", s))
 
 		int columns = (1<<6)-1;
@@ -2305,12 +2305,12 @@ static void SV_Status_f (void)
 			case SCP_BAD:
 				p = "";
 				break;
-			case SCP_QUAKEWORLD:	p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"fteq":"qw"; break;
+			case SCP_QUAKEWORLD:	p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"fteqw":"qw"; break;
 			case SCP_QUAKE2:		p = "q2"; break;
 			case SCP_QUAKE3:		p = "q3"; break;
-			case SCP_NETQUAKE:		p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ften":"nq"; break;
-			case SCP_BJP3:			p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ften":"bjp3"; break;
-			case SCP_FITZ666:		p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ften":"fitz"; break;
+			case SCP_NETQUAKE:		p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ftenq":(cl->qex?"qe15":"nq"); break;
+			case SCP_BJP3:			p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ftenq":"bjp3"; break;
+			case SCP_FITZ666:		p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"ftenq":(cl->qex?"qe666":"fitz"); break;
 			case SCP_DARKPLACES6:	p = "dpp6"; break;
 			case SCP_DARKPLACES7:	p = "dpp7"; break;
 			}
