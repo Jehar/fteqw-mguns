@@ -387,7 +387,9 @@ void SSV_SetupControlPipe(vfsfile_t *f)
 
 static pubsubserver_t *MSV_StartSubServer(unsigned int id, const char *mapname)
 {
+	Con_Printf("STARTING FORK!\n");
 	vfsfile_t *s = Sys_ForkServer();
+	Con_Printf("FORKED!\n");
 
 	if (s)
 		return MSV_Link_Server(s, id, mapname);
@@ -433,6 +435,7 @@ static pubsubserver_t *MSV_FindSubServerName(const char *servername)
 			}
 		}
 
+		Con_Printf("We need to make a fork...\n");
 		return MSV_StartSubServer(id, mapname);
 	}
 	return NULL;
@@ -872,6 +875,7 @@ void MSV_ReadFromSubServer(pubsubserver_t *s)
 	pubsubserver_t *toptr;
 	clusterplayer_t *pl;
 
+
 	c = MSG_ReadByte();
 	switch(c)
 	{
@@ -1282,6 +1286,11 @@ void SSV_InstructMaster(sizebuf_t *cmd)
 {
 	cmd->data[0] = cmd->cursize & 0xff;
 	cmd->data[1] = (cmd->cursize>>8) & 0xff;
+
+#ifdef WINAPI
+	Sys_InstructMaster(cmd);
+	return;
+#endif
 	if (msv_loop_from_ss)
 		VFS_WRITE(msv_loop_from_ss, cmd->data, cmd->cursize);
 	else if (controlconnection)
