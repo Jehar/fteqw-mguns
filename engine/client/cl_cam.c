@@ -564,12 +564,14 @@ void Cam_Lock(playerview_t *pv, int playernum)
 {
 	pv->cam_lastviewtime = -1000;	//allow the wallcam to re-snap as soon as it can
 
+	Con_Printf("Cam_Lock %i\n", playernum);
 	CL_SendSeatClientCommand(true, pv-cl.playerview, "ptrack %i", playernum);
 
 	if (pv->cam_spec_track != playernum)
 	{	//flashgrens suck
 		pv->cshifts[CSHIFT_SERVER].percent = 0;
 	}
+
 	pv->cam_spec_track = playernum;
 	pv->cam_state = CAM_PENDING;
 	pv->viewentity = (cls.demoplayback)?0:(pv->playernum+1);	//free floating until actually locked
@@ -584,10 +586,10 @@ void Cam_Lock(playerview_t *pv, int playernum)
 //		pv->cam_state = CAM_;
 	
 //		pv->viewentity = playernum+1;
-		/*
+		///*
 		pv->cam_state = cl_chasecam.ival?CAM_EYECAM:CAM_PENDING;	//instantly lock if the player is valid.
 		pv->viewentity = playernum+1;
-		*/
+		//*/
 
 #ifdef QUAKESTATS
 		if (cls.z_ext & Z_EXT_VIEWHEIGHT)
@@ -1076,14 +1078,17 @@ void Cam_FinishMove(playerview_t *pv, usercmd_t *cmd)
 		}
 	}
 
+
 	if (cmd->buttons & BUTTON_ATTACK) 
 	{
-		if (!(pv->cam_oldbuttons & BUTTON_ATTACK)) 
+		if (!(pv->cam_oldbuttons & BUTTON_ATTACK))
 		{
 			pv->cam_oldbuttons |= BUTTON_ATTACK;
 
+			Con_Printf("cl_cam attack\n");
 			if (pv->cam_state != CAM_FREECAM)
 			{
+				Con_Printf("cl_cam unlock\n");
 				Cam_Unlock(pv);
 				VectorCopy(pv->viewangles, cmd->angles);
 				autotrackmode = TM_USER;
@@ -1129,7 +1134,7 @@ void Cam_FinishMove(playerview_t *pv, usercmd_t *cmd)
 		pv->cam_oldbuttons |= BUTTON_JUMP;	// don't jump again until released
 	}
 
-//	Con_Printf("Selecting track target...\n");
+	Con_Printf("Selecting track target...\n");
 
 	if (pv->cam_state != CAM_FREECAM)
 		end =		 (pv->cam_spec_track + 1) % MAX_CLIENTS;
