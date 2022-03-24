@@ -54,7 +54,7 @@ static pluginputfuncs_t *inputfuncs;
 #endif
 
 //and finally include openxr stuff now that its hopefully not going to fail about missing typedefs.
-#include <openxr/openxr_platform.h>
+#include "/usr/include/openxr/openxr_platform.h"
 #if XR_CURRENT_API_VERSION < XR_MAKE_VERSION(1, 0, 16)
 #define XR_ERROR_RUNTIME_UNAVAILABLE -51	//available starting 1.0.16
 #endif
@@ -1734,6 +1734,7 @@ static qboolean XR_Begin(void)
 		static int64_t rgbformats[] = {GL_RGB10_A2, GL_RGBA8, /*broken on steamvr - GL_RGBA16_EXT,*/ GL_RGB8, 0};
 		static int64_t *formats[] = {hdrformats, srgbformats, rgbformats};
 		fmttouse = XR_FindSwapFormat(formats, fmts, swapfmts);
+		fmttouse = fmts[1];
 	}
 #endif
 #ifdef XR_USE_GRAPHICS_API_VULKAN
@@ -1758,7 +1759,7 @@ static qboolean XR_Begin(void)
 #endif
 	else
 	{
-		fmttouse = fmts[0];
+		fmttouse = fmts[1];
 		for (u = 0; u < swapfmts; u++)
 			Con_Printf("fmt%u: %u / %x\n", u, (unsigned)fmts[u], (unsigned)fmts[u]);
 	}
