@@ -402,13 +402,13 @@ $(PLUG_PREFIX)openxr$(PLUG_NATIVE_EXT): openxr.c plugin.c
 	$(call EMBEDMETA,openxr,$@,OpenXR Support,Enables the use of Virtual Reality headsets and inputs.)
 ifeq ($(shell $(PKGCONFIG) --exists openxr && echo 1),1)
 NATIVE_PLUGINS+=openxr
+endif
 
 #Steam plugin (reki)
 $(PLUG_PREFIX)steam$(PLUG_NATIVE_EXT): steam/steam.c plugin.c
 	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS)
 	$(call EMBEDMETA,steam,$@)
 NATIVE_PLUGINS+=steam
-endif
 ######################################
 
 ######################################
