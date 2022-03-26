@@ -8,7 +8,7 @@
 plugcorefuncs_t *plugfuncs;
 plugcmdfuncs_t *cmdfuncs;
 plugcvarfuncs_t *cvarfuncs;
-//plugclientfuncs_t *clientfuncs;
+plugclientfuncs_t *clientfuncs;
 
 
 
@@ -263,6 +263,8 @@ qboolean NATIVEEXPORT FTEPlug_Init(plugcorefuncs_t *corefuncs)
 	plugfuncs = corefuncs;
 	cmdfuncs = (plugcmdfuncs_t*)plugfuncs->GetEngineInterface(plugcmdfuncs_name, sizeof(*cmdfuncs));
 	cvarfuncs = (plugcvarfuncs_t*)plugfuncs->GetEngineInterface(plugcvarfuncs_name, sizeof(*cvarfuncs));
+
+
 	if (!plugfuncs || !cmdfuncs || !cvarfuncs)
 		return qfalse; //erk
 

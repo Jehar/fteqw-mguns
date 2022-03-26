@@ -592,6 +592,11 @@ static void QDECL Plug_SetUserInfo(int seat, const char *key, const char *value)
 	CL_SetInfo(seat, key, value);
 }
 
+static void QDECL Plug_SetUserInfoBlob(int seat, const char *key, const char *value, int size)
+{
+	CL_SetInfoBlob(seat, key, value, size);
+}
+
 static qboolean QDECL Plug_GetLastInputFrame(int seat, usercmd_t *outcmd)
 {
 	unsigned int curframe = (cl.movesequence-1u) & UPDATE_MASK;

@@ -42,6 +42,7 @@ static struct
 plugcorefuncs_t *plugfuncs;
 plugcvarfuncs_t *cvarfuncs;
 plugcmdfuncs_t *cmdfuncs;
+plugclientfuncs_t *clientfuncs;
 
 #ifdef GLQUAKE
 #include "glquake.h"
@@ -1181,6 +1182,7 @@ void Plug_Initialise(qboolean fromgamedir)
 		plugfuncs = PlugBI_GetEngineInterface(plugcorefuncs_name, sizeof(*plugfuncs));
 		cvarfuncs = plugfuncs->GetEngineInterface(plugcvarfuncs_name, sizeof(*cvarfuncs));
 		cmdfuncs = plugfuncs->GetEngineInterface(plugcmdfuncs_name, sizeof(*cmdfuncs));
+		clientfuncs = plugfuncs->GetEngineInterface(plugclientfuncs_name, sizeof(*clientfuncs));
 	}
 
 #ifdef SUBSERVERS
@@ -1804,6 +1806,8 @@ plugcorefuncs_t plugcorefuncs =
 
 static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t structsize)
 {
+	Con_Printf("%s\n", interfacename);
+
 	if (!strcmp(interfacename, plugcorefuncs_name))
 	{
 		if (structsize == sizeof(plugcorefuncs))
@@ -1943,6 +1947,8 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 	}
 	if (!strcmp(interfacename, plugclientfuncs_name))
 	{
+		Con_Printf("client match\n", interfacename);
+
 		static plugclientfuncs_t funcs =
 		{
 			Plug_CL_GetStats,
@@ -1953,6 +1959,7 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			Plug_GetLastInputFrame,
 			Plug_GetServerInfo,
 			Plug_SetUserInfo,
+			Plug_SetUserInfoBlob,
 #if defined(HAVE_SERVER) && defined(HAVE_CLIENT)
 			Plug_MapLog_Query,
 #else
@@ -1970,8 +1977,13 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			NULL,
 #endif
 		};
+
+		Con_Printf("size %i vs %i\n", structsize, sizeof(funcs));
 		if (structsize == sizeof(funcs))
+		{
+			Con_Printf("size match\n", interfacename);
 			return &funcs;
+		}
 	}
 	if (!strcmp(interfacename, pluginputfuncs_name))
 	{

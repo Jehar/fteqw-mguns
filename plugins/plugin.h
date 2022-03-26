@@ -281,6 +281,7 @@ typedef struct	//q1 client/network info
 	F(void,		GetServerInfo,		(char *info, size_t infolen));
 
 	F(void,		SetUserInfo,		(int seat, const char *key, const char *value));
+	F(void,		SetUserInfoBlob,	(int seat, const char *key, const char *value, int size));
 	//EBUILTIN(void, SCR_CenterPrint, (const char *s));
 
 	//FIXME: does this belong here?
@@ -290,6 +291,7 @@ typedef struct	//q1 client/network info
 	F(int,		GetWeaponStats,		(int player, struct wstats_s *result, size_t maxresults));
 	F(float,	GetTrackerOwnFrags,	(int seat, char *text, size_t textsize));
 	F(void,		GetPredInfo,		(int seat, vec3_t outvel));
+
 #define plugclientfuncs_name "Client"
 } plugclientfuncs_t;
 
