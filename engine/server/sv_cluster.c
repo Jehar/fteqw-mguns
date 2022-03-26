@@ -1294,10 +1294,7 @@ void SSV_InstructMaster(sizebuf_t *cmd)
 	cmd->data[0] = cmd->cursize & 0xff;
 	cmd->data[1] = (cmd->cursize>>8) & 0xff;
 
-#ifdef WINAPI
-	Sys_InstructMaster(cmd);
-	return;
-#endif
+
 	if (msv_loop_from_ss)
 		VFS_WRITE(msv_loop_from_ss, cmd->data, cmd->cursize);
 	else if (controlconnection)
