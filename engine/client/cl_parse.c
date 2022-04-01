@@ -5238,10 +5238,11 @@ static void CLNQ_ParseStartSoundPacket(void)
 		channel = MSG_ReadShort ();
 		ent = channel >> 3;
 		channel &= 7;
+		
+		/*unpack mangling*/
+		channel = (channel & 7) | ((channel & 0x0f1) << 1);
 	}
 
-	/*unpack mangling*/
-	channel = (channel & 7) | ((channel & 0x0f1) << 1);
 
 	if ((field_mask & NQSND_LARGESOUND) || (cls.protocol == CP_NETQUAKE && (cls.protocol_nq == CPNQ_BJP2 || cls.protocol_nq == CPNQ_BJP3))) //bjp kinda sucks
 		sound_num = (unsigned short)MSG_ReadShort();
