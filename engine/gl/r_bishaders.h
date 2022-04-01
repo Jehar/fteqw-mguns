@@ -5512,7 +5512,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "\x0C\x00\x00\x00\xFD\x00\x01\x00\x38\x00\x01\x00"},
 #endif
 #ifdef D3D11QUAKE
-{QR_DIRECT3D11, 11, "defaultfill",
+{ QR_DIRECT3D11, 11, "defaultfill",
 "struct a2v\n"
 "{\n"
 "float4 pos: POSITION;\n"
@@ -5546,7 +5546,7 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 },
 #endif
 #ifdef GLQUAKE
-{QR_OPENGL, 110, "defaultsprite",
+{ QR_OPENGL, 110, "defaultsprite",
 "!!permu FOG\n"
 "!!samps 1\n"
 //used by both particles and sprites.
@@ -5578,6 +5578,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "discard;\n"
 "#endif\n"
 "gl_FragColor = fog4blend(col * vc * e_colourident * e_vlscale);\n"
+"if (gl_FragColor.a < 0)\n"
+"	gl_FragColor.a = 0;\n"
 "}\n"
 "#endif\n"
 },
