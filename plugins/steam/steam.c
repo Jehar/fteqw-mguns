@@ -37,9 +37,6 @@ int PIPE_SendData()
 }
 
 
-
-
-
 float PIPE_ReadFloat()
 {
 	float dat;
@@ -112,15 +109,12 @@ int PIPE_ReadString(char *buff)
 void PIPE_ReadCharArray(char *into, unsigned long *size)
 {
 	*size = (unsigned long)PIPE_ReadShort();
-	int succ = ReadFile(steamPipe, &into, *size, size, NULL);
+	int succ = ReadFile(steamPipe, into, *size, size, NULL);
 	if (!succ)
 	{
 		*size = 0;
 	}
 }
-
-
-
 
 
 
@@ -237,7 +231,7 @@ void Steam_SetSteamID(void)
 	cvarfuncs->Register(cv_steamid.name, cv_steamid.string, 1u<<5, cv_steamid.group);
 }
 
-
+extern qboolean VARGS Q_snprintfz(char *dest, size_t size, const char *fmt, ...);
 void Steam_Auth_Retrieved(void)
 {
 	char dat[1024];
@@ -246,22 +240,47 @@ void Steam_Auth_Retrieved(void)
 
 	Con_Printf("Auth ticket of %i size recieved\n", (int)sz);
 
+
+
+
 	//cmdfuncs->AddText("fs_flush\nvid_reload\nsetinfoblob _steam_auth \"data/_STEAMTEMP/authtoken\"\n", false);
 	if (clientfuncs)
 	{
 		clientfuncs->SetUserInfo(0, "_steam_id", SteamID);
-		clientfuncs->SetUserInfoBlob(0, "_steam_auth", &dat, sz);
+		clientfuncs->SetUserInfoBlob(0, "_steam_auth", dat, sz);
 	}
 }
 
 
 void Steam_Auth_Validated(void)
 {
+	int entnum = PIPE_ReadByte();
 	char dat[MAX_STRING];
 	PIPE_ReadString(&dat);
 
-	Con_Printf("Auth ticket of %s authenticated\n", dat);
+
+	char cmd[MAX_STRING];
+	Q_snprintf(cmd, MAX_STRING, "steam_authenticationpassed %i %s\n", entnum, dat);
+	cmdfuncs->AddText(cmd, false);
+
+
+	Con_DPrintf("Auth ticket of %s authenticated\n", dat);
 }
+
+
+void Steam_Avatar_Fetched(void)
+{
+	char steamid[MAX_STRING];
+	PIPE_ReadString(&steamid);
+	int size = PIPE_ReadByte();
+
+	char cmd[MAX_STRING];
+	Q_snprintf(cmd, MAX_STRING, "fs_flush\nsteam_avatarfetched %s %i\n", steamid, size);
+
+	cmdfuncs->AddText(cmd, false);
+}
+
+
 
 
 
@@ -272,6 +291,7 @@ void Steam_Init(void)
 	func_readarray[SV_STEAMID] = Steam_SetSteamID;
 	func_readarray[SV_AUTH_RETRIEVED] = Steam_Auth_Retrieved;
 	func_readarray[SV_AUTH_VALIDATED] = Steam_Auth_Validated;
+	func_readarray[SV_AVATAR_FETCHED] = Steam_Avatar_Fetched;
 }
 
 
@@ -316,9 +336,9 @@ void Steam_ExecuteCommand()
 		cmdfuncs->Argv(1, steamid, sizeof(steamid));
 
 
-		//PIPE_WriteByte(CL_CONNECTSERVER);
-		//PIPE_WriteByte(1);
-		//PIPE_WriteString(steamid);
+		PIPE_WriteByte(CL_CONNECTSERVER);
+		PIPE_WriteByte(1);
+		PIPE_WriteString(steamid);
 
 		
 		PIPE_WriteByte(CL_AUTH_FETCH);
@@ -341,21 +361,29 @@ void Steam_ExecuteCommand()
 	}
 	else if (!strcmp(cmd, "steam_authenticate"))
 	{
+		char entnum_str[4];
+		cmdfuncs->Argv(1, entnum_str, sizeof(entnum_str));
+		int entnum = atoi(entnum_str);
+
 		char steamid[64];
-		cmdfuncs->Argv(1, steamid, sizeof(steamid));
+		cmdfuncs->Argv(2, steamid, sizeof(steamid));
 
 		if (fsfuncs)
 		{
 			///*
 			qhandle_t handle;
-			//fsfuncs->Open(strcat(strcat("data/_STEAMTEMP/", steamid), "/authtoken"), &handle, 0);
-			fsfuncs->Open("data/_STEAMTEMP/76561198020080134/authtoken", &handle, 1);
+			char path[128] = "data/_STEAMTEMP/";
+			strcat(path, steamid);
+			strcat(path, "/authtoken");
+
+			fsfuncs->Open(path, &handle, 1);
 			if (handle >= 0)
 			{
 				char dat[1024];
 				int length = fsfuncs->Read(handle, &dat, 1024);
 
 				PIPE_WriteByte(CL_AUTH_VALIDATE);
+				PIPE_WriteByte(entnum);
 				PIPE_WriteString(steamid);
 
 				PIPE_WriteCharArray(&dat, length);
@@ -369,6 +397,17 @@ void Steam_ExecuteCommand()
 			}
 			//*/
 		}
+
+		return true;
+	}
+	else if (!strcmp(cmd, "steam_playingwith"))
+	{
+		char steamid[64];
+		cmdfuncs->Argv(1, steamid, sizeof(steamid));
+
+		PIPE_WriteByte(CL_PLAYINGWITH);
+		PIPE_WriteString(steamid);
+
 
 		return true;
 	}
@@ -388,6 +427,7 @@ qboolean Plug_Init(void)
 	cmdfuncs->AddCommand("steam_connect");
 	cmdfuncs->AddCommand("steam_startserver");
 	cmdfuncs->AddCommand("steam_disconnect");
+	cmdfuncs->AddCommand("steam_playingwith");
 
 
 
