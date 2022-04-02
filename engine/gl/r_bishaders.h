@@ -5578,8 +5578,8 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "discard;\n"
 "#endif\n"
 "gl_FragColor = fog4blend(col * vc * e_colourident * e_vlscale);\n"
-"if (gl_FragColor.a < 0)\n"
-"	gl_FragColor.a = 0;\n"
+"if (gl_FragColor.a < 0.0)\n"
+"	gl_FragColor.a = 0.0;\n"
 "}\n"
 "#endif\n"
 },
