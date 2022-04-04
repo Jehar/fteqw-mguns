@@ -1251,7 +1251,11 @@ static qboolean OpenAL_InitLibrary(void)
 	if (!openallib_tried)
 	{
 		openallib_tried = true;
-#ifdef _WIN32
+#ifdef _WIN64
+		openallib = Sys_LoadLibrary("soft_oal", openalfuncs);
+		if (!openallib)
+			openallib = Sys_LoadLibrary("OpenAL32", openalfuncs);
+#elif defined(_WIN32)
 		openallib = Sys_LoadLibrary("OpenAL32", openalfuncs);
 		if (!openallib)
 			openallib = Sys_LoadLibrary("soft_oal", openalfuncs);
