@@ -5580,6 +5580,7 @@ void Cmd_Join_f (void)
 
 		// turn the spectator into a player
 		host_client->spectator = false;
+		host_client->spawned = true;
 		InfoBuf_RemoveKey (&host_client->userinfo, "*spectator");
 
 		// FIXME, bump the client's userid?
