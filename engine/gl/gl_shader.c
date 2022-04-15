@@ -2370,6 +2370,7 @@ struct shader_field_names_s shader_unif_names[] =
 	{"e_vlscale",				SP_E_VLSCALE},	/*no lightmaps, no overbrights*/
 	{"e_origin",				SP_E_ORIGIN},		//the ents origin in worldspace
 /**/{"e_time",					SP_E_TIME},			//r_refdef.time - entity->time
+/**/{"e_animtime",				SP_E_ANIMTIME},		//entity->frame1time
 /**/{"e_eyepos",				SP_E_EYEPOS},		//eye pos in modelspace
 	{"e_colour",				SP_E_COLOURS},		//colormod/alpha, even if colormod isn't set
 /**/{"e_colourident",			SP_E_COLOURSIDENT},	//colormod,alpha or 1,1,1,alpha if colormod isn't set

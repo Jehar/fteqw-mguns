@@ -18,6 +18,7 @@ layout(std140, binding=0) uniform entityblock
 	mat4 m_modelinv;
 	vec3 e_eyepos;
 	float e_time;
+	float e_animtime;
 	vec3 e_light_ambient;	float epad1;
 	vec3 e_light_dir;	float epad2;
 	vec3 e_light_mul;	float epad3;

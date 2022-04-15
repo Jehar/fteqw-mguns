@@ -3832,6 +3832,9 @@ static void BE_Program_Set_Attributes(const program_t *prog, struct programpermu
 		case SP_E_TIME:
 			qglUniform1fARB(ph, shaderstate.curtime);
 			break;
+		case SP_E_ANIMTIME:
+			qglUniform1fARB(ph, shaderstate.curentity->framestate.g[FS_REG].frametime[0]);
+			break;
 		case SP_CONST1I:
 		case SP_TEXTURE:
 			qglUniform1iARB(ph, p->ival[0]);

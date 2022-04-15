@@ -433,6 +433,7 @@ typedef struct {
 		SP_E_TOPCOLOURS,
 		SP_E_BOTTOMCOLOURS,
 		SP_E_TIME,
+		SP_E_ANIMTIME,
 		SP_E_L_DIR, /*these light values are non-dynamic light as in classic quake*/
 		SP_E_L_MUL,
 		SP_E_L_AMBIENT,
