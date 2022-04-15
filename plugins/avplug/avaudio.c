@@ -541,11 +541,13 @@ static void AVLogCallback(void *avcl, int level, const char *fmt, va_list vl)
 }
 
 //get the encoder/decoders to register themselves with the engine, then make sure avformat/avcodec have registered all they have to give.
-qboolean AVEnc_Init(void);
-qboolean AVDec_Init(void);
+extern qboolean AVEnc_Init(void);
+extern qboolean AVDec_Init(void);
 qboolean Plug_Init(void)
 {
 	qboolean okay = false;
+
+	Con_Printf("Loading ffmpeg plugin.\n");
 
 	okay |= AVAudio_Init();
 	okay |= AVDec_Init();

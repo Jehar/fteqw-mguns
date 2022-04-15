@@ -323,6 +323,8 @@ static quintptr_t QDECL Plug_Sys_Milliseconds(void)
 
 qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 {
+	Con_Printf("Export Function: %s\n", name);
+
 	if (!strcmp(name, "Tick"))					//void(int realtime)
 		currentplug->tick = function;
 	else if (!strcmp(name, "ExecuteCommand"))	//bool(isinsecure)
@@ -396,6 +398,8 @@ static qboolean QDECL PlugBI_GetPluginName(int plugnum, char *outname, size_t na
 
 static qboolean QDECL PlugBI_ExportInterface(const char *name, void *interfaceptr, size_t structsize)
 {
+	Con_Printf("Export Interface: %s\n", name);
+
 #if defined(PLUGINS) && !defined(SERVERONLY)
 #ifdef HAVE_MEDIA_DECODER
 	if (!strcmp(name, "Media_VideoDecoder"))
