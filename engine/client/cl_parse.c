@@ -1492,8 +1492,7 @@ static int CL_LoadModels(int stage, qboolean dontactuallyload)
 		SCR_SetLoadingFile("newmap");
 //		if (!cl.worldmodel || cl.worldmodel->type == mod_dummy)
 //			Host_EndGame("No worldmodel was loaded\n");
-		cl.model_precaches_added = false;
-		Surf_NewMap ();
+		Surf_NewMap (cl.worldmodel);
 
 		pmove.physents[0].model = cl.worldmodel;
 
@@ -2642,7 +2641,7 @@ void DL_Abort(qdownload_t *dl, enum qdlabort aborttype)
 				break;
 #ifdef Q3CLIENT
 			case DL_Q3:
-				CLQ3_SendClientCommand("stopdl");
+				q3->cl.SendClientCommand("stopdl");
 				break;
 #endif
 			case DL_QW:
@@ -2727,14 +2726,14 @@ static void CL_ParseDownload (qboolean zlib)
 	if (cls.demoplayback && cls.demoplayback != DPB_EZTV)
 	{
 		if (size > 0)
-			msg_readcount += size;
+			MSG_ReadSkip(size);
 		return; // not in demo playback, we don't know the name of the file.
 	}
 	if (!dl)
 	{
 		//download packet without file requested.
 		if (size > 0)
-			msg_readcount += size;
+			MSG_ReadSkip(size);
 		return; // not in demo playback
 	}
 
@@ -2753,7 +2752,7 @@ static void CL_ParseDownload (qboolean zlib)
 		dl->method = DL_QW;
 		if (!DL_Begun(dl))
 		{
-			msg_readcount += size;
+			MSG_ReadSkip(size);
 			Con_TPrintf ("Failed to open %s\n", dl->tempname);
 			CL_DownloadFailed(dl->remotename, dl, DLFAIL_CLIENTFILE);
 			CL_RequestNextDownload ();
@@ -2771,7 +2770,7 @@ static void CL_ParseDownload (qboolean zlib)
 		char cdata[8192];
 		unsigned int done = 0;
 		memset(&s, 0, sizeof(s));
-		s.next_in = net_message.data + msg_readcount;
+		s.next_in = net_message.data + MSG_GetReadCount();
 		s.avail_in = clen;
 		if (inflateInit2(&s, -15) != Z_OK)
 			Host_EndGame ("CL_ParseZDownload: unable to initialise zlib");
@@ -2800,7 +2799,7 @@ static void CL_ParseDownload (qboolean zlib)
 #else
 		Host_EndGame("Unable to handle zlib downloads, zlib is not supported in this build");
 #endif
-		msg_readcount += size;
+		MSG_ReadSkip(size);
 	}
 	else
 #ifdef PEXT_ZLIBDL
@@ -2810,15 +2809,15 @@ static void CL_ParseDownload (qboolean zlib)
 
 		percent = percent - 101;
 
-		VFS_WRITE (cls.download, ZLibDownloadDecode(&compsize, net_message.data + msg_readcount, size), size);
+		VFS_WRITE (cls.download, ZLibDownloadDecode(&compsize, net_message.data + MSG_GetReadCount(), size), size);
 
-		msg_readcount += compsize;
+		MSG_ReadSkip(compsize);
 	}
 	else
 #endif
 	{
-		VFS_WRITE (dl->file, net_message.data + msg_readcount, size);
-		msg_readcount += size;
+		VFS_WRITE (dl->file, net_message.data + MSG_GetReadCount(), size);
+		MSG_ReadSkip(size);
 	}
 
 	dl->completedbytes += size;
@@ -2885,7 +2884,11 @@ static void CLDP_ParseDownloadData(void)
 	if (dl->file)
 	{
 		if (start > dl->completedbytes)
-			;	//this protocol cannot deal with gaps. we might as well wait until its repeated later.
+		{	//this protocol cannot deal with gaps. we might as well wait until its repeated later.
+			//don't ack values ahead of what we completed, we won't get good results if we do that. servers are dumb.
+			start = dl->completedbytes;
+			size = 0;
+		}
 		else if (start+size < dl->completedbytes)
 			;	//already completed this data
 		else
@@ -2897,7 +2900,7 @@ static void CLDP_ParseDownloadData(void)
 			dl->ratebytes += size-offset;	//for download rate calcs
 		}
 
-		dl->percent = (start+size) / (float)dl->size * 100;
+		dl->percent = (dl->completedbytes) / (float)dl->size * 100;
 	}
 
 	//we need to ack in order.
@@ -2992,15 +2995,16 @@ static void CLDP_ParseDownloadBegin(char *s)
 			chunk = sizeof(buffer);
 		VFS_WRITE(dl->file, buffer, chunk);
 	}
+	VFS_SEEK(dl->file, 0);
 }
 
 static void CLDP_ParseDownloadFinished(char *s)
 {
 	qdownload_t *dl = cls.download;
-	unsigned short runningcrc = 0;
+	unsigned int runningcrc = 0;
 	const hashfunc_t *hfunc = &hash_crc16;
 	char buffer[8192];
-	int size, pos, chunk;
+	qofs_t size, pos, chunk;
 	if (!dl || !dl->file)
 		return;
 
@@ -3011,16 +3015,15 @@ static void CLDP_ParseDownloadFinished(char *s)
 	dl->file = FS_OpenVFS (dl->tempname+dl->prefixbytes, "rb", dl->fsroot);
 	if (dl->file)
 	{
-		char *hashctx = alloca(hfunc->digestsize);
+		void *hashctx = alloca(hfunc->contextsize);
 		size = dl->size;
-		hfunc->init(&hashctx);
-		for (pos = 0, chunk = 1; chunk; pos += chunk)
+		hfunc->init(hashctx);
+		for (pos = 0; pos < size; pos += chunk)
 		{
-			chunk = size - pos;
-			if (chunk > sizeof(buffer))
-				chunk = sizeof(buffer);
-			VFS_READ(dl->file, buffer, chunk);
-			hfunc->process(&hashctx, buffer, chunk);
+			chunk = min(sizeof(buffer), size - pos);
+			if (chunk != VFS_READ(dl->file, buffer, chunk))
+				break;
+			hfunc->process(hashctx, buffer, chunk);
 		}
 		VFS_CLOSE (dl->file);
 		dl->file = NULL;
@@ -3034,7 +3037,6 @@ static void CLDP_ParseDownloadFinished(char *s)
 		return;
 	}
 
-	Cmd_TokenizeString(s, false, false);
 	if (size != atoi(Cmd_Argv(1)))
 	{
 		Con_Printf("Download failed: wrong file size\n");
@@ -3326,13 +3328,7 @@ static void CLQW_ParseServerData (void)
 #ifndef CLIENTONLY
 	if (!sv.state)
 #endif
-	{
-		COM_FlushTempoaryPacks();
 		COM_Gamedir(str, NULL);
-#ifndef CLIENTONLY
-		InfoBuf_SetStarKey (&svs.info, "*gamedir", str);
-#endif
-	}
 
 	CL_ClearState (true);
 #ifdef QUAKEHUD
@@ -3538,9 +3534,6 @@ static void CLQW_ParseServerData (void)
 	S_Voip_MapChange();
 #endif
 
-#ifdef VM_CG
-	CG_Stop();
-#endif
 #ifdef CSQC_DAT
 	CSQC_Shutdown();	//revive it when we get the serverinfo saying the checksum.
 #endif
@@ -3932,13 +3925,7 @@ static void CLNQ_ParseServerData(void)		//Doesn't change gamedir - use with caut
 #ifndef CLIENTONLY
 		if (!sv.state)
 #endif
-		{
-			COM_FlushTempoaryPacks();
 			COM_Gamedir(str, NULL);
-#ifndef CLIENTONLY
-			InfoBuf_SetStarKey (&svs.info, "*gamedir", str);
-#endif
-		}
 	}
 	if (cl.allocated_client_slots > MAX_CLIENTS)
 	{
@@ -4186,9 +4173,6 @@ Con_DPrintf ("CL_SignonReply: %i\n", cls.signon);
 
 	case 3:
 		CL_SendClientCommand(true, "begin");
-#ifdef VM_CG
-		CG_Start();
-#endif
 		break;
 
 	case 4:
@@ -4835,10 +4819,6 @@ static void CLQ2_Precache_f (void)
 	cl.contentstage = 0;
 	cl.sendprespawn = true;
 	SCR_SetLoadingFile("loading data");
-
-#ifdef VM_CG
-	CG_Start();
-#endif
 }
 #endif
 
@@ -6917,13 +6897,11 @@ static void CL_ParsePrecache(void)
 		{
 			model_t *model;
 			CL_CheckOrEnqueDownloadFile(s, s, DLLF_ALLOWWEB);
-			model = Mod_ForName(Mod_FixName(s, cl.model_name[1]), (i == 1)?MLV_ERROR:MLV_WARN);
+			model = Mod_ForName(Mod_FixName(s, cl.model_name[1]), (i == 1&&!cl.sendprespawn)?MLV_ERROR:MLV_WARN);
 //			if (!model)
 //				Con_Printf("svc_precache: Mod_ForName(\"%s\") failed\n", s);
 			cl.model_precache[i] = model;
 			Q_strncpyz (cl.model_name[i], s, sizeof(cl.model_name[i]));
-
-			cl.model_precaches_added = true;
 		}
 		else
 			Con_Printf("svc_precache: model index %i outside range %i...%i\n", i, 1, MAX_PRECACHE_MODELS);
@@ -7006,7 +6984,7 @@ static void Con_HexDump(qbyte *packet, size_t len, size_t badoffset)
 }
 void CL_DumpPacket(void)
 {
-	Con_HexDump(net_message.data, net_message.cursize, msg_readcount-1);
+	Con_HexDump(net_message.data, net_message.cursize, MSG_GetReadCount()-1);
 }
 
 static void CL_ParsePortalState(void)
@@ -7116,8 +7094,9 @@ static void CL_ParseBaseAngle(int seat)
 		VRUI_SnapAngle();
 }
 
-#define SHOWNET(x) if(cl_shownet.value>=2)Con_Printf ("%3i:%s\n", msg_readcount-1, x);
-#define SHOWNET2(x, y) if(cl_shownet.value>=2)Con_Printf ("%3i:%3i:%s\n", msg_readcount-1, y, x);
+#define SHOWNETEOM(x) if(cl_shownet.value>=2)Con_Printf ("%3i:%s\n", MSG_GetReadCount(), x);
+#define SHOWNET(x) if(cl_shownet.value>=2)Con_Printf ("%3i:%s\n", MSG_GetReadCount()-1, x);
+#define SHOWNET2(x, y) if(cl_shownet.value>=2)Con_Printf ("%3i:%3i:%s\n", MSG_GetReadCount()-1, y, x);
 /*
 =====================
 CL_ParseServerMessage
@@ -7203,7 +7182,7 @@ void CLQW_ParseServerMessage (void)
 			break;
 		}
 
-		cmdstart = msg_readcount;
+		cmdstart = MSG_GetReadCount();
 		cmd = MSG_ReadByte ();
 
 		if (cmd == svcfte_choosesplitclient)
@@ -7218,8 +7197,7 @@ void CLQW_ParseServerMessage (void)
 
 		if (cmd == -1)
 		{
-			msg_readcount++;	// so the EOM showner has the right value
-			SHOWNET("END OF MESSAGE");
+			SHOWNETEOM("END OF MESSAGE");
 			break;
 		}
 
@@ -7230,7 +7208,7 @@ void CLQW_ParseServerMessage (void)
 		{
 		default:
 			CL_DumpPacket();
-			Host_EndGame ("CLQW_ParseServerMessage: Illegible server message (%i@%i)%s", cmd, msg_readcount-1, (!cl.csqcdebug && suggestcsqcdebug)?"\n'sv_csqcdebug 1' might aid in debugging this.":"" );
+			Host_EndGame ("CLQW_ParseServerMessage: Illegible server message (%i@%i)%s", cmd, MSG_GetReadCount()-1, (!cl.csqcdebug && suggestcsqcdebug)?"\n'sv_csqcdebug 1' might aid in debugging this.":"" );
 			return;
 
 		case svc_time:
@@ -7733,7 +7711,7 @@ void CLQW_ParseServerMessage (void)
 			break;
 		}
 
-		packetusage_pending[cmd] += msg_readcount-cmdstart;
+		packetusage_pending[cmd] += MSG_GetReadCount()-cmdstart;
 	}
 }
 
@@ -7748,17 +7726,15 @@ static void CLQ2_ParseZPacket(void)
 	unsigned short clen = MSG_ReadShort();
 	unsigned short ulen = MSG_ReadShort();
 	sizebuf_t restoremsg;
-	int restorereadcount;
-	if (clen > net_message.cursize-msg_readcount)
+	if (clen > net_message.cursize-MSG_GetReadCount())
 		Host_EndGame ("CLQ2_ParseZPacket: svcr1q2_zpacket truncated");
 	if (ulen > net_message.maxsize-net_message.cursize)
 		Host_EndGame ("CLQ2_ParseZPacket: svcr1q2_zpacket overflow");
-	indata = net_message.data + msg_readcount;
+	indata = net_message.data + MSG_GetReadCount();
 	outdata = net_message.data + net_message.cursize;
 	MSG_ReadSkip(clen);
 	restoremsg = net_message;
-	restorereadcount = msg_readcount;
-	msg_readcount = net_message.cursize;
+	net_message.currentbit = net_message.cursize<<3;
 	net_message.cursize += ulen;
 
 	memset(&s, 0, sizeof(s));
@@ -7779,7 +7755,6 @@ static void CLQ2_ParseZPacket(void)
 
 	CLQ2_ParseServerMessage();
 	net_message = restoremsg;
-	msg_readcount = restorereadcount;
 	msg_badread = false;
 #endif
 }
@@ -7803,7 +7778,7 @@ void CLQ2_ParseServerMessage (void)
 	int				i;
 	unsigned int	seat;
 //	int				j;
-	int startpos = msg_readcount;
+	int startpos = MSG_GetReadCount();
 
 	cl.last_servermessage = realtime;
 	CL_ClearProjectiles ();
@@ -7845,8 +7820,7 @@ void CLQ2_ParseServerMessage (void)
 
 		if (cmd == -1)
 		{
-			msg_readcount++;	// so the EOM showner has the right value
-			SHOWNET("END OF MESSAGE");
+			SHOWNETEOM("END OF MESSAGE");
 			break;
 		}
 
@@ -8223,8 +8197,7 @@ void CLNQ_ParseServerMessage (void)
 
 		if (cmd == -1)
 		{
-			msg_readcount++;	// so the EOM showner has the right value
-			SHOWNET("END OF MESSAGE");
+			SHOWNETEOM("END OF MESSAGE");
 			break;
 		}
 
@@ -8243,7 +8216,7 @@ void CLNQ_ParseServerMessage (void)
 		default:
 		badsvc:
 			CL_DumpPacket();
-			Host_EndGame ("CLNQ_ParseServerMessage: Illegible server message (%i@%i)", cmd, msg_readcount-1);
+			Host_EndGame ("CLNQ_ParseServerMessage: Illegible server message (%i@%i)", cmd, MSG_GetReadCount()-1);
 			return;
 
 		case svc_nop:

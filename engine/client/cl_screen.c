@@ -2293,7 +2293,7 @@ void SCR_SetUpToDrawConsole (void)
 			scr_con_target = 0; // not looking at an normal console
 		}
 #ifdef VM_UI
-		else if (UI_OpenMenu())
+		else if (q3 && q3->ui.OpenMenu())
 			scr_con_current = scr_con_target = 0;	//force instantly hidden.
 #endif
 		else
@@ -2499,7 +2499,7 @@ void *SCR_ScreenShot_Capture(int fbwidth, int fbheight, int *stride, enum upload
 	R2D_FillBlock(0, 0, vid.fbvwidth, vid.fbvheight);
 
 #ifdef VM_CG
-	if (!okay && CG_Refresh())
+	if (!okay && q3 && q3->cg.Redraw(cl.time))
 		okay = true;
 #endif
 #ifdef CSQC_DAT
@@ -2907,8 +2907,8 @@ void SCR_ScreenShot_Cubemap_f(void)
 		bb=0;
 		for (i = 0; i < 6; i++)
 		{
-			VectorCopy(sides[i].angle, cl.playerview->simangles);
-			VectorCopy(cl.playerview->simangles, cl.playerview->viewangles);
+			VectorCopy(sides[i].angle, cl.playerview->aimangles);
+			VectorCopy(cl.playerview->aimangles, cl.playerview->viewangles);
 
 			//don't use hdr when saving dds files. it generally means dx10 dds files and most tools suck too much and then I get blamed for writing 'corrupt' dds files.
 			facedata = SCR_ScreenShot_Capture(fbwidth, fbheight, &stride, &fmt, true, !!strcmp(ext, ".dds"));
@@ -2992,8 +2992,8 @@ void SCR_ScreenShot_Cubemap_f(void)
 	{
 		for (i = firstside; i < firstside+6; i++)
 		{
-			VectorCopy(sides[i].angle, cl.playerview->simangles);
-			VectorCopy(cl.playerview->simangles, cl.playerview->viewangles);
+			VectorCopy(sides[i].angle, cl.playerview->aimangles);
+			VectorCopy(cl.playerview->aimangles, cl.playerview->viewangles);
 
 			buffer = SCR_ScreenShot_Capture(fbwidth, fbheight, &stride, &fmt, true, false);
 			if (buffer)

@@ -886,7 +886,7 @@ static qboolean XR_Init(vrsetup_t *qreqs, rendererstate_t *info)
 	return true;
 }
 
-static qboolean XR_HapticCommand_f(qboolean isinsecure)
+static void XR_HapticCommand_f(void)
 {
 	size_t u;
 	char actionname[XR_MAX_ACTION_NAME_SIZE];
@@ -910,10 +910,9 @@ static qboolean XR_HapticCommand_f(qboolean isinsecure)
 				haptic.frequency = *actionname?atof(actionname):XR_FREQUENCY_UNSPECIFIED;
 				xrApplyHapticFeedback(xr.session, &info, (XrHapticBaseHeader*)&haptic);
 			}
-			return true;
+			break;
 		}
 	}
-	return false;
 }
 
 static XrAction XR_DefineAction(enum actset_e set, XrActionType type, const char *name, const char *description, const char *root)
@@ -994,7 +993,7 @@ static XrAction XR_DefineAction(enum actset_e set, XrActionType type, const char
 		Con_Printf("openxr: Unable to create action %s [%s] - %s\n", info.actionName, info.localizedActionName, XR_StringForResult(res));
 
 	if (info.actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT)
-		cmdfuncs->AddCommand(xr.actions[u].actname);
+		cmdfuncs->AddCommand(xr.actions[u].actname, XR_HapticCommand_f, "Linked to an OpenXR haptic feedback.");
 
 	return xr.actions[u].action;
 }
@@ -1336,7 +1335,7 @@ static void XR_SetupInputs_Instance(void)
 
 	h = 0;
 	if (fsfuncs)
-		fsfuncs->EnumerateFiles("oxr_*.binds", XR_BindProfileFile, &h);
+		fsfuncs->EnumerateFiles(FS_GAME, "oxr_*.binds", XR_BindProfileFile, &h);
 	if (!h)	//no user bindings defined, use fallbacks. probably this needs to be per-mod.
 	{
 		for (h = 0; h < countof(xr_knownprofiles); h++)
@@ -2286,7 +2285,6 @@ qboolean Plug_Init(void)
 	fsfuncs = plugfuncs->GetEngineInterface(plugfsfuncs_name, sizeof(*fsfuncs));
 	inputfuncs = plugfuncs->GetEngineInterface(pluginputfuncs_name, sizeof(*inputfuncs));
 	plugfuncs->ExportFunction("MayUnload", XR_PluginMayUnload);
-	plugfuncs->ExportFunction("ExecuteCommand", XR_HapticCommand_f);
 	if (plugfuncs->ExportInterface(plugvrfuncs_name, &openxr, sizeof(openxr)))
 	{
 		xr_enable			= cvarfuncs->GetNVFDG("xr_enable",			"1",			0,				"Controls whether to use openxr rendering or not.",									"OpenXR configuration");

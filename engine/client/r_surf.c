@@ -3971,7 +3971,7 @@ void Surf_BuildLightmaps (void)
 Surf_NewMap
 ===============
 */
-void Surf_NewMap (void)
+void Surf_NewMap (model_t *worldmodel)
 {
 	char namebuf[MAX_QPATH];
 	extern cvar_t host_mapname;
@@ -3981,9 +3981,11 @@ void Surf_NewMap (void)
 #endif
 	int		i;
 
+	cl.worldmodel = worldmodel;
+
 	//evil haxx
 	r_dynamic.ival = r_dynamic.value;
-	if (r_dynamic.ival > 0 && cl.worldmodel->fromgame == fg_quake3) //quake3 has no lightmaps, disable r_dynamic
+	if (r_dynamic.ival > 0 && (!cl.worldmodel || cl.worldmodel->fromgame == fg_quake3)) //quake3 has no lightmaps, disable r_dynamic
 		r_dynamic.ival = 0;
 
 	memset (&r_worldentity, 0, sizeof(r_worldentity));
@@ -4046,7 +4048,8 @@ TRACE(("dbg: Surf_NewMap: building lightmaps\n"));
 
 TRACE(("dbg: Surf_NewMap: ui\n"));
 #ifdef VM_UI
-	UI_Reset();
+	if (q3)
+		q3->ui.Reset();
 #endif
 TRACE(("dbg: Surf_NewMap: tp\n"));
 	TP_NewMap();

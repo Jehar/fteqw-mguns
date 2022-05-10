@@ -172,11 +172,11 @@ void CL_CloneDlight(dlight_t *dl, dlight_t *src)
 	dl->customstyle = src->customstyle?Z_StrDup(src->customstyle):NULL;
 	Z_Free(customstyle);
 }
-static void CL_ClearDlight(dlight_t *dl, int key)
+static void CL_ClearDlight(dlight_t *dl, int key, qboolean reused)
 {
 	void *sm = dl->worldshadowmesh;
 	unsigned int oq = dl->coronaocclusionquery;
-	unsigned int oqr = (dl->key == key)?dl->coronaocclusionresult:false;
+	unsigned int oqr = reused?dl->coronaocclusionresult:false;
 	Z_Free(dl->customstyle);
 	memset (dl, 0, sizeof(*dl));
 	dl->coronaocclusionquery = oq;
@@ -224,7 +224,7 @@ dlight_t *CL_AllocSlight(void)
 	}
 	dl = &cl_dlights[i];
 
-	CL_ClearDlight(dl, 0);
+	CL_ClearDlight(dl, 0, false);
 	dl->flags = LFLAG_REALTIMEMODE;
 	dl->corona = 0;
 	return dl;
@@ -249,7 +249,7 @@ dlight_t *CL_AllocDlight (int key)
 		{
 			if (dl->key == key)
 			{
-				CL_ClearDlight(dl, key);
+				CL_ClearDlight(dl, key, true);
 				return dl;
 			}
 		}
@@ -270,9 +270,47 @@ dlight_t *CL_AllocDlight (int key)
 	if (rtlights_first > dl - cl_dlights)
 		rtlights_first = dl - cl_dlights;
 
-	CL_ClearDlight(dl, key);
+	CL_ClearDlight(dl, key, false);
 	return dl;
 }
+
+dlight_t *CL_AllocDlightOrg (int keyidx, vec3_t keyorg)
+{
+	int		i;
+	dlight_t	*dl;
+
+// first look for an exact key match
+	dl = cl_dlights+rtlights_first;
+	for (i=rtlights_first ; i<RTL_FIRST ; i++, dl++)
+	{
+		if (dl->key == keyidx && VectorCompare(dl->origin, keyorg))
+		{
+			CL_ClearDlight(dl, keyidx, true);
+			VectorCopy(keyorg, dl->origin);
+			return dl;
+		}
+	}
+
+	//default to the first
+	dl = &cl_dlights[rtlights_first?rtlights_first-1:0];
+	//try and find one that is free
+	for (i=RTL_FIRST; i > rtlights_first && i > 0; )
+	{
+		i--;
+		if (!cl_dlights[i].radius)
+		{
+			dl = &cl_dlights[i];
+			break;
+		}
+	}
+	if (rtlights_first > dl - cl_dlights)
+		rtlights_first = dl - cl_dlights;
+
+	CL_ClearDlight(dl, keyidx, false);
+	VectorCopy(keyorg, dl->origin);
+	return dl;
+}
+
 
 /*
 ===============
@@ -594,7 +632,7 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 		bits |= MSG_ReadByte()<<24;
 
 	if (cl_shownet.ival >= 3)
-		Con_Printf("%3i:     Update %4i 0x%x\n", msg_readcount, entnum, bits);
+		Con_Printf("%3i:     Update %4i 0x%x\n", MSG_GetReadCount(), entnum, bits);
 
 	if (bits & UF_RESET)
 	{
@@ -1099,13 +1137,13 @@ void CLFTE_ParseEntities(void)
 		if (removeflag)
 		{
 			if (cl_shownet.ival >= 3)
-				Con_Printf("%3i:     Remove %i @ %i\n", msg_readcount, newnum, cls.netchan.incoming_sequence);
+				Con_Printf("%3i:     Remove %i @ %i\n", MSG_GetReadCount(), newnum, cls.netchan.incoming_sequence);
 
 			if (!newnum)
 			{
 				/*removal of world - means forget all entities*/
 				if (cl_shownet.ival >= 3)
-					Con_Printf("%3i:     Reset all\n", msg_readcount);
+					Con_Printf("%3i:     Reset all\n", MSG_GetReadCount());
 				newp->num_entities = 0;
 				oldp = &nullp;
 				oldp->num_entities = 0;
@@ -1292,7 +1330,7 @@ void CLQW_ParsePacketEntities (qboolean delta)
 
 		if (word & U_MOREBITS)
 		{
-			int oldpos = msg_readcount;
+			int oldpos = MSG_GetReadCount();
 			int excessive;
 			excessive = MSG_ReadByte();
 			if (excessive & U_EVENMORE)
@@ -1304,7 +1342,7 @@ void CLQW_ParsePacketEntities (qboolean delta)
 					newnum += 1024;
 			}
 
-			msg_readcount = oldpos;//undo the read...
+			MSG_ReadSkip(oldpos-MSG_GetReadCount());//undo the read...
 		}
 		oldnum = oldindex >= oldp->num_entities ? 9999 : oldp->entities[oldindex].number;
 
@@ -1421,7 +1459,7 @@ void DP5_ParseDelta(entity_state_t *s, packet_entities_t *pack)
 	unsigned int bits;
 
 	if (cl_shownet.ival >= 3)
-		Con_Printf("%3i:     Update %i", msg_readcount, s->number);
+		Con_Printf("%3i:     Update %i", MSG_GetReadCount(), s->number);
 
 	bits = MSG_ReadByte();
 	if (bits & E5_EXTEND1)
@@ -1923,7 +1961,7 @@ void CLNQ_ParseEntity(unsigned int bits)
 			state->modelindex = (state->modelindex & 0xff) | (MSG_ReadByte() << 8);
 
 		if (bits & FITZU_LERPFINISH)
-			MSG_ReadByte();
+			state->lerpend = cl.gametime + MSG_ReadByte()/255.0f;
 
 		if (cls.qex)
 		{
@@ -3289,7 +3327,7 @@ static void CL_LerpNetFrameState(framestate_t *fs, lerpents_t *le)
 	fs->g[0].endbone = le->basebone;
 }
 
-static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbaseframe, int curbasebone, lerpents_t *le)
+static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbaseframe, int curbasebone, lerpents_t *le, float lerpend)
 {
 	int fst, frame;
 	if (curbasebone != le->basebone)
@@ -3306,7 +3344,10 @@ static void CL_UpdateNetFrameLerpState(qboolean force, int curframe, int curbase
 		frame = (fst==FST_BASE)?curbaseframe:curframe;
 		if (force || frame != le->newframe[fst])
 		{
-			le->framelerpdeltatime[fst] = bound(0, cl.servertime - le->newframestarttime[fst], cl_lerp_maxinterval.value);	//clamp to 10 tics per second
+			if (lerpend)
+				le->framelerpdeltatime[fst] = bound(0, lerpend - cl.servertime, cl_lerp_maxinterval.value);	//clamp to 10 tics per second
+			else
+				le->framelerpdeltatime[fst] = bound(0, cl.servertime - le->newframestarttime[fst], cl_lerp_maxinterval.value);	//clamp to 10 tics per second
 
 			if (!force)
 			{
@@ -3595,7 +3636,7 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 					le->isnew = true;
 					VectorCopy(le->origin, le->lastorigin);
 				}
-				CL_UpdateNetFrameLerpState(sold == snew, snew->frame, snew->baseframe, snew->basebone, le);
+				CL_UpdateNetFrameLerpState(sold == snew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend);
 
 
 				from = sold;	//eww
@@ -3665,7 +3706,10 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 			VectorCopy(snew__origin, le->neworigin);
 			VectorCopy(snew->angles, le->newangle);
 
-			le->orglerpdeltatime = newpack->servertime - oldpack->servertime;
+			if (snew->lerpend)
+				le->orglerpdeltatime = bound(0.001, snew->lerpend - newpack->servertime, cl_lerp_maxinterval.value);
+			else
+				le->orglerpdeltatime = newpack->servertime - oldpack->servertime;
 			le->orglerpstarttime = oldpack->servertime;
 
 			le->isnew = true;
@@ -3693,6 +3737,8 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 					VectorCopy(snew->angles, le->newangle);
 				}
 
+				if (snew->lerpend)
+					le->orglerpdeltatime = bound(0.001, snew->lerpend - le->orglerpstarttime, cl_lerp_maxinterval.value);
 				lfrac = (servertime - le->orglerpstarttime) / le->orglerpdeltatime;
 				lfrac = bound(0, lfrac, 1);
 				if (r_nolerp.ival)
@@ -3730,6 +3776,8 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 					le->orglerpstarttime = servertime;
 				}
 
+				if (snew->lerpend)
+					le->orglerpdeltatime = bound(0.001, snew->lerpend - le->orglerpstarttime, cl_lerp_maxinterval.value);
 				lfrac = (servertime - le->orglerpstarttime) / le->orglerpdeltatime;
 				lfrac = bound(0, lfrac, 1);
 
@@ -3760,7 +3808,7 @@ static void CL_TransitionPacketEntities(int newsequence, packet_entities_t *newp
 		}
 #endif
 
-		CL_UpdateNetFrameLerpState(isnew, snew->frame, snew->baseframe, snew->basebone, le);
+		CL_UpdateNetFrameLerpState(isnew, snew->frame, snew->baseframe, snew->basebone, le, snew->lerpend);
 	}
 }
 
@@ -5264,7 +5312,7 @@ void CL_LinkPlayers (void)
 			continue;	// not present this frame
 		}
 
-		CL_UpdateNetFrameLerpState(false, state->frame, 0, 0, &cl.lerpplayers[j]);
+		CL_UpdateNetFrameLerpState(false, state->frame, 0, 0, &cl.lerpplayers[j], 0);
 		cl.lerpplayers[j].sequence = cl.lerpentssequence;
 
 #ifdef CSQC_DAT

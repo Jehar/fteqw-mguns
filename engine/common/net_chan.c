@@ -451,7 +451,7 @@ enum nqnc_packettype_e NQNetChan_Process(netchan_t *chan)
 	int drop;
 
 	chan->bytesin += net_message.cursize;
-	MSG_BeginReading (chan->netprim);
+	MSG_BeginReading (&net_message, chan->netprim);
 
 	header = LongSwap(MSG_ReadLong());
 
@@ -486,7 +486,7 @@ enum nqnc_packettype_e NQNetChan_Process(netchan_t *chan)
 		}
 		memcpy(net_message.data, tmp, net_message.cursize);
 
-		MSG_BeginReading (chan->netprim);
+		MSG_BeginReading (&net_message, chan->netprim);
 		header = LongSwap(MSG_ReadLong());	//re-read the now-decompressed copy of the header for the real flags
 	}
 #endif
@@ -598,7 +598,7 @@ enum nqnc_packettype_e NQNetChan_Process(netchan_t *chan)
 				SZ_Clear(&net_message);
 				SZ_Write(&net_message, chan->in_fragment_buf, chan->in_fragment_length);
 				chan->in_fragment_length = 0;
-				MSG_BeginReading(chan->netprim);
+				MSG_BeginReading(&net_message, chan->netprim);
 
 				if (showpackets.value)
 					Con_Printf ("in  %s r=%i %i\n"
@@ -1001,7 +1001,7 @@ qboolean Netchan_Process (netchan_t *chan)
 	chan->bytesin += net_message.cursize;
 
 // get sequence numbers		
-	MSG_BeginReading (chan->netprim);
+	MSG_BeginReading (&net_message, chan->netprim);
 	sequence = MSG_ReadLong ();
 	sequence_ack = MSG_ReadLong ();
 
@@ -1087,7 +1087,7 @@ qboolean Netchan_Process (netchan_t *chan)
 
 	if (offset)
 	{
-		int len = net_message.cursize - msg_readcount;
+		int len = net_message.cursize - MSG_GetReadCount();
 		qboolean more = false;
 		if (offset & 1)
 		{
@@ -1117,7 +1117,7 @@ qboolean Netchan_Process (netchan_t *chan)
 			return false; /*dropped one*/
 		}
 
-		memcpy(chan->in_fragment_buf + offset, net_message.data + msg_readcount, len);
+		memcpy(chan->in_fragment_buf + offset, net_message.data + MSG_GetReadCount(), len);
 		chan->in_fragment_length += len;
 
 		if (more)
@@ -1126,7 +1126,7 @@ qboolean Netchan_Process (netchan_t *chan)
 			return false;
 		}
 		memcpy(net_message.data, chan->in_fragment_buf, chan->in_fragment_length);
-		msg_readcount = 0;
+		net_message.currentbit = 0;
 		net_message.cursize = chan->in_fragment_length;
 
 		if (showpackets.value)
@@ -1194,7 +1194,7 @@ qboolean Netchan_Process (netchan_t *chan)
 	if (chan->compresstable)
 	{
 //		Huff_CompressPacket(&net_message, (chan->sock == NS_SERVER)?10:8);
-		Huff_DecompressPacket(chan->compresstable, &net_message, msg_readcount);
+		Huff_DecompressPacket(chan->compresstable, &net_message, MSG_GetReadCount());
 	}
 #endif
 

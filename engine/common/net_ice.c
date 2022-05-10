@@ -26,6 +26,7 @@ typedef struct
 #endif
 #ifdef SUPPORT_ICE
 cvar_t net_ice_exchangeprivateips = CVARFD("net_ice_exchangeprivateips", "", CVAR_NOTFROMSERVER, "Boolean. When set to 0, hides private IP addresses from your peers. Only addresses determined from the other side of your router will be shared. Setting it to 0 may be desirable but it can cause connections to fail when your router does not support hairpinning, whereas 1 fixes that at the cost of exposing private IP addresses.");
+cvar_t net_ice_usewebrtc = CVARFD("net_ice_usewebrtc", "", CVAR_NOTFROMSERVER, "Use webrtc's extra overheads rather than simple ICE. This makes packets larger and is slower to connect, but is compatible with the web port.");
 /*
 Interactive Connectivity Establishment (rfc 5245)
 find out your peer's potential ports.
@@ -401,7 +402,6 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 	con->originversion = 1;
 	Q_strncpyz(con->originaddress, "127.0.0.1", sizeof(con->originaddress));
 
-	con->mode = mode;
 	con->blockcandidates = true;	//until offers/answers are sent.
 
 #ifdef HAVE_DTLS
@@ -422,6 +422,12 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 			con->dtlsfuncs->GenTempCertificate(NULL, &con->cred.local);
 			Con_DPrintf("Done\n");
 		}
+		else
+		{	//failure if we can't do the whole dtls thing.
+			con->dtlsfuncs = NULL;
+			Con_Printf(CON_WARNING"DTLS %s support unavailable, disabling encryption (and webrtc compat).\n", con->dtlspassive?"server":"client");
+			mode = ICEM_ICE;	//fall back on unencrypted (this doesn't depend on the peer, so while shitty it hopefully shouldn't be exploitable with a downgrade-attack)
+		}
 
 		con->mysctpport = 27500;
 	}
@@ -431,6 +437,8 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 	con->qadr.type = NA_ICE;
 	con->qadr.prot = NP_DGRAM;
 	Q_strncpyz(con->qadr.address.icename, con->friendlyname, sizeof(con->qadr.address.icename));
+
+	con->mode = mode;
 
 	con->next = icelist;
 	icelist = con;
@@ -1676,7 +1684,7 @@ static neterr_t SCTP_Transmit(sctp_t *sctp, struct icestate_s *peer, const void 
 				init->arwc = BigLong(65535);
 				init->numoutstreams = BigShort(2);
 				init->numinstreams = BigShort(2);
-				init->tsn = sctp->o.tsn;
+				init->tsn = BigLong(sctp->o.tsn);
 				ftsn->ptype = BigShort(49152);
 				ftsn->plen = BigShort(sizeof(*ftsn));
 				pktlen += sizeof(*init) + sizeof(*ftsn);
@@ -2928,9 +2936,18 @@ static void FTENET_ICE_Establish(ftenet_ice_connection_t *b, int cl, struct ices
 {	//sends offer
 	char buf[256];
 	struct icestate_s *ice;
+	qboolean usewebrtc;
 	if (*ret)
 		iceapi.ICE_Close(*ret);
-	ice = *ret = iceapi.ICE_Create(b, NULL, b->generic.islisten?NULL:va("/%s", b->gamename), ICEM_WEBRTC, b->generic.islisten?ICEP_QWSERVER:ICEP_QWCLIENT);
+#ifndef HAVE_DTLS
+	usewebrtc = false;
+#else
+	if (!*net_ice_usewebrtc.string)
+		usewebrtc = b->generic.islisten;
+	else
+		usewebrtc = net_ice_usewebrtc.ival;
+#endif
+	ice = *ret = iceapi.ICE_Create(b, NULL, b->generic.islisten?NULL:va("/%s", b->gamename), usewebrtc?ICEM_WEBRTC:ICEM_ICE, b->generic.islisten?ICEP_QWSERVER:ICEP_QWCLIENT);
 	if (!*ret)
 		return;	//some kind of error?!?
 	iceapi.ICE_Set(ice, "controller", b->generic.islisten?"0":"1");

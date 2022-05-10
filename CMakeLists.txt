@@ -550,7 +550,6 @@ SET(FTE_COMMON_FILES
 	engine/common/pr_bgcmd.c
 	engine/common/q1bsp.c
 	engine/common/q2pmove.c
-	engine/common/q3common.c
 	engine/common/qvm.c
 	engine/common/sha1.c
 	engine/common/sha2.c
@@ -572,7 +571,6 @@ SET(FTE_COMMON_FILES
 	engine/client/client.h
 	engine/client/cl_ignore.h
 	engine/client/cl_master.h
-	engine/client/clq3defs.h
 	engine/client/input.h
 	engine/client/keys.h
 	engine/client/menu.h
@@ -629,11 +627,9 @@ SET(FTE_COMMON_FILES
 	engine/qclib/progtype.h
 	engine/qclib/qcc.h
 	engine/qclib/qcd.h
-	engine/server/botlib.h
 	engine/server/progdefs.h
 	engine/server/progs.h
 	engine/server/q2game.h
-	engine/server/q3g_public.h
 	engine/server/server.h
 	#engine/server/svhl_gcapi.h
 	engine/server/sv_sql.h
@@ -688,13 +684,11 @@ SET(FTE_SERVER_FILES
 #	engine/server/svhl_world.c
 	engine/server/svq2_ents.c
 	engine/server/svq2_game.c
-	engine/server/svq3_game.c
 )
 
 #these files are only in the client
 SET(FTE_CLIENT_FILES
 	engine/client/cl_cam.c
-	engine/client/cl_cg.c
 	engine/client/cl_demo.c
 	engine/client/cl_ents.c
 	engine/client/cl_ignore.c
@@ -704,11 +698,9 @@ SET(FTE_CLIENT_FILES
 	engine/client/cl_pred.c
 	engine/client/cl_screen.c
 	engine/client/cl_tent.c
-	engine/client/cl_ui.c
 #	engine/client/clhl_game.c
 	engine/client/clq2_cin.c
 	engine/client/clq2_ents.c
-	engine/client/clq3_parse.c
 	engine/client/console.c
 	engine/client/fragstats.c
 	engine/client/image.c
@@ -767,40 +759,72 @@ SET(FTE_CLIENT_FILES
 	${FTE_VK_FILES}
 )
 
-ADD_LIBRARY(fteq3bot MODULE
-	engine/botlib/be_aas_bspq3.c
-	engine/botlib/be_aas_entity.c
-	engine/botlib/be_aas_move.c
-	engine/botlib/be_aas_routealt.c
-	engine/botlib/be_ai_char.c
-	engine/botlib/be_ai_goal.c
-	engine/botlib/be_ai_weight.c
-	engine/botlib/l_crc.c
-	engine/botlib/l_memory.c
-	engine/botlib/l_struct.c
-	engine/botlib/be_aas_cluster.c
-	engine/botlib/be_aas_file.c
-	engine/botlib/be_aas_optimize.c
-	engine/botlib/be_aas_route.c
-	engine/botlib/be_ai_chat.c
-	engine/botlib/be_ai_move.c
-	engine/botlib/be_ea.c
-	engine/botlib/l_libvar.c
-	engine/botlib/l_precomp.c
-	engine/botlib/be_aas_debug.c
-	engine/botlib/be_aas_main.c
-	engine/botlib/be_aas_reach.c
-	engine/botlib/be_aas_sample.c
-	engine/botlib/be_ai_gen.c
-	engine/botlib/be_ai_weap.c
-	engine/botlib/be_interface.c
-	engine/botlib/l_log.c
-	engine/botlib/l_script.c
-	engine/botlib/standalone.c
+SET(FTE_Q3_FILES
+	plugins/quake3/botlib/be_aas_bspq3.c
+	plugins/quake3/botlib/be_aas_entity.c
+	plugins/quake3/botlib/be_aas_move.c
+	plugins/quake3/botlib/be_aas_routealt.c
+	plugins/quake3/botlib/be_ai_char.c
+	plugins/quake3/botlib/be_ai_goal.c
+	plugins/quake3/botlib/be_ai_weight.c
+	plugins/quake3/botlib/l_crc.c
+	plugins/quake3/botlib/l_memory.c
+	plugins/quake3/botlib/l_struct.c
+	plugins/quake3/botlib/be_aas_cluster.c
+	plugins/quake3/botlib/be_aas_file.c
+	plugins/quake3/botlib/be_aas_optimize.c
+	plugins/quake3/botlib/be_aas_route.c
+	plugins/quake3/botlib/be_ai_chat.c
+	plugins/quake3/botlib/be_ai_move.c
+	plugins/quake3/botlib/be_ea.c
+	plugins/quake3/botlib/l_libvar.c
+	plugins/quake3/botlib/l_precomp.c
+	plugins/quake3/botlib/be_aas_debug.c
+	plugins/quake3/botlib/be_aas_main.c
+	plugins/quake3/botlib/be_aas_reach.c
+	plugins/quake3/botlib/be_aas_sample.c
+	plugins/quake3/botlib/be_ai_gen.c
+	plugins/quake3/botlib/be_ai_weap.c
+	plugins/quake3/botlib/be_interface.c
+	plugins/quake3/botlib/l_log.c
+	plugins/quake3/botlib/l_script.c
+	plugins/quake3/botlib/standalone.c
+
+	plugins/quake3/clq3_cg.c
+	plugins/quake3/clq3_ui.c
+	plugins/quake3/clq3_parse.c
+	plugins/quake3/svq3_game.c
+	plugins/quake3/q3common.c
+	plugins/quake3/q3common.h
+
+	plugins/quake3/clq3defs.h
+	plugins/quake3/q3g_public.h
 )
-SET_TARGET_PROPERTIES(fteq3bot PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_DEFINES};${FTE_REVISON};BOTLIB;EXTERNALBOTLIB")
-TARGET_LINK_LIBRARIES(fteq3bot ${FTE_LIBS} )
-SET_TARGET_PROPERTIES(fteq3bot PROPERTIES LINK_FLAGS "-Wl,--no-undefined")
+
+SET(FTE_PLUG_QUAKE3 true CACHE BOOL "Compile Quake3 plugin.")
+IF(FTE_PLUG_QUAKE3)
+	IF (0)
+		SET(FTE_DEFINES ${FTE_DEFINES};${Q3_DEFINES})
+		SET(FTE_LIBS ${FTE_LIBS} quake3)
+
+		#define the modules and make sure they're linked (one generic, one for server-only builds.
+		ADD_LIBRARY(quake3 STATIC ${FTE_Q3_FILES})
+		SET_TARGET_PROPERTIES(quake3 PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_REVISON};BOTLIB;BOTLIB_STATIC;FTEPLUGIN;STATIC_Q3")
+		TARGET_LINK_LIBRARIES(quake3 m)
+
+		#ADD_LIBRARY(q3sv STATIC EXCLUDE_FROM_ALL ${FTE_Q3_FILES})
+		#SET_TARGET_PROPERTIES(q3sv PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_REVISON};BOTLIB;BOTLIB_STATIC;SERVERONLY")
+		#SET_TARGET_PROPERTIES(q3sv PROPERTIES LINK_FLAGS "-Wl,--no-undefined")
+		#TARGET_LINK_LIBRARIES(q3sv m)
+		#SET(FTESV_LIBS ${FTESV_LIBS} q3sv)
+	ELSE()
+		#define the modules and make sure they're linked (one generic, one for server-only builds.
+		ADD_LIBRARY(plug_quake3 MODULE ${FTE_Q3_FILES} plugins/plugin.c)
+		SET_TARGET_PROPERTIES(plug_quake3 PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_REVISON};BOTLIB;BOTLIB_STATIC;FTEPLUGIN")
+		TARGET_LINK_LIBRARIES(plug_quake3 m)
+		EMBED_PLUGIN_META(quake3 "Quake3 Compat" "Provides compatability with Quake3's gamecode.")
+	ENDIF()
+ENDIF()
 
 FILE(STRINGS "${FTE_BUILD_CONFIG}" BULLET_INTERNAL REGEX "^#define[\t ]+USE_INTERNAL_BULLET")
 IF(BULLET_INTERNAL)
@@ -833,36 +857,46 @@ ENDIF()
 
 IF(ANDROID)
 	#android sucks. everything is a library. so we build the engine as a shared library and completely ignore dedicated servers+tools
-	ADD_LIBRARY(ftedroid MODULE
-		${FTE_ARCH_FILES}
-		${FTE_COMMON_FILES}
-		${FTE_CLIENT_FILES}
-	)
-	SET_TARGET_PROPERTIES(ftedroid PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_DEFINES};${FTE_REVISON}")
-	TARGET_LINK_LIBRARIES(ftedroid ${FTE_LIBS} )
-	SET(INSTALLTARGS ${INSTALLTARGS} ftedroid)
+	SET(FTE_ENGINE_FTEDROID true CACHE BOOL "Compile ftedroid engine shared library.")
+	IF(FTE_ENGINE_FTEDROID)
+		ADD_LIBRARY(ftedroid MODULE
+			${FTE_ARCH_FILES}
+			${FTE_COMMON_FILES}
+			${FTE_CLIENT_FILES}
+		)
+		SET_TARGET_PROPERTIES(ftedroid PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_DEFINES};${FTE_REVISON}")
+		TARGET_LINK_LIBRARIES(ftedroid ${FTE_LIBS} )
+		SET(INSTALLTARGS ${INSTALLTARGS} ftedroid)
+	ENDIF()
 ELSE()
 	#systems that actually have executables...
-	ADD_EXECUTABLE(fteqw WIN32
-		${FTE_ARCH_FILES}
-		${FTE_COMMON_FILES}
-		${FTE_CLIENT_FILES}
-		${FTE_SERVER_FILES}
-	)
-	SET_TARGET_PROPERTIES(fteqw PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_DEFINES};${FTE_REVISON}")
-	TARGET_LINK_LIBRARIES(fteqw ${FTE_LIBS})
-	SET(INSTALLTARGS ${INSTALLTARGS} fteqw)
+	SET(FTE_ENGINE true CACHE BOOL "Compile fteqw engine binary.")
+	IF(FTE_ENGINE)
+		ADD_EXECUTABLE(fteqw WIN32
+			${FTE_ARCH_FILES}
+			${FTE_COMMON_FILES}
+			${FTE_CLIENT_FILES}
+			${FTE_SERVER_FILES}
+		)
+		SET_TARGET_PROPERTIES(fteqw PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES};${FTE_DEFINES};${FTE_REVISON}")
+		TARGET_LINK_LIBRARIES(fteqw ${FTE_LIBS})
+		SET(INSTALLTARGS ${INSTALLTARGS} fteqw)
+	ENDIF()
 
-	ADD_EXECUTABLE(fteqw-sv
-		${FTESV_ARCH_FILES}
-		${FTE_COMMON_FILES}
-		${FTE_SERVER_FILES}
-	)
-	SET_TARGET_PROPERTIES(fteqw-sv PROPERTIES COMPILE_DEFINITIONS "SERVERONLY;${FTE_LIB_DEFINES};${FTESV_DEFINES};${FTE_REVISON}")
-	TARGET_LINK_LIBRARIES(fteqw-sv ${FTESV_LIBS})
-	SET(INSTALLTARGS ${INSTALLTARGS} fteqw-sv)
+	SET(FTE_ENGINE_SERVER_ONLY true CACHE BOOL "Compile fteqw-sv (server only) engine binary.")
+	IF(FTE_ENGINE_SERVER_ONLY)
+		ADD_EXECUTABLE(fteqw-sv
+			${FTESV_ARCH_FILES}
+			${FTE_COMMON_FILES}
+			${FTE_SERVER_FILES}
+		)
+		SET_TARGET_PROPERTIES(fteqw-sv PROPERTIES COMPILE_DEFINITIONS "SERVERONLY;${FTE_LIB_DEFINES};${FTESV_DEFINES};${FTE_REVISON}")
+		TARGET_LINK_LIBRARIES(fteqw-sv ${FTESV_LIBS})
+		SET(INSTALLTARGS ${INSTALLTARGS} fteqw-sv)
+	ENDIF()
 
-	IF(0)
+	SET(FTE_ENGINE_CLIENT_ONLY false CACHE BOOL "Compile ftedw-cl (client-only) engine binary.")
+	IF(FTE_ENGINE_CLIENT_ONLY)
 		ADD_EXECUTABLE(fteqw-cl
 			${FTE_ARCH_FILES}
 			${FTE_COMMON_FILES}
@@ -873,10 +907,12 @@ ELSE()
 		SET(INSTALLTARGS ${INSTALLTARGS} fteqw-cl)
 	ENDIF()
 
-	FIND_PACKAGE(SDL2)
-	IF(SDL2_FOUND)
-		SET(FTE_SDL2 FTE_SDL)
-		SET(FTE_SDL2_INCLUDES ${SDL2_INCLUDE_DIRS})
+	IF(FTE_ENGINE OR FTE_ENGINE_CLIENT)
+		FIND_PACKAGE(SDL2)
+		IF(SDL2_FOUND)
+			SET(FTE_SDL2 FTE_SDL)
+			SET(FTE_SDL2_INCLUDES ${SDL2_INCLUDE_DIRS})
+		ENDIF()
 	ENDIF()
 
 	SET(FTE_TOOL_IQM true CACHE BOOL "Compile IQM Tool.")
@@ -1481,7 +1517,8 @@ INSTALL(TARGETS ${INSTALLTARGS}
 	LIBRARY DESTINATION "${CMAKE_INSTALL_FULL_LIBDIR}"
 )
 
-IF (1)
+SET(FTE_MENU_SYS true CACHE BOOL "Compile System Menu.")
+IF(FTE_MENU_SYS)
 	ADD_CUSTOM_TARGET(menusys ALL
 		VERBATIM
 		COMMAND fteqcc -srcfile "${CMAKE_CURRENT_SOURCE_DIR}/quakec/menusys/menu.src" -o "${CMAKE_CURRENT_BINARY_DIR}/menu.dat"

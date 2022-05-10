@@ -2763,7 +2763,7 @@ static void QCBUILTIN PF_R_RenderScene(pubprogfuncs_t *prinst, struct globalvars
 		csqc_worldchanged = false;
 		cl.worldmodel = r_worldentity.model = csqc_world.worldmodel;
 		FS_LoadMapPackFile(cl.worldmodel->name, cl.worldmodel->archive);
-		Surf_NewMap();
+		Surf_NewMap(csqc_world.worldmodel);
 		CL_UpdateWindowTitle();
 
 		World_RBE_Shutdown(&csqc_world);
@@ -9328,20 +9328,20 @@ void CSQC_ServerInfoChanged(void)
 
 qboolean CSQC_ParseTempEntity(void)
 {
-	int orc;
+	int obit;
 	void *pr_globals;
 	if (!csqcprogs || !csqcg.CSQC_Parse_TempEntity)
 		return false;
 
 	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
 	csqc_mayread = true;
-	orc = msg_readcount;
+	obit = net_message.currentbit;
 	PR_ExecuteProgram (csqcprogs, csqcg.CSQC_Parse_TempEntity);
 	csqc_mayread = false;
 	if (G_FLOAT(OFS_RETURN))
 		return true;
 	//failed. reset the read position.
-	msg_readcount = orc;
+	net_message.currentbit = obit;
 	msg_badread = false;
 	return false;
 }
@@ -9353,7 +9353,7 @@ qboolean CSQC_ParseGamePacket(int seat, qboolean sized)
 	if (sized)
 	{
 		int len = (unsigned short)MSG_ReadShort();
-		int start = msg_readcount;
+		int start = MSG_GetReadCount(), end;
 
 		if (!csqcprogs || !parsefnc)
 		{
@@ -9365,10 +9365,11 @@ qboolean CSQC_ParseGamePacket(int seat, qboolean sized)
 		CSQC_ChangeLocalPlayer(seat);
 		PR_ExecuteProgram (csqcprogs, parsefnc);
 
-		if (msg_readcount != start + len)
+		end = MSG_GetReadCount();
+		if (end != start + len)
 		{
-			Con_Printf("Gamecode misread a gamecode packet (%i bytes too much)\n", msg_readcount - (start+len));
-			msg_readcount = start + len;
+			Con_Printf("Gamecode misread a gamecode packet (%i bytes too much)\n", end - (start+len));
+			MSG_ReadSkip(start + len - end);	//unread or skip.
 		}
 	}
 	else
@@ -9740,7 +9741,7 @@ void CSQC_ParseEntities(qboolean sized)
 			if (sized)
 			{
 				packetsize = MSG_ReadShort();
-				packetstart = msg_readcount;
+				packetstart = MSG_GetReadCount();
 			}
 			else
 			{
@@ -9786,13 +9787,14 @@ void CSQC_ParseEntities(qboolean sized)
 
 			if (sized)
 			{
-				if (msg_readcount != packetstart+packetsize)
+				unsigned int readcount = MSG_GetReadCount();
+				if (readcount != packetstart+packetsize)
 				{
-					if (msg_readcount > packetstart+packetsize)
-						Con_Printf("CSQC overread entity %i. Size %i, read %i", entnum, packetsize, msg_readcount - packetstart);
+					if (readcount > packetstart+packetsize)
+						Con_Printf("CSQC overread entity %i. Size %i, read %i", entnum, packetsize, readcount - packetstart);
 					else
-						Con_Printf("CSQC underread entity %i. Size %i, read %i", entnum, packetsize, msg_readcount - packetstart);
-					Con_Printf(", first byte is %i(%x)\n", net_message.data[msg_readcount], net_message.data[msg_readcount]);
+						Con_Printf("CSQC underread entity %i. Size %i, read %i", entnum, packetsize, readcount - packetstart);
+					Con_Printf(", first byte is %i(%x)\n", net_message.data[readcount], net_message.data[readcount]);
 #ifndef CLIENTONLY
 					if (sv.state)
 					{
@@ -9800,7 +9802,7 @@ void CSQC_ParseEntities(qboolean sized)
 					}
 #endif
 				}
-				msg_readcount = packetstart+packetsize;	//leetism.
+				MSG_ReadSkip(packetstart+packetsize - readcount);	//unread or skip.
 			}
 		}
 	}

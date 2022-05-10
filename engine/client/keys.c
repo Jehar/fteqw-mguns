@@ -50,7 +50,6 @@ qbyte	bindcmdlevel[K_MAX][KEY_MODIFIERSTATES];	//should be a struct, but not due
 qboolean	consolekeys[K_MAX];	// if true, can't be rebound while in console
 int		keyshift[K_MAX];		// key to map to if shift held down in console
 unsigned int	keydown[K_MAX];	//	bitmask, for each device (to block autorepeat binds per-seat).
-//unsigned int	key_modifier[K_MAX];
 
 #define MAX_INDEVS 8
 
@@ -273,6 +272,8 @@ keyname_t keynames[] =
 	{"PLUS",		'+'},	// because "shift++" is inferior to shift+plus
 	{"MINUS",		'-'},	// because "shift+-" is inferior to shift+minus
 
+	{"APOSTROPHE",	'\''},	//can mess up string parsing, unfortunately
+	{"QUOTES",		'\"'},	//can mess up string parsing, unfortunately
 	{"TILDE",		'~'},
 	{"BACKQUOTE",	'`'},
 	{"BACKSLASH",	'\\'},
@@ -1357,49 +1358,35 @@ static const qbyte *builtinemojidata =
 static void Key_LoadEmojiList(void)
 {
 	qbyte line[1024];
-	char nam[64];
-	char rep[64];
 	vfsfile_t *f;
-	char *json = FS_MallocFile("emoji.json", FS_GAME, NULL);	//https://unicodey.com/emoji-data/emoji.json
+	char *json = FS_MallocFile("data-by-emoji.json", FS_GAME, NULL);	//https://unpkg.com/unicode-emoji-json/data-by-emoji.json
 
 	emojidata = Z_StrDup(builtinemojidata);
 	if (json)
 	{
-		char *unified;
-		for (unified = json; (unified = strstr(unified, ",\"unified\":\"")); )
+		//eg: {	"utf8":{"slug":"text_for_emoji"}, ... } (there's a few other keys*/
+		json_t *root = JSON_Parse(json);
+		json_t *def;
+		char nam[64];
+		for (def = (root?root->child:NULL); def; def = def->sibling)
 		{
-			int i = 0;
-			char *t;
-			char *sn;
-			unsigned int u;
-			unified += 12;
-			t = unified;
-			//do
-			//{
-				u = strtol(t, &t, 16);
-				i += utf8_encode(rep+i, u, countof(rep)-i);
-			//} while (i < countof(rep) && *t++ == '-');
-			if (*t!='\"')
-				continue;
-			rep[i] = 0;
-
-			sn = strstr(unified, "\"short_names\":[");
-			if (sn)
+			int e;
+			const char *o;
+			utf8_decode(&e, def->name, &o);
+			if (*o)
+				continue;	//we can only cope with single codepoints.
+			if (JSON_GetString(def, "slug", nam+1, sizeof(nam)-2, NULL))
 			{
-				sn += 15;
-				while (sn && *sn == '\"')
-				{
-					sn = COM_ParseTokenOut(sn, NULL, nam+1, sizeof(nam)-1, NULL);
-					nam[0] = ':';
-					Q_strncatz(nam, ":", sizeof(nam));
-					line[0] = strlen(nam);
-					line[1] = strlen(rep);
-					strcpy(line+2, nam);
-					strcpy(line+2+line[0], rep);
-					Z_StrCat((char**)&emojidata, line);
-				}
+				nam[0] = ':';
+				Q_strncatz(nam, ":", sizeof(nam));
+				line[0] = strlen(nam);
+				line[1] = strlen(def->name);
+				strcpy(line+2, nam);
+				strcpy(line+2+line[0], def->name);
+				Z_StrCat((char**)&emojidata, line);
 			}
 		}
+		JSON_Destroy(root);
 		FS_FreeFile(json);
 	}
 
@@ -2859,32 +2846,6 @@ void Key_Init (void)
 	consolekeys[K_MWHEELUP] = true;
 	consolekeys[K_MWHEELDOWN] = true;
 
-	for (i=0 ; i<K_MAX ; i++)
-		keyshift[i] = i;
-	for (i='a' ; i<='z' ; i++)
-		keyshift[i] = i - 'a' + 'A';
-	keyshift['1'] = '!';
-	keyshift['2'] = '@';
-	keyshift['3'] = '#';
-	keyshift['4'] = '$';
-	keyshift['5'] = '%';
-	keyshift['6'] = '^';
-	keyshift['7'] = '&';
-	keyshift['8'] = '*';
-	keyshift['9'] = '(';
-	keyshift['0'] = ')';
-	keyshift['-'] = '_';
-	keyshift['='] = '+';
-	keyshift[','] = '<';
-	keyshift['.'] = '>';
-	keyshift['/'] = '?';
-	keyshift[';'] = ':';
-	keyshift['\''] = '"';
-	keyshift['['] = '{';
-	keyshift[']'] = '}';
-	keyshift['`'] = '~';
-	keyshift['\\'] = '|';
-
 //
 // register our functions
 //
@@ -2983,7 +2944,7 @@ void Key_Event (unsigned int devid, int key, unsigned int unicode, qboolean down
 			return;
 #endif
 #ifdef VM_CG
-		if (CG_KeyPress(key, unicode, down))
+		if (q3 && q3->cg.KeyPressed(key, unicode, down))
 			return;
 #endif
 	}

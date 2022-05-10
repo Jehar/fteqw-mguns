@@ -248,7 +248,7 @@ ODE_ARCH=$(FTE_TARGET)
 ifeq ($(ODE_ARCH),)
   ODE_ARCH=unknown
 endif
-ODE_VER=0.14
+ODE_VER=0.16.2
 ODE_URL=https://bitbucket.org/odedevs/ode/downloads/ode-$(ODE_VER).tar.gz
 ODE_BASE=$(OUT_DIR)/../ode-$(ODE_VER)_$(ODE_ARCH)/
 ODE_LIB=$(ODE_BASE)ode-$(ODE_VER)/ode/src/.libs/libode.a
@@ -356,6 +356,51 @@ else
 $(PLUG_PREFIX)cef$(PLUG_NATIVE_EXT):
 	@echo cef plugin not supported on this arch - $(FTE_TARGET) - $(CEF_ARCH)
 endif
+
+######################################
+#quake3
+
+BOTLIBFILES=quake3/botlib/be_aas_bspq3.c		\
+			quake3/botlib/be_aas_cluster.c	\
+			quake3/botlib/be_aas_debug.c		\
+			quake3/botlib/be_aas_entity.c	\
+			quake3/botlib/be_aas_file.c		\
+			quake3/botlib/be_aas_main.c		\
+			quake3/botlib/be_aas_move.c		\
+			quake3/botlib/be_aas_optimize.c	\
+			quake3/botlib/be_aas_reach.c		\
+			quake3/botlib/be_aas_routealt.c	\
+			quake3/botlib/be_aas_route.c		\
+			quake3/botlib/be_aas_sample.c	\
+			quake3/botlib/be_ai_char.c		\
+			quake3/botlib/be_ai_chat.c		\
+			quake3/botlib/be_ai_gen.c	\
+			quake3/botlib/be_ai_goal.c	\
+			quake3/botlib/be_ai_move.c	\
+			quake3/botlib/be_ai_weap.c	\
+			quake3/botlib/be_ai_weight.c	\
+			quake3/botlib/be_ea.c		\
+			quake3/botlib/be_interface.c	\
+			quake3/botlib/l_crc.c		\
+			quake3/botlib/l_libvar.c		\
+			quake3/botlib/l_log.c		\
+			quake3/botlib/l_memory.c		\
+			quake3/botlib/l_precomp.c	\
+			quake3/botlib/l_script.c		\
+			quake3/botlib/l_struct.c		\
+			quake3/botlib/standalone.c
+QUAKE3FILES=$(BOTLIBFILES)	\
+			plugin.c		\
+			quake3/clq3_cg.c		\
+			quake3/clq3_ui.c		\
+			quake3/clq3_parse.c	\
+			quake3/svq3_game.c	\
+			quake3/q3common.c
+$(PLUG_PREFIX)quake3$(PLUG_NATIVE_EXT): ${QUAKE3FILES}
+	$(CC) $(BASE_CFLAGS) $(CFLAGS) -DFTEPLUGIN -DBOTLIB -DBOTLIB_STATIC -o $@ -shared $(PLUG_CFLAGS) $^ $(PLUG_DEFFILE) $(PLUG_LDFLAGS_ZLIB) $(PLUG_LDFLAGS)
+	$(call EMBEDMETA,quake3,$@,Quake3 Compat,Quake3 Gamecode Compatibility)
+NATIVE_PLUGINS+=quake3
+
 ######################################
 
 #for custom/private plugins...

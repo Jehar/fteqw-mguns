@@ -35,7 +35,7 @@ struct texture_s;
 
 static const texid_t r_nulltex = NULL;
 
-//GLES2 requires GL_UNSIGNED_SHORT
+//GLES2 requires GL_UNSIGNED_SHORT (gles3 or GL_OES_element_index_uint relax this requirement)
 //geforce4 only does shorts. gffx can do ints, but with a performance hit (like most things on that gpu)
 //ati is generally more capable, but generally also has a smaller market share
 //desktop-gl will generally cope with ints, but expect a performance hit from that with old gpus (so we don't bother)
@@ -250,8 +250,9 @@ typedef struct {
 #ifndef R_MAX_RECURSE
 #define R_MAX_RECURSE	6
 #endif
-#define RDFD_FOV	1
-typedef struct
+
+#define RDFD_FOV 1
+typedef struct refdef_s
 {
 	vrect_t		grect;				// game rectangle. fullscreen except for csqc/splitscreen/hud.
 	vrect_t		vrect;				// subwindow in grect for 3d view. equal to grect if no hud.
@@ -265,6 +266,9 @@ typedef struct
 
 	qboolean	base_known;			/*otherwise we do some fallback behaviour (ie: viewangles.0y0 and forcing input_angles)*/
 	vec3_t		base_angles, base_origin; /*for vr output, overrides per-eye viewangles according to that eye's matrix.*/
+
+	vec3_t		weaponmatrix[4];		/*forward/left/up/origin*/
+	vec3_t		weaponmatrix_bob[4];	/*forward/left/up/origin*/
 
 	float		fov_x, fov_y, afov;
 	float		fovv_x, fovv_y, afovv;	//viewmodel fovs
@@ -346,7 +350,7 @@ void R_Clutter_Emit(struct batch_s **batches);
 void R_Clutter_Purge(void);
 
 //r_surf.c
-void Surf_NewMap (void);
+void Surf_NewMap (struct model_s *worldmodel);
 void Surf_PreNewMap(void);
 void Surf_SetupFrame(void);	//determine pvs+viewcontents
 void Surf_DrawWorld(void);
@@ -552,7 +556,7 @@ skinfile_t *Mod_LookupSkin(skinid_t id);
 
 void	Mod_Init (qboolean initial);
 void Mod_Shutdown (qboolean final);
-int Mod_TagNumForName(struct model_s *model, const char *name);
+int Mod_TagNumForName(struct model_s *model, const char *name, int firsttag);
 int Mod_SkinNumForName(struct model_s *model, int surfaceidx, const char *name);
 int Mod_FrameNumForName(struct model_s *model, int surfaceidx, const char *name);
 int Mod_FrameNumForAction(struct model_s *model, int surfaceidx, int actionid);
@@ -624,6 +628,7 @@ void R_AnimateLight (void);
 void R_UpdateHDR(vec3_t org);
 void R_UpdateLightStyle(unsigned int style, const char *stylestring, float r, float g, float b);
 void R_BumpLightstyles(unsigned int maxstyle);	//bumps the cl_max_lightstyles array size, if needed.
+qboolean R_CalcModelLighting(entity_t *e, struct model_s *clmodel);
 struct texture_s *R_TextureAnimation (int frame, struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 struct texture_s *R_TextureAnimation_Q2 (struct texture_s *base);	//mostly deprecated, only lingers for rtlights so world only.
 void RQ_Init(void);
