@@ -748,6 +748,52 @@ void QCBUILTIN PF_soundlength (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	}
 }
 
+void QCBUILTIN PF_cs_getsoundindex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char	*s = PR_GetStringOfs(prinst, OFS_PARM0);
+	qboolean queryonly = (svprogfuncs->callargc >= 2) ? G_FLOAT(OFS_PARM1) : false;
+
+	int		i;
+	if (s[0] <= ' ')
+	{
+		if (*s)
+			PR_BIError(prinst, "PF_cs_getsoundindex: Bad string");
+		G_FLOAT(OFS_RETURN) = (float)-1;
+		return;
+	}
+
+	for (i = 1; i < MAX_PRECACHE_SOUNDS; i++)
+	{
+		if (!cl.sound_name[i])
+		{
+			if (queryonly)
+			{
+				G_FLOAT(OFS_RETURN) = (float)-1;
+				return;
+			}
+		}
+		if (!strcmp(cl.sound_name[i], s))
+		{
+			G_FLOAT(OFS_RETURN) = (float)i;
+			return;
+		}
+	}
+
+	G_FLOAT(OFS_RETURN) = (float)-1;
+}
+
+void QCBUILTIN PF_cs_soundfromindex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int index = G_INT(OFS_PARM0);
+	if (!cl.sound_name[index])
+	{
+		RETURN_TSTRING("");
+		return;
+	}
+
+	RETURN_TSTRING(cl.sound_name[index]);
+}
+
 qboolean M_Vid_GetMode(qboolean forfullscreen, int num, int *w, int *h);
 //a bit pointless really
 void QCBUILTIN PF_cl_getresolution (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
