@@ -210,7 +210,8 @@ pubsubserver_t *MSV_FindSubServer(unsigned int id)
 
 static void MSV_SendCvars(pubsubserver_t *s)
 {
-	extern cvar_t skill, sv_nqplayerphysics, sv_pure, sv_minpitch, sv_maxpitch;
+	const char *ret;
+	extern cvar_t skill, sv_nqplayerphysics, sv_pure, sv_minpitch, sv_maxpitch, sv_csqc_progname;
 	cvar_t *cvars[] = {
 		&developer,
 		&deathmatch, &coop, &skill, &teamplay,
@@ -218,7 +219,8 @@ static void MSV_SendCvars(pubsubserver_t *s)
 		&scratch1, &scratch2, &scratch3, &scratch4,
 		&saved1, &saved2, &saved3, &saved4, &savedgamecfg,
 		&sv_nqplayerphysics, &sv_pure, &sv_mintic, &sv_maxtic,
-		&sv_minpitch, &sv_maxpitch};
+		&sv_minpitch, &sv_maxpitch,
+		&pr_ssqc_progs, &sv_csqc_progname};
 
 	sizebuf_t send;
 	char send_buf[8192];
@@ -434,6 +436,9 @@ static pubsubserver_t *MSV_FindSubServerName(const char *servername)
 					return s;
 			}
 		}
+
+
+		
 
 		Con_Printf("We need to make a fork...\n");
 		return MSV_StartSubServer(id, mapname);
@@ -1018,6 +1023,20 @@ void MSV_ReadFromSubServer(pubsubserver_t *s)
 			{
 //				Con_Printf("Transfer to %i:%s\n", toptr->id, toptr->name);
 
+				if (!toptr->started)
+				{
+					MSG_WriteByte(&send, ccmd_initserver);
+					MSG_WriteLong(&send, toptr->id);
+					MSG_WriteString(&send, toptr->name);
+					MSV_WriteSlave(s, &send);
+
+					memset(&send, 0, sizeof(send));
+					send.data = send_buf;
+					send.maxsize = sizeof(send_buf);
+					send.cursize = 2;
+				}
+
+
 				MSG_WriteByte(&send, ccmd_takeplayer);
 				MSG_WriteLong(&send, plid);
 				MSG_WriteString(&send, plname);
@@ -1190,6 +1209,31 @@ void MSV_ReadFromSubServer(pubsubserver_t *s)
 			}
 		}
 		break;
+	case ccmd_redirectstuffcmd:
+		{
+			pubsubserver_t *server_dest;
+			int server_to;
+			char cmd[1024];
+
+			server_to = MSG_ReadLong();
+			MSG_ReadStringBuffer(cmd, sizeof(cmd));
+
+			server_dest = MSV_FindSubServer(server_to);
+
+			Con_Printf("redirecting stuffcmd from %i to %i\n", s->id, server_dest->id);
+
+			memset(&send, 0, sizeof(send));
+			send.data = send_buf;
+			send.maxsize = sizeof(send_buf);
+			send.cursize = 2;
+
+			MSG_WriteByte(&send, ccmd_localcmd);
+			MSG_WriteString(&send, cmd);
+			MSV_WriteSlave(server_dest, &send);
+
+
+			
+		}
 	}
 	if (MSG_GetReadCount() != net_message.cursize || msg_badread)
 		Sys_Error("Master: Readcount isn't right (%i)\n", net_message.data[0]);
@@ -1368,6 +1412,7 @@ void SSV_ReadFromControlServer(void)
 				}
 			}
 
+
 //			Con_Printf("%s: takeplayer\n", sv.name);
 			if (cl)
 			{
@@ -1527,6 +1572,44 @@ void SSV_ReadFromControlServer(void)
 					}
 				}
 			}
+		}
+		break;
+	case ccmd_initserver:
+		{
+			int newserv_id = MSG_ReadLong();
+			char newserv_name[1024];
+			MSG_ReadStringBuffer(newserv_name, sizeof(newserv_name));
+			
+			const char *ret;
+			Con_Printf("engine: PR_ClusterInitCallback\n");
+			ret = PR_ClusterInitCallback(newserv_id, newserv_name);
+			if (ret)
+			{
+				Con_Printf("engine: PR_ClusterInitCallback cmd %s\n", ret);
+
+				sizebuf_t	send;
+				qbyte		send_buf[MAX_QWMSGLEN];
+
+				memset(&send, 0, sizeof(send));
+				send.data = send_buf;
+				send.maxsize = sizeof(send_buf);
+				send.cursize = 2;
+
+				Con_Printf("sending stuffcmd to %i: %s\n", newserv_id, ret);
+
+				MSG_WriteByte(&send, ccmd_redirectstuffcmd);
+				MSG_WriteLong(&send, newserv_id);
+				MSG_WriteString(&send, ret);
+				SSV_InstructMaster(&send);
+			}
+		}
+		break;
+	case ccmd_localcmd:
+		{
+			char cmd[1024];
+			MSG_ReadStringBuffer(cmd, sizeof(cmd));
+
+			Cbuf_AddText(cmd, RESTRICT_LOCAL);
 		}
 		break;
 	}

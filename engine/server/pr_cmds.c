@@ -180,6 +180,8 @@ static struct {
 	func_t AddDebugPolygons;
 	func_t CheckRejectConnection;
 
+	func_t ClusterInitCallback;
+
 	func_t ZQ_ClientCommand;
 } gfuncs;
 func_t SpectatorConnect;	//QW
@@ -1117,6 +1119,7 @@ void PR_LoadGlabalStruct(qboolean muted)
 	gfuncs.ParseClusterEvent = PR_FindFunction(svprogfuncs, "SV_ParseClusterEvent", PR_ANY);
 	gfuncs.ParseClientCommand = PR_FindFunction(svprogfuncs, "SV_ParseClientCommand", PR_ANY);
 	gfuncs.ParseConnectionlessPacket = PR_FindFunction(svprogfuncs, "SV_ParseConnectionlessPacket", PR_ANY);
+	gfuncs.ClusterInitCallback = PR_FindFunction(svprogfuncs, "SV_ClusterInitCallback", PR_ANY);
 
 	gfuncs.UserInfo_Changed = PR_FindFunction(svprogfuncs, "UserInfo_Changed", PR_ANY);
 	gfuncs.localinfoChanged = PR_FindFunction(svprogfuncs, "localinfoChanged", PR_ANY);
@@ -2438,6 +2441,43 @@ qboolean PR_ParseClusterEvent(const char *dest, const char *source, const char *
 
 	return false;
 }
+
+
+const char* PR_ClusterInitCallback(int nodeindex, const char *nodename)
+{
+	globalvars_t *pr_globals;
+
+	Con_Printf("PR_ClusterInitCallback 1\n");
+
+	if (svprogfuncs && gfuncs.ClusterInitCallback)
+	{
+		Con_Printf("PR_ClusterInitCallback 2\n");
+
+		pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+		pr_global_struct->time = sv.world.physicstime;
+		pr_global_struct->self = 0;
+
+		G_INT(OFS_PARM0) = nodeindex;
+		G_INT(OFS_PARM1) = (int)PR_TempString(svprogfuncs, nodename);
+		PR_ExecuteProgram(svprogfuncs, gfuncs.ClusterInitCallback);
+
+		const char *ret;
+		ret = PR_GetStringOfs(svprogfuncs, OFS_RETURN);
+		if (!*ret)
+		{
+			Con_Printf("PR_ClusterInitCallback 3\n");
+
+			ret = NULL;
+		}
+
+		return ret;
+	}
+
+	return NULL;
+}
+
+
+
 
 void SSQC_MapEntityEdited(int modelidx, int idx, const char *newdata)
 {
@@ -13048,6 +13088,7 @@ void PR_DumpPlatform_f(void)
 		{"EndFrame",				"void()", QW|NQ, "Called after non-player entities have been run at the end of the physics frame. Player physics is performed out of order and can/will still occur between EndFrame and BeginFrame."},
 		{"SetTransferParms",		"void()", QW|NQ, "Called as an alternative to SetChangeParms when a player is transferring to another server. Part of FTE_SV_CLUSTER."},
 		{"SV_CheckRejectConnection","string(string addr, string uinfo, string features) ", QW|NQ, "Called to give the mod a chance to ignore connection requests based upon client protocol support or other properties. Use infoget to read the uinfo and features arguments."},
+		{"SV_ClusterInitCallback",  "string(int node_index, string clustername) ", QW|NQ, "Returned string will be stuffcmd'd to the new cluster node." },
 #ifdef HEXEN2
 		{"ClassChangeWeapon",		"void()", H2, "Hexen2 support. Called when cl_playerclass changes. Self is set to the player who is changing class."},
 #endif

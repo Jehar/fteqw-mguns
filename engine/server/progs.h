@@ -45,6 +45,7 @@ void SV_SetEntityButtons(struct edict_s *ent, unsigned int buttonbits);
 qboolean SV_RunFullQCMovement(struct client_s *client, usercmd_t *ucmd);
 qboolean PR_KrimzonParseCommand(const char *s);
 qboolean PR_ParseClusterEvent(const char *dest, const char *source, const char *cmd, const char *info);
+const char* PR_ClusterInitCallback(int nodeindex, const char *nodename);
 qboolean PR_UserCmd(const char *cmd);
 qboolean PR_ConsoleCmd(const char *cmd);
 

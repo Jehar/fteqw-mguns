@@ -426,6 +426,14 @@ enum clustercmdops_e
 			//string source (player name)
 			//string cmd (type of event, handled by receiving server/forwarded to client)
 			//string msg (extra info, like the typed text)
+	ccmd_initserver, // master->server, saying their clustertransfer started a new node. Gives a chance to stuffcmd to the new node.
+			//long serverid
+			//string servername
+	ccmd_redirectstuffcmd,	// stuffcmd sent from one node to another
+			//long to
+			//string cmd
+	ccmd_localcmd, // add text to c buffer
+			//string cmd
 };
 
 
