@@ -1879,6 +1879,13 @@ void MSGQW_WriteDeltaUsercmd (sizebuf_t *buf, const usercmd_t *from, const userc
 			MSG_WriteByte (buf, cmd->buttons);
 		if (bits & CM_IMPULSE)
 			MSG_WriteByte (buf, cmd->impulse);
+
+		MSG_WriteFloat(buf, cmd->cursor_impact[0]);
+		MSG_WriteFloat(buf, cmd->cursor_impact[1]);
+		MSG_WriteShort(buf, cmd->cursor_start[0]);
+		MSG_WriteShort(buf, cmd->cursor_start[1]);
+		MSG_WriteShort(buf, cmd->cursor_start[2]);
+
 		MSG_WriteByte (buf, bound(0, cmd->msec, 255));
 	}
 }
@@ -2466,7 +2473,7 @@ float MSG_ReadAngle (void)
 	}
 }
 
-void MSGQW_ReadDeltaUsercmd (const usercmd_t *from, usercmd_t *move, int protover)
+void MSGQW_ReadDeltaUsercmd(const usercmd_t *from, usercmd_t *move, int protover)
 {
 	int bits;
 
@@ -2525,6 +2532,13 @@ void MSGQW_ReadDeltaUsercmd (const usercmd_t *from, usercmd_t *move, int protove
 
 		if (bits & CM_IMPULSE)
 			move->impulse = MSG_ReadByte();
+
+		move->cursor_impact[0]	= MSG_ReadFloat();
+		move->cursor_impact[1]	= MSG_ReadFloat();
+		move->cursor_start[0]	= MSG_ReadShort();
+		move->cursor_start[1]	= MSG_ReadShort();
+		move->cursor_start[2]	= MSG_ReadShort();
+
 
 // read time to run command
 		move->msec = MSG_ReadByte();

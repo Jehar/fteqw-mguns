@@ -1214,6 +1214,7 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 
 	float nscale = framemsecs?framemsecs / (framemsecs+cmd->msec):0;
 	float oscale = 1 - nscale;
+	unsigned int st;
 
 	CL_BaseMove (newmoves, plnum);
 
@@ -1244,6 +1245,14 @@ static void CL_AccumlateInput(int plnum, float frametime/*extra contribution*/, 
 		Cbuf_Waited();	//its okay to stop waiting now
 	}
 	cmd->msec = framemsecs;
+
+
+	if (cl.movesequence >= 1)
+	{   //fix up the servertime value to make sure our msecs are actually correct.
+		st = cl.outframes[(cl.movesequence - 1)&UPDATE_MASK].cmd[plnum].servertime + (cmd->msec); //round it.
+		if (abs((int)st - (int)cmd->servertime) < 15)
+			cmd->servertime = st;
+	}
 
 	// if we are spectator, try autocam
 //	if (cl.spectator)
@@ -2042,6 +2051,7 @@ qboolean CLQW_SendCmd (sizebuf_t *buf, qboolean actuallysend)
 	else
 	{
 		cmd = &cl.outframes[curframe].cmd[0];
+		/*
 		if (cmd->cursor_screen[0] || cmd->cursor_screen[1] || cmd->cursor_entitynumber ||
 			cmd->cursor_start[0] || cmd->cursor_start[1] || cmd->cursor_start[2] ||
 			cmd->cursor_impact[0] || cmd->cursor_impact[1] || cmd->cursor_impact[2])
@@ -2057,6 +2067,7 @@ qboolean CLQW_SendCmd (sizebuf_t *buf, qboolean actuallysend)
 			MSG_WriteFloat(buf, cmd->cursor_impact[2]);
 			MSG_WriteEntity(buf, cmd->cursor_entitynumber);
 		}
+		*/
 
 		MSG_WriteByte (buf, clc_move);
 

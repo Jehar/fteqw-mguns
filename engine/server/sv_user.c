@@ -8228,6 +8228,7 @@ void SV_ExecuteClientMessage (client_t *cl)
 			MSGQW_ReadDeltaUsercmd (&nullcmd, &oldest, PROTOCOL_VERSION_QW);
 			oldest.fservertime = frame->laggedtime;	//not very accurate, but our best guess.
 			oldest.servertime = frame->laggedtime*1000;	//not very accurate
+			/*
 			if (split)
 			{
 				Vector2Copy(split->lastcmd.cursor_screen, oldest.cursor_screen);
@@ -8235,6 +8236,7 @@ void SV_ExecuteClientMessage (client_t *cl)
 				VectorCopy(split->lastcmd.cursor_impact, oldest.cursor_impact);
 				oldest.cursor_entitynumber = split->lastcmd.cursor_entitynumber;
 			}
+			*/
 			MSGQW_ReadDeltaUsercmd (&oldest, &oldcmd, PROTOCOL_VERSION_QW);
 			MSGQW_ReadDeltaUsercmd (&oldcmd, &newcmd, PROTOCOL_VERSION_QW);
 			oldest.sequence = cl->netchan.incoming_sequence-2;
