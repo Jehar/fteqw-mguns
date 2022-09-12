@@ -555,6 +555,8 @@ qboolean	Plug_ServerMessage(char *buffer, int messagelevel);
 void		Plug_Tick(void);
 qboolean	Plugin_ExecuteString(void);
 void		Plug_FreeAllImages(void);
+qboolean	Plug_CL_NetworkMessage(unsigned short length, char *plugname);
+qboolean	Plug_CL_SendMessage(sizebuf_t *msg, sizebuf_t *rmsg);
 
 #ifdef ANDROID
 #define PLUGINPREFIX "libplug_" //android is kinda annoying and only extracts specific files.

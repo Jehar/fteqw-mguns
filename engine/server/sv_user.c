@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define Q2EDICT_NUM(i) (q2edict_t*)((char *)ge->edicts+i*ge->edict_size)
 #define Q2NUM_FOR_EDICT(ent) (((char *)ent - (char *)ge->edicts) / ge->edict_size)
 hull_t *SV_HullForEntity (edict_t *ent, int hullnum, vec3_t mins, vec3_t maxs, vec3_t offset);
+extern qboolean Plug_SV_NetworkMessage(client_t *client, unsigned short length, char *plugname);
 
 edict_t	*sv_player;
 
@@ -2140,6 +2141,7 @@ void SV_DespawnClient(client_t *cl)
 					pr_global_struct->self = EDICT_TO_PROG(svprogfuncs, cl->edict);
 					if (pr_global_ptrs->ClientDisconnect)
 						PR_ExecuteProgram (svprogfuncs, pr_global_struct->ClientDisconnect);
+					Plug_SV_ClientDisconnected(cl);
 					sv.spawned_client_slots--;
 				}
 				else
@@ -7618,6 +7620,7 @@ if (sv_player->v->health > 0 && before && !after )
 
 		//some clients (especially NQ ones) attempt to cheat. don't let it benefit them.
 		//some things would break though.
+		/*
 		if ((!sv_player->xv->gravitydir[0] && !sv_player->xv->gravitydir[1] && !sv_player->xv->gravitydir[2]) && sv_player->v->movetype == MOVETYPE_WALK)
 		{
 			float minpitch = *sv_minpitch.string?sv_minpitch.value:-70;
@@ -7627,6 +7630,7 @@ if (sv_player->v->health > 0 && before && !after )
 			if (sv_player->v->v_angle[0] > maxpitch)
 				sv_player->v->v_angle[0] = maxpitch;
 		}
+		*/
 	}
 
 //	VectorCopy (pmove.gravitydir, sv_player->xv->gravitydir);
@@ -8426,6 +8430,24 @@ void SV_ExecuteClientMessage (client_t *cl)
 							host_client->pendingcsqcbits[e] |= SENDFLAGS_USABLE;
 			}
 			SV_AckEntityFrame(cl, cl->delta_sequence);
+			break;
+		case clcfte_pluginpacket:;
+			unsigned short length;
+			char plugname[16];
+
+			length = MSG_ReadShort();
+			MSG_ReadStringBuffer(plugname, sizeof(plugname));
+
+			Con_Printf("clcfte_pluginpacket %s %i\n", plugname, length);
+#ifdef PLUGINS
+			if (!Plug_SV_NetworkMessage(cl, length, plugname))
+			{
+#endif			
+				for (int i = length; i > 0; i--)
+					MSG_ReadChar();
+#ifdef PLUGINS
+			}
+#endif
 			break;
 		}
 	}

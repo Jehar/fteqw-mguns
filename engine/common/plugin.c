@@ -110,6 +110,11 @@ typedef struct plugin_s {
 	qboolean (QDECL *svmsgfunction)(int messagelevel);
 	qboolean (QDECL *chatmsgfunction)(int talkernum, int tpflags);
 	qboolean (QDECL *centerprintfunction)(int clientnum);
+	qboolean(QDECL *svnetworkmessage)(client_t *client, unsigned short length, char *plugname);
+	qboolean(QDECL *clnetworkmessage)(unsigned short length, char *plugname);
+	qboolean(QDECL *svsendmessage)(client_t *client, sizebuf_t *msg);
+	qboolean(QDECL *clsendmessage)(sizebuf_t *msg, sizebuf_t *rmsg);
+	qboolean(QDECL *svclientdisconnected)(client_t *client);
 	qboolean (QDECL *mayshutdown)(void);	//lets the plugin report when its safe to close it.
 	void (QDECL *shutdown)(void);
 
@@ -340,8 +345,6 @@ static quintptr_t QDECL Plug_Sys_Milliseconds(void)
 
 qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 {
-	Con_Printf("Export Function: %s\n", name);
-	
 	if (!currentplug)
 		return false;
 	if (!strcmp(name, "Tick"))					//void(int realtime)
@@ -350,6 +353,12 @@ qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 		currentplug->shutdown = function;
 	else if (!strcmp(name, "MayShutdown")||!strcmp(name, "MayUnload"))
 		currentplug->mayshutdown = function;
+	else if (!strcmp(name, "SV_NetworkMessage"))
+		currentplug->svnetworkmessage = function;
+	else if (!strcmp(name, "SV_SendMessage"))
+		currentplug->svsendmessage = function;
+	else if (!strcmp(name, "SV_ClientDisconnect"))
+		currentplug->svclientdisconnected = function;
 #ifdef HAVE_CLIENT
 	else if (!strcmp(name, "ConsoleLink"))
 		currentplug->consolelink = function;
@@ -375,6 +384,10 @@ qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 		currentplug->chatmsgfunction = function;
 	else if (!strcmp(name, "CenterPrintMessage"))
 		currentplug->centerprintfunction = function;
+	else if (!strcmp(name, "CL_NetworkMessage"))
+		currentplug->clnetworkmessage = function;
+	else if (!strcmp(name, "CL_SendMessage"))
+		currentplug->clsendmessage = function;
 	else if (!strcmp(name, "S_LoadSound"))	//a hook for loading extra types of sound (wav, mp3, ogg, midi, whatever you choose to support)
 		S_RegisterSoundInputPlugin(currentplug, function);
 #endif
@@ -382,6 +395,7 @@ qboolean VARGS PlugBI_ExportFunction(const char *name, funcptr_t function)
 		FS_RegisterFileSystemType(currentplug, name+23, function, true);
 	else
 		return 0;
+	Con_Printf("Export Function: %s\n", name);
 	return 1;
 }
 
@@ -1537,6 +1551,93 @@ qboolean Plug_CenterPrintMessage(char *buffer, int clientnum)
 	return ret; // true to display message, false to supress
 }
 
+qboolean Plug_SV_NetworkMessage(client_t *client, unsigned short length, char *plugname)
+{
+	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
+	{
+		if (currentplug->svnetworkmessage)
+		{
+			if (currentplug->svnetworkmessage(client, length, plugname))
+				return true;
+		}
+	}
+
+	return false; // if we don't have plugin that accepted it, return false
+}
+
+qboolean Plug_CL_NetworkMessage(unsigned short length, char *plugname)
+{
+	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
+	{
+		if (currentplug->clnetworkmessage)
+		{
+			if (currentplug->clnetworkmessage(length, plugname))
+				return true;
+		}
+	}
+
+	return false; // if we don't have plugin that accepted it, return false
+}
+
+qboolean Plug_SV_SendMessage(client_t *client, sizebuf_t *msg)
+{
+	qboolean rt = false;
+	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
+	{
+		if (currentplug->svsendmessage)
+		{
+			if (currentplug->svsendmessage(client, msg))
+				rt = true;
+		}
+	}
+
+	return rt; // returns if we found a plugin that wanted to send some messages
+}
+
+qboolean Plug_CL_SendMessage(sizebuf_t *msg, sizebuf_t *rmsg)
+{
+	qboolean rt = false;
+	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
+	{
+		if (currentplug->clsendmessage)
+		{
+			if (currentplug->clsendmessage(msg, rmsg))
+				rt = true;
+		}
+	}
+
+	return rt; // returns if we found a plugin that wanted to send some messages
+}
+
+void Plug_SV_ClientDisconnected(client_t *client)
+{
+	qboolean rt = false;
+	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
+	{
+		if (currentplug->svclientdisconnected)
+		{
+			currentplug->svclientdisconnected(client);
+		}
+	}
+}
+
+#ifdef SERVERONLY
+void CL_SendDataCommand(qboolean reliable, void *data, int length)
+{
+	return;
+}
+#endif
+
+client_t* Plug_SV_GetClient(int slot)
+{
+	return &svs.clients[slot];
+}
+
+int Plug_SV_GetSlot(client_t *cl)
+{
+	return bound(0, cl - svs.clients, svs.allocated_client_slots);
+}
+
 void Plug_Close(plugin_t *plug)
 {
 	int i;
@@ -1840,7 +1941,7 @@ plugcorefuncs_t plugcorefuncs =
 
 static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t structsize)
 {
-	Con_Printf("%s\n", interfacename);
+	Con_Printf("%s %i\n", interfacename, structsize);
 
 	if (!strcmp(interfacename, plugcorefuncs_name))
 	{
@@ -1960,11 +2061,16 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			SZ_Write,
 			MSG_WriteString,
 
+			ClientReliable_StartWrite,
+			ClientReliable_FinishWrite,
+			CL_SendDataCommand,
+
 			NET_CompareAdr,
 			NET_CompareBaseAdr,
 			NET_AdrToString,
 			NET_StringToAdr2,
 			NET_SendPacket,
+
 #ifdef HUFFNETWORK
 			Huff_CompressionCRC,
 			Huff_EncryptPacket,
@@ -2020,12 +2126,17 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			InfoBuf_ValueForKey,
 			Info_ValueForKey,
 			Info_SetValueForKey,
+			Info_SetValueForStarKey,
 
 			SV_DropClient,
+			Plug_SV_GetClient,
+			Plug_SV_GetSlot,
 			SV_ExtractFromUserinfo,
 			SV_ChallengePasses,
 		};
-		if (structsize == sizeof(funcs))
+
+		Con_Printf("size %i vs %i\n", structsize, sizeof(funcs));
+		if (true || structsize == sizeof(funcs))
 			return &funcs;
 	}
 #ifdef HAVE_CLIENT

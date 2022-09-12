@@ -332,6 +332,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define svcfte_csqcentities_sized	92	//entity lump for csqc (with size info)
 #define svcfte_setanglebase			93	//updates the base angle (and optionally locks the view, otherwise nudging it without race conditions.)
 
+// 94
+// 95
+// 96
+// 97
+
+#define svcfte_pluginpacket			98
+
 //fitz svcs
 #define svcfitz_skybox				37
 #define svcfitz_bf					40
@@ -370,7 +377,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define svcdp_trailparticles		60		// [short] entnum [short] effectnum [vector] start [vector] end
 #define svcdp_pointparticles		61		// [short] effectnum [vector] start [vector] velocity [short] count
 #define svcdp_pointparticles1		62		// [short] effectnum [vector] start, same as svc_pointparticles except velocity is zero and count is 1
-
 
 
 #define svc_invalid			256
@@ -527,6 +533,13 @@ enum {
 #define clcfte_brushedit		84
 #define clcfte_move				85	//part of PEXT2_VRINPUTS. replaces clc_move+clcfte_prydoncursor+clcdp_ackframe
 #define clcfte_stringcmd_seat	86
+
+// 87
+// 88
+// 89
+// 90
+
+#define clcfte_pluginpacket		91
 
 #define VRM_LOSS	(1u<<0)	//for server packetloss reports
 #define VRM_DELAY	(1u<<1)	//for server to compute lag properly.

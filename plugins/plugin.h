@@ -382,6 +382,10 @@ typedef struct
 	F(void,		WriteData,			(sizebuf_t *sb, const void *data, int len));
 	F(void,		WriteString,		(sizebuf_t *sb, const char *s));
 
+	F(sizebuf_t*, SV_StartReliable,	(client_t *client, int maxsize));
+	F(void,		SV_FinishReliable,	(client_t *client));
+	F(void,		CL_SendMessage,		(qboolean reliable, void *data, int length));
+
 	F(qboolean,	CompareAdr,			(netadr_t *a, netadr_t *b));
 	F(qboolean,	CompareBaseAdr,		(netadr_t *a, netadr_t *b));
 	F(char*,	AdrToString,		(char *s, int len, netadr_t *a));
@@ -497,9 +501,12 @@ typedef struct	//for collision stuff
 	F(char *,		GetIBufKey,			(infobuf_t *info, const char *key));
 	F(char*,		GetInfoKey,			(const char *s, const char *key));
 	F(void,			SetInfoKey,			(char *s, const char *key, const char *value, int maxsize));
+	F(void,			SetInfoStarKey,		(char *s, const char *key, const char *value, int maxsize));
 
 	//server things, shouldn't really be here but small. null in client-only builds
 	F(void,			DropClient,			(client_t *drop));
+	F(client_t *,	GetClient,			(int slot));
+	F(int,			GetSlot,			(client_t *cl));
 	F(void,			ExtractFromUserinfo,(client_t *cl, qboolean verbose));
 	F(qboolean,		ChallengePasses,	(int challenge));
 #define plugworldfuncs_name "World"

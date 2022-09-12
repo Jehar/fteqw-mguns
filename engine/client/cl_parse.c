@@ -7689,7 +7689,22 @@ void CLQW_ParseServerMessage (void)
 		case svcfte_pointparticles1:
 			CL_ParsePointParticles(true);
 			break;
+		case svcfte_pluginpacket:;
+			unsigned short length;
+			char plugname[16];
 
+			length = MSG_ReadShort();
+			MSG_ReadStringBuffer(plugname, sizeof(plugname));
+#ifdef PLUGINS
+			if (!Plug_CL_NetworkMessage(length, plugname))
+			{
+#endif
+				for (i = length; i > 0; i--)
+					MSG_ReadChar();
+#ifdef PLUGINS
+			}
+#endif
+			break;
 		case svcfte_cgamepacket_sized:
 #ifdef CSQC_DAT
 			if (CSQC_ParseGamePacket(destsplit, true))

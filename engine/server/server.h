@@ -1209,6 +1209,10 @@ void SV_SaveInfos(vfsfile_t *f);
 
 void SV_FixupName(const char *in, char *out, unsigned int outlen);
 
+#ifdef PLUGINS
+void Plug_SV_ClientDisconnected(client_t *client);
+#endif
+
 #ifdef SUBSERVERS
 //cluster stuff
 void SSV_UpdateAddresses(void);

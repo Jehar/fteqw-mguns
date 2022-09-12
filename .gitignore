@@ -1,2 +1,5 @@
 
 .vs/*
+engine/libs-*/*
+engine/release/*
+*.tar.gz

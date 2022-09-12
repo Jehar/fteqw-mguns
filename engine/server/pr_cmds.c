@@ -1578,6 +1578,7 @@ void QCLibTest(void)
 */
 typedef char char32[32];
 static char32 sv_addonname[MAXADDONS];
+static qboolean SSQC_GameCommand_f(const char *command);
 void PR_Init(void)
 {
 	int i;
@@ -1591,6 +1592,8 @@ void PR_Init(void)
 	Cmd_AddCommand ("coredump_ssqc", PR_SSCoreDump_f);
 	Cmd_AddCommand ("poke_ssqc", PR_SSPoke_f);
 	Cmd_AddCommandD ("profile_ssqc", PR_SSProfile_f, "Displays how much time has been spent in various QC functions since this command was last used.\nIf pr_enable_profiling is set, profiling will be enabled automatically, and can be used to list spawn functions.\nAdd an arg with value 1 if you wish to avoid purging timing information.");
+
+	Cmd_AddCommandD("sv_cmd", SSQC_GameCommand_f, "Calls the ssqc's ConsoleCmd function");
 
 	Cmd_AddCommand ("extensionlist_ssqc", PR_SVExtensionList_f);
 	Cmd_AddCommand ("pr_dumpplatform", PR_DumpPlatform_f);
@@ -2624,6 +2627,18 @@ qboolean PR_ConsoleCmd(const char *command)
 	}
 
 	return false;
+}
+
+static qboolean SSQC_GameCommand_f(const char *command)
+{
+	void *pr_globals;
+	if (!svprogfuncs || !gfuncs.ConsoleCmd)
+		return;
+
+	pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+	(((string_t *)pr_globals)[OFS_PARM0] = PR_TempString(svprogfuncs, Cmd_Args()));
+
+	PR_ExecuteProgram(svprogfuncs, gfuncs.ConsoleCmd);
 }
 
 void PR_ClientUserInfoChanged(char *name, char *oldivalue, char *newvalue)

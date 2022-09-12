@@ -1055,11 +1055,6 @@ void CL_ClampPitch (int pnum, float frametime)
 			}
 		}
 		VectorClear(pv->viewanglechange);
-		/*clamp pitch*/
-		if (vang[PITCH] > cl.maxpitch)
-			vang[PITCH] = cl.maxpitch;
-		if (vang[PITCH] < cl.minpitch)
-			vang[PITCH] = cl.minpitch;
 
 		/*turn those angles back to a matrix*/
 		AngleVectors(vang, view[0], view[1], view[2]);
@@ -1140,6 +1135,7 @@ void CL_ClampPitch (int pnum, float frametime)
 	else
 #endif
 	{
+		/*
 		if (pv->viewangles[PITCH] > cl.maxpitch)
 			pv->viewangles[PITCH] = cl.maxpitch;
 		if (pv->viewangles[PITCH] < cl.minpitch)
@@ -1149,6 +1145,7 @@ void CL_ClampPitch (int pnum, float frametime)
 			pv->aimangles[PITCH] = cl.maxpitch;
 		if (pv->aimangles[PITCH] < cl.minpitch)
 			pv->aimangles[PITCH] = cl.minpitch;
+		*/
 	} 
 
 //	if (cl.viewangles[pnum][ROLL] > 50)
@@ -1593,6 +1590,7 @@ float CL_FilterTime (double time, float wantfps, float limit, qboolean ignoreser
 	return time - (1000 / fps);
 }
 
+#define CMDLEN_ABSOLUTE	0x10000
 typedef struct clcmdbuf_s {
 	struct clcmdbuf_s *next;
 	int len;
@@ -1653,6 +1651,27 @@ void VARGS CL_SendClientCommand(qboolean reliable, char *format, ...)
 	va_end (argptr);
 
 	CL_SendSeatClientCommand(reliable, 0, "%s", string);
+}
+void CL_SendDataCommand(qboolean reliable, void *data, int length)
+{
+	clcmdbuf_t *buf, *prev;
+	length = (length & 0xFFFF);
+
+	buf = Z_Malloc(sizeof(*buf) + length);
+	memcpy(buf->command, data, length);
+	buf->len = length | CMDLEN_ABSOLUTE;
+	buf->reliable = reliable;
+	buf->seat = 0;
+
+	//add to end of the list so that the first of the list is the first to be sent.
+	if (!clientcmdlist)
+		clientcmdlist = buf;
+	else
+	{
+		for (prev = clientcmdlist; prev->next; prev = prev->next)
+			;
+		prev->next = buf;
+	}
 }
 
 //sometimes a server will quickly restart twice.
@@ -2448,36 +2467,58 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 		while (clientcmdlist)
 		{
 			next = clientcmdlist->next;
+
+			int cmdlen;
+			if (clientcmdlist->len & CMDLEN_ABSOLUTE)
+				cmdlen = clientcmdlist->len & ~CMDLEN_ABSOLUTE;
+			else
+				cmdlen = strlen(clientcmdlist->command);
+
 			if (clientcmdlist->reliable)
 			{
-				if (cls.netchan.message.cursize + 2+strlen(clientcmdlist->command)+100 > cls.netchan.message.maxsize)
+				if (cls.netchan.message.cursize + 2+cmdlen+100 > cls.netchan.message.maxsize)
 					break;
-				if (!strncmp(clientcmdlist->command, "spawn", 5) && cls.userinfosync.numkeys && cl.haveserverinfo)
+				if (!(clientcmdlist->len & CMDLEN_ABSOLUTE) && !strncmp(clientcmdlist->command, "spawn", 5) && cls.userinfosync.numkeys && cl.haveserverinfo)
 					break;	//HACK: don't send the spawn until all pending userinfos have been flushed.
-				if (clientcmdlist->seat && (cls.fteprotocolextensions&PEXT_SPLITSCREEN))
+				if (clientcmdlist->len & CMDLEN_ABSOLUTE) // command is meant to be sent "as is"
 				{
-					MSG_WriteByte (&cls.netchan.message, clcfte_stringcmd_seat);
-					MSG_WriteByte (&cls.netchan.message, clientcmdlist->seat);
+					SZ_Write(&cls.netchan.message, clientcmdlist->command, cmdlen);
 				}
 				else
-					MSG_WriteByte (&cls.netchan.message, clc_stringcmd);
-				MSG_WriteString (&cls.netchan.message, clientcmdlist->command);
-			}
-			else
-			{
-				if (buf.cursize + 2+strlen(clientcmdlist->command)+100 <= buf.maxsize)
 				{
 					if (clientcmdlist->seat && (cls.fteprotocolextensions&PEXT_SPLITSCREEN))
 					{
-						MSG_WriteByte (&cls.netchan.message, clcfte_stringcmd_seat);
-						MSG_WriteByte (&cls.netchan.message, clientcmdlist->seat);
+						MSG_WriteByte(&cls.netchan.message, clcfte_stringcmd_seat);
+						MSG_WriteByte(&cls.netchan.message, clientcmdlist->seat);
 					}
 					else
-						MSG_WriteByte (&buf, clc_stringcmd);
-					MSG_WriteString (&buf, clientcmdlist->command);
+						MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
+					MSG_WriteString(&cls.netchan.message, clientcmdlist->command);
 				}
 			}
-			Con_DLPrintf(2, "Sending stringcmd %s\n", clientcmdlist->command);
+			else
+			{
+				if (buf.cursize + 2+cmdlen+100 <= buf.maxsize)
+				{
+					if (clientcmdlist->len & CMDLEN_ABSOLUTE) // command is meant to be sent "as is"
+					{
+						SZ_Write(&buf, clientcmdlist->command, cmdlen);
+						Con_DLPrintf(2, "Sending datacmd of length %i\n", cmdlen);
+					}
+					else
+					{
+						if (clientcmdlist->seat && (cls.fteprotocolextensions&PEXT_SPLITSCREEN))
+						{
+							MSG_WriteByte(&cls.netchan.message, clcfte_stringcmd_seat);
+							MSG_WriteByte(&cls.netchan.message, clientcmdlist->seat);
+						}
+						else
+							MSG_WriteByte(&buf, clc_stringcmd);
+						MSG_WriteString(&buf, clientcmdlist->command);
+						Con_DLPrintf(2, "Sending stringcmd %s\n", clientcmdlist->command);
+					}
+				}
+			}
 			Z_Free(clientcmdlist);
 			clientcmdlist = next;
 		}
@@ -2629,6 +2670,10 @@ void CL_SendCmd (double frametime, qboolean mainloop)
 		S_Voip_Transmit(clcq2_voicechat, &buf);
 	else
 		S_Voip_Transmit(clcfte_voicechat, &buf);
+#endif
+
+#ifdef PLUGINS
+	Plug_CL_SendMessage(&buf, &cls.netchan.message);
 #endif
 
 //

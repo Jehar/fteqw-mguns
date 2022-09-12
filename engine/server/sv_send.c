@@ -34,6 +34,8 @@ extern cvar_t sv_showpredloss;
 extern cvar_t sv_gravity, sv_friction, sv_waterfriction, sv_gamespeed, sv_stopspeed, sv_spectatormaxspeed, sv_accelerate, sv_airaccelerate, sv_wateraccelerate, pm_edgefriction, sv_reliable_sound;
 extern cvar_t  dpcompat_stats;
 
+extern qboolean Plug_SV_SendMessage(client_t *client, sizebuf_t *msg);
+
 /*
 =============================================================================
 
@@ -2632,6 +2634,10 @@ qboolean SV_SendClientDatagram (client_t *client)
 		SV_VoiceSendPacket(client, &msg);
 #endif
 	}
+
+#ifdef PLUGINS
+	Plug_SV_SendMessage(client, &msg);
+#endif
 
 	msg.maxsize = clientlimit;
 	// copy the accumulated multicast datagram

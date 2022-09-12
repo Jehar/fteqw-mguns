@@ -793,10 +793,10 @@ static void R_RenderEyeScene (texid_t rendertarget, vec4_t fovoverride, vec3_t e
 	int ph = vid.fbpheight;
 	int r = 0;
 
-	extern void CL_ClampPitch (int pnum, float frametime);
+	//extern void CL_ClampPitch (int pnum, float frametime);
 /*the vr code tends to be somewhat laggy with its head angles, leaving it to the last minute, so redo this to reduce latency*/
-	if ((size_t)(refdef.playerview-cl.playerview) < MAX_SPLITS)
-		CL_ClampPitch (refdef.playerview-cl.playerview, 0);
+	//if ((size_t)(refdef.playerview-cl.playerview) < MAX_SPLITS)
+	//	CL_ClampPitch (refdef.playerview-cl.playerview, 0);
 
 	vrui.enabled = true;
 	if (rendertarget)

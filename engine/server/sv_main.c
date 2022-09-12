@@ -4990,6 +4990,7 @@ void SV_CheckTimeouts (void)
 					{
 						pr_global_struct->self = EDICT_TO_PROG(svprogfuncs, cl->edict);
 						PR_ExecuteProgram (svprogfuncs, pr_global_struct->ClientDisconnect);
+						Plug_SV_ClientDisconnected(cl);
 						if (*cl->name)
 							SV_BroadcastTPrintf (PRINT_HIGH, "LoadZombie %s timed out\n", cl->name);
 						else
