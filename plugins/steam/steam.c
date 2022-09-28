@@ -978,6 +978,20 @@ void Steam_Inventory_LoadoutUpdated()
 	cmdfuncs->AddText(cmd, false);
 }
 
+void Steam_Inventory_NewItem()
+{
+	char cmd[MAX_STRING];
+	unsigned long itemid;
+	char itemName[MAX_STRING];
+
+	itemid = PIPE_ReadLong();
+	PIPE_ReadString(itemName);
+
+	Con_Printf("Item %lu:%s dropped\n", itemid, itemName);
+	Q_snprintf(cmd, MAX_STRING, "say [Recieved a new item: %s]\n", itemName);
+	cmdfuncs->AddText(cmd, false);
+}
+
 
 void Steam_Init(void)
 {
@@ -994,6 +1008,7 @@ void Steam_Init(void)
 	func_readarray[SV_INV_LOCALSERIAL] = Steam_Inventory_LocalSerial;
 	func_readarray[SV_INV_CLIENTLOADOUT] = Steam_Invetory_SetClientLoadout;
 	func_readarray[SV_INV_SERIALPASSED] = Steam_Inventory_LoadoutUpdated;
+	func_readarray[SV_INV_NEWITEM] = Steam_Inventory_NewItem;
 
 	inventoryArraySize = 0;
 	inventoryArray = NULL;
@@ -1368,6 +1383,11 @@ void Network_ReadSVC() // client reading message from server
 
 	case svcsteam_requestloadout:;
 		Inventory_RequestSerial();
+		break;
+
+	case svcsteam_playtimedrop:;
+		PIPE_WriteByte(CL_INV_TIMEDROP);
+		Con_Printf("sending CL_INV_TIMEDROP\n");
 		break;
 	}
 }

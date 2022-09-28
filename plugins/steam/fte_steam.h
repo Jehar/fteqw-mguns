@@ -25,6 +25,7 @@ enum cl_packets
 	CL_INV_BUILDSERIAL,
 	CL_INV_CLIENTLOADOUT,
 	CL_INV_GRANTITEM,
+	CL_INV_TIMEDROP,
 	CL_MAX,
 };
 
@@ -43,6 +44,7 @@ enum sv_packets
 	SV_INV_LOCALSERIAL,
 	SV_INV_CLIENTLOADOUT,
 	SV_INV_SERIALPASSED,
+	SV_INV_NEWITEM,
 	SV_MAX,
 };
 
@@ -61,6 +63,7 @@ enum svcommands
 	svcsteam_fragpacket,
 	svcsteam_requestinfo,
 	svcsteam_requestloadout,
+	svcsteam_playtimedrop,
 };
 
 
