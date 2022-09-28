@@ -269,6 +269,7 @@ typedef struct part_type_s {
 	float s1, t1, s2, t2;	//texture coords
 	float texsstride;	//addition for s for each random slot.
 	int randsmax;	//max times the stride can be added
+	int atlasanim;
 
 	plooks_t *slooks;	//shared looks, so state switches don't apply between particles so much.
 	plooks_t looks;		//
@@ -1334,6 +1335,39 @@ void P_ParticleEffect_f(void)
 
 			//its modulo
 			ptype->randsmax++;
+		}
+		else if (!strcmp(var, "atlasanim"))
+		{	//atlas countineachaxis first [last]
+			int dims;
+			int i;
+			int m;
+
+			dims = atof(Cmd_Argv(1));
+			i = atoi(Cmd_Argv(2));
+			m = atoi(Cmd_Argv(3));
+			if (dims < 1)
+				dims = 1;
+
+			if (m > (m / dims)*dims + dims - 1)
+			{
+				m = (m / dims)*dims + dims - 1;
+				Con_Printf("effect %s wraps across an atlased line\n", ptype->name);
+			}
+			if (m < i)
+				m = i;
+
+			ptype->s1 = 1.0 / dims * (i%dims);
+			ptype->s2 = 1.0 / dims * (1 + (i%dims));
+			ptype->t1 = 1.0 / dims * (i / dims);
+			ptype->t2 = 1.0 / dims * (1 + (i / dims));
+
+			//ptype->randsmax = m - i;
+			ptype->texsstride = ptype->s2 - ptype->s1;
+			ptype->atlasanim = m - i;
+			ptype->atlasanim++;
+
+			//its modulo
+			//ptype->randsmax++;
 		}
 		else if (!strcmp(var, "rotation"))
 		{
@@ -4675,7 +4709,7 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 	vec3_t axis[3]={{1,0,0},{0,1,0},{0,0,-1}};
 	particle_t	*p;
 	beamseg_t *b, *bfirst;
-	vec3_t ofsvec, arsvec; // offsetspread vec, areaspread vec
+	vec3_t ofsvec, arsvec, offsl; // offsetspread vec, areaspread vec
 
 	float orgadd, veladd;
 	trailstate_t *ts;
@@ -4732,7 +4766,9 @@ static int PScript_RunParticleEffectState (vec3_t org, vec3_t dir, float count, 
 			CrossProduct(axis[2], axis[0], axis[1]);
 			VectorNormalize(axis[1]);
 		}
-		PScript_EffectSpawned(ptype, org, axis, 0, count);
+		VectorScale(dir, ptype->orgadd, offsl);
+		VectorAdd(org, offsl, offsl);
+		PScript_EffectSpawned(ptype, offsl, axis, 0, count);
 
 		if (ptype->looks.type == PT_CDECAL)
 		{
@@ -7439,6 +7475,27 @@ static void PScript_DrawParticleTypes (void)
 				}
 				p->rgba[3] += pframetime*type->alphachange;
 				p->scale += pframetime*type->scaledelta;
+			}
+
+			if (type->atlasanim > 0)
+			{
+				float offs;
+				offs = type->texsstride * ((int)(type->atlasanim * (type->die - (p->die - particletime)) / type->die));
+
+				p->s1 = type->s1;
+				p->t1 = type->t1;
+				p->s2 = type->s2;
+				p->t2 = type->t2;
+
+				p->s1 += offs;
+				p->s2 += offs;
+				while (p->s1 >= 1)
+				{
+					p->s1 -= 1;
+					p->s2 -= 1;
+					p->t1 += type->texsstride;
+					p->t2 += type->texsstride;
+				}
 			}
 
 			if (type->emit >= 0)
