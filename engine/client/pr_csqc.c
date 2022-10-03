@@ -2099,6 +2099,11 @@ static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars
 		out[2] = tempv[2]/tempv[3];
 	}
 }
+qboolean R_CullSphere(vec3_t org, float radius);
+static void QCBUILTIN PF_cs_checkfrustum (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	G_INT(OFS_RETURN) = !R_CullSphere(G_VECTOR(OFS_PARM0), G_FLOAT(OFS_PARM1));
+}
 
 //clear scene, and set up the default stuff.
 static void QCBUILTIN PF_R_ClearScene (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7623,6 +7628,8 @@ static struct {
 	{"gp_rumbletriggers",				PF_cl_gp_rumbletriggers,			0}, // #0 void(float devid, float left, float right, float duration) gp_rumbletriggers
 	{"gp_setledcolor",				PF_cl_gp_setledcolor,				0}, // #0 void(float devid, float red, float green, float blue) gp_setledcolor
 	{"gp_settriggerfx",				PF_cl_gp_settriggerfx,				0}, // #0 void(float devid, const void *data, int size) gp_settriggerfx
+
+	{"checkfrustum",			PF_cs_checkfrustum,						0}, // #0 int(vector origin, float radius) checkfrustum
 
 	{NULL}
 };
