@@ -3218,6 +3218,7 @@ void CL_UpdateExplosions (float frametime)
 		AngleVectors(ent->angles, ent->axis[0], ent->axis[1], ent->axis[2]);
 		VectorInverse(ent->axis[1]);
 		ent->model = ex->model;
+		ent->framestate.g[FS_REG].frametime[0] = f;
 		ent->framestate.g[FS_REG].frame[1] = (int)f+firstframe;
 		ent->framestate.g[FS_REG].frame[0] = of+firstframe;
 		ent->framestate.g[FS_REG].lerpweight[1] = (f - (int)f);
