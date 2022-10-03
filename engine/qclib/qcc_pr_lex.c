@@ -251,7 +251,7 @@ void QCC_JoinPaths(char *fullname, size_t fullnamesize, const char *newfile, con
 
 extern char qccmsourcedir[];
 //also meant to include it.
-void QCC_FindBestInclude(char *newfile, char *currentfile, pbool verbose)
+void QCC_FindBestInclude(char *newfile, char *currentfile, pbool includetype)
 {
 	struct qccincludeonced_s *onced;
 	int includepath = 0;
@@ -289,9 +289,9 @@ void QCC_FindBestInclude(char *newfile, char *currentfile, pbool verbose)
 			return;
 	}
 
-	if (verbose)
+	if (includetype && verbose >= VERBOSE_PROGRESS)
 	{
-		if (verbose == 2)
+		if (includetype == 2)
 		{
 			if (autoprototype)
 				externs->Printf("prototyping %s\n", fullname);
@@ -1341,7 +1341,9 @@ static pbool QCC_PR_Precompiler(void)
 						{
 							if (!QC_strcasecmp(pr_opcodes[f].opname, qcc_token))
 							{
-								if (st)
+								if (f >= OP_NUMREALOPS)
+									QCC_PR_ParseWarning(WARN_BADPRAGMA, "opcode %s is internal", qcc_token);	//these will change with later opcodes, do not allow them to be written into the output.
+								else if (st)
 									pr_opcodes[f].flags |= OPF_VALID;
 								else
 									pr_opcodes[f].flags &= ~OPF_VALID;
@@ -4007,7 +4009,6 @@ void QCC_PR_ParsePrintSRef (int type, QCC_sref_t def)
 void *errorscope;
 static void QCC_PR_PrintMacro (qcc_includechunk_t *chunk)
 {
-	extern pbool verbose;
 	if (chunk)
 	{
 		QCC_PR_PrintMacro(chunk->prev);
@@ -4018,7 +4019,7 @@ static void QCC_PR_PrintMacro (qcc_includechunk_t *chunk)
 #else
 			externs->Printf ("%s:%i: expanding %s\n", chunk->currentfilename, chunk->currentlinenumber, chunk->cnst->name);
 #endif
-			if (verbose)
+			if (verbose >= VERBOSE_STANDARD)
 				externs->Printf ("%s\n", chunk->datastart);
 		}
 		else
@@ -4708,6 +4709,8 @@ QCC_type_t *QCC_PR_DuplicateType(QCC_type_t *in, pbool recurse)
 	out->num_parms = in->num_parms;
 	out->name = in->name;
 	out->parentclass = in->parentclass;
+	out->vargs = in->vargs;
+	out->vargcount = in->vargcount;
 
 	return out;
 }
@@ -4726,6 +4729,14 @@ static void Q_strlcat(char *dest, const char *src, int sizeofdest)
 char *TypeName(QCC_type_t *type, char *buffer, int buffersize)
 {
 	char *ret;
+	/*if (type->typedefed)
+	{
+		if (buffersize < 0)
+			return buffer;
+		*buffer = 0;
+		Q_strlcat(buffer, type->name, buffersize);
+		return buffer;
+	}*/
 
 	if (type->type == ev_void)
 	{
@@ -4894,19 +4905,16 @@ QCC_type_t *QCC_PR_NextSubType(QCC_type_t *type, QCC_type_t *prev)
 
 QCC_type_t *QCC_TypeForName(const char *name)
 {
-	return pHash_Get(&typedeftable, name);
-/*
-	int i;
-
-	for (i = 0; i < numtypeinfos; i++)
+	QCC_type_t *t = pHash_Get(&typedeftable, name);
+	while (t && t->scope)
 	{
-		if (qcc_typeinfo[i].typedefed && !STRCMP(qcc_typeinfo[i].name, name))
-		{
-			return &qcc_typeinfo[i];
-		}
+		if (t->scope == pr_scope)
+			break;	//its okay after all.
+		t = pHash_GetNext(&typedeftable, name, t);
 	}
-
-	return NULL;*/
+	if (t && t->type == ev_typedef)
+		return t->aux_type;	//just use its real type.
+	return t;
 }
 
 /*
@@ -5599,7 +5607,12 @@ QCC_type_t *QCC_PR_ParseType (int newtype, pbool silentfail)
 				QCC_PR_ParseError(ERR_NOTANAME, "Accessor %s cannot be based upon %s", accessorname, parentname);
 		}
 		else if (type != newt->parentclass)
-			QCC_PR_ParseError(ERR_NOTANAME, "Accessor %s basic type mismatch", accessorname);
+		{
+			char bufe[256];
+			char bufn[256];
+			QCC_PR_ParseError(ERR_NOTANAME, "Accessor %s basic type mismatch (%s, expected %s)", accessorname,
+				TypeName(type, bufn, sizeof(bufn)), TypeName(newt->parentclass, bufe, sizeof(bufe)));
+		}
 
 		if (QCC_PR_CheckToken("{"))
 		{
@@ -6452,8 +6465,14 @@ QCC_type_t *QCC_PR_ParseType (int newtype, pbool silentfail)
 					bits = 16, isokay = true;
 				else if (!bits && QCC_PR_CheckKeyword(keyword_char, "char"))
 					bits = 8, isokay = true;
-				else if (!bits && QCC_PR_CheckKeyword(keyword_int, "_Bool"))	//c99
-					bits = 1, isokay = true;
+				else if (!bits && !issigned && !isunsigned && QCC_PR_CheckKeyword(true, "_Bool"))	//c99
+				{
+					if (keyword_int)
+						type = type_bint;
+					else
+						type = type_bfloat;
+					goto wasctype;
+				}
 
 				else if (!bits && !islong && QCC_PR_CheckKeyword(keyword_float, "float"))
 					bits = 32, isfloat = isokay = true;

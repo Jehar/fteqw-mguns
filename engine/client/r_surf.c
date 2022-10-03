@@ -56,6 +56,8 @@ extern cvar_t r_stainfadeammount;
 extern cvar_t r_lightmap_nearest;
 extern cvar_t r_lightmap_format;
 
+double r_loaderstalltime;
+
 extern int r_dlightframecount;
 
 static void Surf_FreeLightmap(lightmapinfo_t *lm);
@@ -2287,7 +2289,7 @@ void Surf_GenBrushBatches(batch_t **batches, entity_t *ent)
 
 // calculate dynamic lighting for bmodel if it's not an
 // instanced model
-	if (model->fromgame != fg_quake3 && model->fromgame != fg_doom3 && lightmap && webo_blocklightmapupdates!=3)
+	if (model->fromgame != fg_quake3 && model->fromgame != fg_doom3 && lightmap && !(webo_blocklightmapupdates&1))
 	{
 		int k;
 
@@ -2484,6 +2486,7 @@ static void R_DestroyWorldEBO(struct webostate_s *es)
 }
 void R_GeneratedWorldEBO(void *ctx, void *data, size_t a_, size_t b_)
 {
+	double starttime = Sys_DoubleTime();
 	size_t idxcount, vertcount;
 	unsigned int i;
 	model_t *mod;
@@ -2648,6 +2651,8 @@ void R_GeneratedWorldEBO(void *ctx, void *data, size_t a_, size_t b_)
 			webostate->rbatches[sortid] = b;
 		}
 	}
+
+	r_loaderstalltime += Sys_DoubleTime() - starttime;
 }
 #ifdef Q1BSPS
 static void Surf_SimpleWorld_Q1BSP(struct webostate_s *es, qbyte *pvs)
@@ -2659,7 +2664,7 @@ static void Surf_SimpleWorld_Q1BSP(struct webostate_s *es, qbyte *pvs)
 	int l = wmodel->numclusters;
 	int fc = es->framecount;
 	int i;
-//	int s, f, lastface;
+	int s, f, lastface;
 	struct wesbatch_s *eb;
 	for (leaf = wmodel->leafs+l; l-- > 0; leaf--)
 	{
@@ -2722,18 +2727,18 @@ static void Surf_SimpleWorld_Q1BSP(struct webostate_s *es, qbyte *pvs)
 		}
 	}
 
-/*TODO	for (s = 0; s < wmodel->numsubmodels; s++)
+	for (s = 1; s < wmodel->numsubmodels; s++)
 	{
-		if (!es->bakedsubmodels[s])
-			continue;	//not baking this one (not currently visible or something)
+//		if (!es->bakedsubmodels[s])
+//			continue;	//not baking this one (not currently visible or something)
 		//FIXME: pvscull it here?
 		lastface = wmodel->submodels[s].firstface + wmodel->submodels[s].numfaces;
 		for (f = wmodel->submodels[s].firstface; f < lastface; f++)
 		{
-			surf = wmodel->surfaces;
+			surf = wmodel->surfaces+f;
 
 			Surf_RenderDynamicLightmaps_Worker (wmodel, surf, es->lightstylevalues);
-
+/*
 			mesh = surf->mesh;
 			eb = &es->batches[surf->sbatch->webobatch];
 			if (eb->maxidx < eb->numidx + mesh->numindexes)
@@ -2744,9 +2749,9 @@ static void Surf_SimpleWorld_Q1BSP(struct webostate_s *es, qbyte *pvs)
 			}
 			for (i = 0; i < mesh->numindexes; i++)
 				eb->idxbuffer[eb->numidx+i] = mesh->indexes[i] + mesh->vbofirstvert;
-			eb->numidx += mesh->numindexes;
+			eb->numidx += mesh->numindexes;*/
 		}
-	}*/
+	}
 }
 #endif
 #if defined(Q2BSPS) || defined(Q3BSPS)
@@ -2999,8 +3004,9 @@ void Surf_DrawWorld (void)
 		{
 			r_dynamic.modified = false;
 			r_temporalscenecache.modified = false;
+#ifdef RTLIGHT
 			Sh_CheckSettings(); //fiddle with r_dynamic vs r_shadow_realtime_dlight.
-
+#endif
 			COM_WorkerPartialSync(webogenerating, &webogeneratingstate, true);
 			while (webostates)
 			{
@@ -3214,8 +3220,10 @@ void Surf_DrawWorld (void)
 		}
 #endif
 
+#ifdef RTLIGHT
 		if (r_shadow_realtime_dlight.ival || currentmodel->type != mod_brush || !(currentmodel->fromgame == fg_quake || currentmodel->fromgame == fg_halflife) || !currentmodel->funcs.MarkLights)
 			r_dynamic.ival = -1;
+#endif
 
 		Surf_PushChains(currentmodel->batches);
 

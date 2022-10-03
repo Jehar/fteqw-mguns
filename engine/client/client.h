@@ -248,9 +248,6 @@ typedef struct
 
 typedef struct
 {
-	//this is the sequence we requested for this frame.
-	int			delta_sequence;		// sequence number to delta from, -1 = full update
-
 	// received from server
 	int			frameid;		//the sequence number of the frame, so we can easily detect which frames are valid without poking all in advance, etc
 	int			ackframe;		//the outgoing sequence this frame acked (for prediction backlerping).
@@ -1218,6 +1215,8 @@ void CL_UpdateWindowTitle(void);
 
 #ifdef QUAKESTATS
 const char *IN_GetPreselectedViewmodelName(unsigned int pnum);
+qboolean IN_WeaponWheelAccumulate(int pnum, float x, float y);
+qboolean IN_DrawWeaponWheel(int pnum);
 #endif
 void CL_InitInput (void);
 void CL_SendCmd (double frametime, qboolean mainloop);
@@ -1269,6 +1268,7 @@ int Master_FindBestRoute(char *server, char *out, size_t outsize, int *directcos
 
 float CL_KeyState (kbutton_t *key, int pnum, qboolean noslowstart);
 const char *Key_KeynumToString (int keynum, int modifier);
+const char *Key_KeynumToLocalString (int keynum, int modifier);
 int Key_StringToKeynum (const char *str, int *modifier);
 const char *Key_GetBinding(int keynum, int bindmap, int modifier);
 void Key_GetBindMap(int *bindmaps);

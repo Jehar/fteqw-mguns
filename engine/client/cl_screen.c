@@ -490,7 +490,14 @@ void SCR_CenterPrint (int pnum, const char *str, qboolean skipgamecode)
 		else if (str[1] == 'F')
 		{	//'F' is reserved for special handling via svc_finale
 			if (cl.intermissionmode == IM_NONE)
+			{
+				TP_ExecTrigger ("f_mapend", false);
+				if (cl.playerview[pnum].spectator || cls.demoplayback)
+					TP_ExecTrigger ("f_specmapend", true);
+				else
+					TP_ExecTrigger ("f_playmapend", true);
 				cl.completed_time = cl.time;
+			}
 			str+=2;
 			switch(*str++)
 			{
@@ -889,6 +896,13 @@ void SCR_CheckDrawCenterString (void)
 	{
 		p = &scr_centerprint[pnum];
 		p->cursorchar = NULL;
+
+#ifdef QUAKESTATS
+		if (IN_DrawWeaponWheel(pnum))
+		{	//we won't draw the cprint, but it also won't fade while the wwheel is shown.
+			continue;
+		}
+#endif
 
 		if (p->time_off <= 0 && !(p->flags & CPRINT_PERSIST))
 			continue;	//'/P' prefix doesn't time out

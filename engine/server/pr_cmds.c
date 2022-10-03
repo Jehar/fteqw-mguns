@@ -168,6 +168,7 @@ static struct {
 	func_t ParseClusterEvent;	//FTE_SV_CLUSTER
 	func_t ParseClientCommand;	//KRIMZON_SV_PARSECLIENTCOMMAND
 	func_t ParseConnectionlessPacket;	//FTE_QC_SENDPACKET
+	func_t SV_Shutdown;
 
 	func_t PausedTic;
 	func_t ShouldPause;
@@ -372,9 +373,11 @@ pbool PDECL ED_CanFree (edict_t *ed)
 static void ASMCALL StateOp (pubprogfuncs_t *prinst, float var, func_t func)
 {
 	stdentvars_t *vars = PROG_TO_EDICT(prinst, pr_global_struct->self)->v;
+#ifdef HEXEN2
 	if (progstype == PROG_H2)
 		vars->nextthink = pr_global_struct->time+0.05;
 	else
+#endif
 		vars->nextthink = pr_global_struct->time+0.1;
 	vars->think = func;
 	vars->frame = var;
@@ -1120,6 +1123,7 @@ void PR_LoadGlabalStruct(qboolean muted)
 	gfuncs.ParseClientCommand = PR_FindFunction(svprogfuncs, "SV_ParseClientCommand", PR_ANY);
 	gfuncs.ParseConnectionlessPacket = PR_FindFunction(svprogfuncs, "SV_ParseConnectionlessPacket", PR_ANY);
 	gfuncs.ClusterInitCallback = PR_FindFunction(svprogfuncs, "SV_ClusterInitCallback", PR_ANY);
+	gfuncs.SV_Shutdown = PR_FindFunction(svprogfuncs, "SV_Shutdown", PR_ANY);
 
 	gfuncs.UserInfo_Changed = PR_FindFunction(svprogfuncs, "UserInfo_Changed", PR_ANY);
 	gfuncs.localinfoChanged = PR_FindFunction(svprogfuncs, "localinfoChanged", PR_ANY);
@@ -1148,8 +1152,10 @@ void PR_LoadGlabalStruct(qboolean muted)
 	svprogfuncs->AddSharedVar(svprogfuncs, (pint_t *)(pr_global_ptrs)->other-v, 1);
 	svprogfuncs->AddSharedVar(svprogfuncs, (pint_t *)(pr_global_ptrs)->time-v, 1);
 
+#ifdef QUAKESTATS
 	//test the global rather than the field - fte internally always has the field.
 	sv.haveitems2 = !!PR_FindGlobal(svprogfuncs, "items2", 0, NULL);
+#endif
 
 	SV_ClearQCStats();
 
@@ -1164,7 +1170,7 @@ void PR_LoadGlabalStruct(qboolean muted)
 			buttonfields[i].offset = -1;
 	}
 
-#ifdef HEXEN2
+#if defined(HEXEN2) && defined(QUAKESTATS)
 	/*Hexen2 has lots of extra stats, which I don't want special support for, so list them here and send them as for csqc*/
 	if (progstype == PROG_H2)
 	{
@@ -1311,7 +1317,12 @@ static progsnum_t AddProgs(const char *name)
 	if (!svs.numprogs)
 	{
 		if (progstype == PROG_NQ)
-			svprogfuncs->FindBuiltins (svprogfuncs, num, 90, PR_CheckForQEx, NULL);
+		{
+			if (PR_FindFunction(svprogfuncs, "ex_centerprint", num) && !PR_FindFunction(svprogfuncs, "centerprint", num))
+				sv.world.remasterlogic = true;
+			else
+				svprogfuncs->FindBuiltins (svprogfuncs, num, 90, PR_CheckForQEx, NULL);	//older check
+		}
 
 		PF_InitTempStrings(svprogfuncs);
 		PR_ResetBuiltins(progstype);
@@ -2676,6 +2687,24 @@ void PR_LocalInfoChanged(char *name, char *oldivalue, char *newvalue)
 		PR_ExecuteProgram (svprogfuncs, gfuncs.localinfoChanged);
 	}
 }
+void PR_PreShutdown(void)
+{
+	if (svprogfuncs && gfuncs.SV_Shutdown && sv.state)
+	{
+		func_t f = gfuncs.SV_Shutdown;
+		globalvars_t *pr_globals;
+		gfuncs.SV_Shutdown = 0;	//clear it early, to avoid (severe) recursion/whatever problems.
+		pr_globals = PR_globals(svprogfuncs, PR_CURRENT);
+
+		pr_global_struct->time = sv.world.physicstime;
+		pr_global_struct->self = EDICT_TO_PROG(svprogfuncs, sv.world.edicts);
+
+		G_INT(OFS_PARM0) = 0;
+		G_INT(OFS_PARM1) = 0;
+		G_INT(OFS_PARM2) = 0;
+		PR_ExecuteProgram (svprogfuncs, f);
+	}
+}
 
 void QC_Clear(void)
 {
@@ -3701,7 +3730,7 @@ void PF_ambientsound_Internal (float *pos, const char *samp, float vol, float at
 	VectorCopy(pos, state->position);
 	state->soundnum = soundnum;
 	state->volume = bound(0, (int)(vol*255), 255);
-	state->attenuation = attenuation*64;
+	state->attenuation = bound(0,attenuation*64,255);
 }
 
 static void QCBUILTIN PF_ambientsound (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -4553,6 +4582,14 @@ static void QCBUILTIN PF_getsoundindex (pubprogfuncs_t *prinst, struct globalvar
 
 	G_FLOAT(OFS_RETURN) = PF_precache_sound_Internal(prinst, s, queryonly);
 }
+static void QCBUILTIN PF_soundnameforindex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int idx = G_FLOAT(OFS_PARM0);
+	if (idx >= 0 && idx < MAX_PRECACHE_SOUNDS && sv.strings.sound_precache[idx])
+		RETURN_TSTRING(sv.strings.sound_precache[idx]);
+	else
+		G_INT(OFS_RETURN) = 0;
+}
 
 int PF_precache_model_Internal (pubprogfuncs_t *prinst, const char *s, qboolean queryonly)
 {
@@ -4643,6 +4680,14 @@ static void QCBUILTIN PF_getmodelindex (pubprogfuncs_t *prinst, struct globalvar
 	qboolean queryonly = (svprogfuncs->callargc >= 2)?G_FLOAT(OFS_PARM1):false;
 
 	G_FLOAT(OFS_RETURN) = PF_precache_model_Internal(prinst, s, queryonly);
+}
+static void QCBUILTIN PF_modelnameforindex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int idx = G_FLOAT(OFS_PARM0);
+	if (idx >= 0 && idx < MAX_PRECACHE_MODELS && sv.strings.model_precache[idx])
+		RETURN_TSTRING(sv.strings.model_precache[idx]);
+	else
+		G_INT(OFS_RETURN) = 0;
 }
 #ifdef HAVE_LEGACY
 void QCBUILTIN PF_precache_vwep_model (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -5514,10 +5559,8 @@ void QCBUILTIN PF_WriteInt (pubprogfuncs_t *prinst, struct globalvars_s *pr_glob
 	}
 }
 
-void QCBUILTIN PF_WriteInt64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+static void PF_WriteUInt64_Val (int dest, puint64_t val)
 {
-	int dest = G_FLOAT(OFS_PARM0);
-	pint64_t val = G_INT64(OFS_PARM1);
 	if (dest == MSG_CSQC)
 	{	//csqc buffers are always written.
 		MSG_WriteInt64(&csqcmsgbuffer, val);
@@ -5536,15 +5579,31 @@ void QCBUILTIN PF_WriteInt64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 		;
 	else if (progstype != PROG_QW)
 	{
-		NPP_NQWriteLong(dest, val&0xffffffff);
-		NPP_NQWriteLong(dest, (val>>32)&0xffffffff);
+		int b = 0;
+		quint64_t l = 128;
+		while (val > l-1u && b < 8)
+		{	//count the extra bytes we need
+			b++;
+			l <<= 7;	//each byte we add gains 8 bits, but we spend one on length.
+		}
+		NPP_NQWriteByte(dest, 0xffu<<(8-b) | (val >> (b*8)));
+		while(b --> 0)
+			NPP_NQWriteByte(dest, val >> (b*8));
 		return;
 	}
 #ifdef NQPROT
 	else
 	{
-		NPP_QWWriteLong(dest, val&0xffffffff);
-		NPP_QWWriteLong(dest, (val>>32)&0xffffffff);
+		int b = 0;
+		quint64_t l = 128;
+		while (val > l-1u && b < 8)
+		{	//count the extra bytes we need
+			b++;
+			l <<= 7;	//each byte we add gains 8 bits, but we spend one on length.
+		}
+		NPP_QWWriteByte(dest, 0xffu<<(8-b) | (val >> (b*8)));
+		while(b --> 0)
+			NPP_QWWriteByte(dest, val >> (b*8));
 		return;
 	}
 #endif
@@ -5561,10 +5620,26 @@ void QCBUILTIN PF_WriteInt64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 	else
 	{
 		if (progstype != PROG_QW)
-			MSG_WriteInt64 (NQWriteDest(dest), val);
+			MSG_WriteUInt64 (NQWriteDest(dest), val);
 		else
-			MSG_WriteInt64 (QWWriteDest(dest), val);
+			MSG_WriteUInt64 (QWWriteDest(dest), val);
 	}
+}
+void QCBUILTIN PF_WriteUInt64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int dest = G_FLOAT(OFS_PARM0);
+	puint64_t val = G_UINT64(OFS_PARM1);
+	PF_WriteUInt64_Val(dest, val);
+}
+void QCBUILTIN PF_WriteInt64 (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int dest = G_FLOAT(OFS_PARM0);
+	pint64_t val = G_INT64(OFS_PARM1);
+	//move the sign bit into the low bit and avoid sign extension for more efficient length coding. otherwise just reuse our uint64 logic
+	if (val < 0)
+		PF_WriteUInt64_Val(dest, ((quint64_t)(-1-val)<<1)|1);
+	else
+		PF_WriteUInt64_Val(dest, val<<1);
 }
 
 void QCBUILTIN PF_WriteAngle (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -6467,16 +6542,26 @@ char *PF_infokey_Internal (int entnum, const char *key)
 				value = "quake3";	//can actually happen.
 				break;
 			case SCP_NETQUAKE:
-				value = "quake";
+				if (controller->qex)
+					value = "qex15";
+				else
+					value = "quake";
 				break;
 			case SCP_BJP3:
 				value = "bjp3";
 				break;
 			case SCP_FITZ666:
-				if (controller->netchan.netprim.coordtype != COORDTYPE_FIXED_13_3)
-					value = "rmq999";
+				if (controller->qex)
+				{
+					if (controller->netchan.netprim.coordtype != COORDTYPE_FIXED_13_3)
+						value = "qex999";
+					else
+						value = "qex666";
+				}
+				else if (controller->netchan.netprim.coordtype != COORDTYPE_FIXED_13_3)
+					value = controller->fteprotocolextensions2?"rmq999+fte2":"rmq999";
 				else
-					value = "fitz666";
+					value = controller->fteprotocolextensions2?"fitz666+fte2":"fitz666";
 				break;
 			case SCP_DARKPLACES6:
 				value = "dpp6";
@@ -7310,7 +7395,7 @@ static void QCBUILTIN PF_checkextension (pubprogfuncs_t *prinst, struct globalva
 			}
 			else if (ext->extensioncheck)
 			{
-				extcheck_t check = {prinst->parms->user, Net_PextMask(PROTOCOL_VERSION_FTE1, false), Net_PextMask(PROTOCOL_VERSION_FTE2, false)};
+				extcheck_t check = {prinst->parms->user, Net_PextMask(PROTOCOL_VERSION_FTE1, false)&PEXT_SERVERADVERTISE, Net_PextMask(PROTOCOL_VERSION_FTE2, false)&PEXT2_SERVERADVERTISE};
 				if (!ext->extensioncheck(&check))
 					return;	//blocked by some setting somewhere, somehow.
 			}
@@ -10787,6 +10872,40 @@ static void QCBUILTIN PF_finaleFinished_qex(pubprogfuncs_t *prinst, struct globa
 static void QCBUILTIN PF_localsound_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {	//undocumented. just stub it.
 }
+static void QCBUILTIN PF_CheckPlayerEXFlags_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int entnum = G_EDICTNUM(prinst, OFS_PARM0);
+	unsigned int flags = 0;
+
+	if (entnum >= 1 && entnum <= sv.allocated_client_slots)
+	{
+		client_t *pl = &svs.clients[entnum-1];
+		int ival;
+		char *value = InfoBuf_ValueForKey (&pl->userinfo, "w_switch");
+		if (!*value)
+			value = InfoBuf_ValueForKey (&pl->userinfo, "b_switch");
+		ival = atoi(value);
+
+		//if (!ival) ival = 8; //QW's logic...
+
+		/*this is ugly. QW has a 'w_switch' userinfo that says the user's best weapon. As a general rule, setting w_switch to 1(axe) will disable switching up on weapon grabs.
+		  QE does stuff differently though, so all we can really go by is w_switch 1 (vs >1).
+		  */
+		if (!ival)	//unspecified
+			flags |= 1/*PEF_CHANGEONLYNEW*/;
+		else if (ival == 1)	//user will not 'upgrade' past axe.
+			flags |= 2/*PEF_CHANGENEVER*/;
+		//else //
+	}
+
+	G_FLOAT(OFS_RETURN) = flags;
+}
+static void QCBUILTIN PF_walkpathtogoal_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{	//this builtin is supposed to provide more advanced routing.
+	//the possible return values include an 'inprogress' which is kinda vague and implies persistent state.
+	//we can get away with returning false as a failure here, equivelent to if the map has no waypoints defined. the gamecode is expected to then fall back on the really lame movetogoal builtin.
+	G_FLOAT(OFS_RETURN) = false;
+}
 static void QCBUILTIN PF_centerprint_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {	//TODO: send the strings to the client for localisation+reordering
 	const char *arg[8];
@@ -11132,21 +11251,28 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 
 	{"setspawnparms",	PF_setspawnparms,	78,		78,		78,		0,	"void(entity player)"},	//78
 
-//QuakeEx (aka: quake rerelease). These conflict with core extensions so we don't register them by default.
-	{"finaleFinished_qex",PF_finaleFinished_qex,0,	0,		0,0/*79*/,	D("DEP float()", "Behaviour is undocumented.")},
-	{"localsound_qex",	PF_localsound_qex,	0,		0,		0,0/*80*/,	D("DEP void(entity client, string sample)", "Behaviour is undocumented.")},
-	{"draw_point_qex",	PF_Fixme,			0,		0,		0,0/*81*/,	D("DEP void(vector point, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_line_qex",	PF_Fixme,			0,		0,		0,0/*82*/,	D("DEP void(vector start, vector end, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_arrow_qex",	PF_Fixme,			0,		0,		0,0/*83*/,	D("DEP void(vector start, vector end, float colormap, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_ray_qex",	PF_Fixme,			0,		0,		0,0/*84*/,	D("DEP void(vector start, vector direction, float length, float colormap, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_circle_qex",	PF_Fixme,			0,		0,		0,0/*85*/,	D("DEP void(vector origin, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_bounds_qex",	PF_Fixme,			0,		0,		0,0/*86*/,	D("DEP void(vector min, vector max, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_worldtext_qex",PF_Fixme,			0,		0,		0,0/*87*/,	D("DEP void(string s, vector origin, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_sphere_qex",	PF_Fixme,			0,		0,		0,0/*88*/,	D("DEP void(vector origin, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"draw_cylinder_qex",PF_Fixme,			0,		0,		0,0/*89*/,	D("DEP void(vector origin, float halfHeight, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
-	{"centerprint_qex",	PF_centerprint_qex,	0,		0,		0,0/*90*/,	D("void(entity ent, string text, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings.")},
-	{"bprint_qex",		PF_bprint_qex,		0,		0,		0,0/*91*/,	D("void(string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6)", "Remaster: Sends the strings to all clients, which will order them according to {#}. Also substitutes localised strings for $NAME strings.")},
-	{"sprint_qex",		PF_sprint_qex,		0,		0,		0,0/*92*/,	D("void(entity client, string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings.")},
+//QuakeEx (aka: quake rerelease). These conflict with core extensions so we don't register them by default (Update: they now link by name rather than number.
+	{"ex_finaleFinished",PF_finaleFinished_qex,0,	0,		0,0/*79*/,	D("float()", "Behaviour is undocumented.")},
+	{"ex_localsound",	PF_localsound_qex,	0,		0,		0,0/*80*/,	D("void(entity client, string sample)", "Behaviour is undocumented.")},
+	{"ex_draw_point",	PF_Fixme,			0,		0,		0,0/*81*/,	D("void(vector point, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_line",	PF_Fixme,			0,		0,		0,0/*82*/,	D("void(vector start, vector end, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_arrow",	PF_Fixme,			0,		0,		0,0/*83*/,	D("void(vector start, vector end, float colormap, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_ray",		PF_Fixme,			0,		0,		0,0/*84*/,	D("void(vector start, vector direction, float length, float colormap, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_circle",	PF_Fixme,			0,		0,		0,0/*85*/,	D("void(vector origin, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_bounds",	PF_Fixme,			0,		0,		0,0/*86*/,	D("void(vector min, vector max, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_worldtext",PF_Fixme,			0,		0,		0,0/*87*/,	D("void(string s, vector origin, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_sphere",	PF_Fixme,			0,		0,		0,0/*88*/,	D("void(vector origin, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_draw_cylinder",PF_Fixme,			0,		0,		0,0/*89*/,	D("void(vector origin, float halfHeight, float radius, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
+	{"ex_centerprint",	PF_centerprint_qex,	0,		0,		0,0/*90*/,	D("void(entity ent, string text, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings.")},
+	{"ex_bprint",		PF_bprint_qex,		0,		0,		0,0/*91*/,	D("void(string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6)", "Remaster: Sends the strings to all clients, which will order them according to {#}. Also substitutes localised strings for $NAME strings.")},
+	{"ex_sprint",		PF_sprint_qex,		0,		0,		0,0/*92*/,	D("void(entity client, string s, optional string s0, optional string s1, optional string s2, optional string s3, optional string s4, optional string s5)", "Remaster: Sends the strings to the client, which will order according to {#}. Also substitutes localised strings for $NAME strings.")},
+	{"ex_bot_movetopoint",PF_Fixme,			0,		0,		0,0,	D("float(entity bot, vector point)", "Behaviour is undocumented.")},
+	{"ex_bot_followentity",PF_Fixme,		0,		0,		0,0,	D("float(entity bot, entity goal)", "Behaviour is undocumented.")},
+	{"ex_CheckPlayerEXFlags",PF_CheckPlayerEXFlags_qex,0,0,	0,0,	D("float(entity playerEnt)", "Behaviour is undocumented.")},
+	{"ex_walkpathtogoal",PF_walkpathtogoal_qex,0,	0,		0,0,	D("float(float movedist, vector goal)", "Behaviour is undocumented.")},
+//	{"ex_prompt",		PF_prompt_qex,		0,		0,		0,0,	D("void(entity player, string text, float numchoices)", "Behaviour is undocumented.")},
+//	{"ex_promptchoice",	PF_promptchoice_qex,0,		0,		0,0,	D("void(entity player, string text, float impulse)", "Behaviour is undocumented.")},
+//	{"ex_clearprompt",	PF_clearprompt_qex,	0,		0,		0,0,	D("void(entity player)", "Behaviour is undocumented.")},
 //End QuakeEx, for now. :(
 
 // Tomaz - QuakeC String Manipulation Begin
@@ -11327,8 +11453,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 //	{"findlist_radius",	PF_FindListRadius,	0,		0,		0,		0,		D("entity*(vector pos, float radius)", "Return a list of entities with the given string field set to the given value.")},
 //	{"traceboxptr",		PF_TraceBox,		0,		0,		0,		0,		D("typedef struct {\nfloat allsolid;\nfloat startsolid;\nfloat fraction;\nfloat truefraction;\nentity ent;\nvector endpos;\nvector plane_normal;\nfloat plane_dist;\nint surfaceflags;\nint contents;\n} trace_t;\nvoid(trace_t *trace, vector start, vector mins, vector maxs, vector end, float nomonsters, entity forent)", "Like regular tracebox, except doesn't doesn't use any evil globals.")},
 
-	{"getsoundindex",	PF_getsoundindex,	0,		0,		0,		0,		D("float(string soundname, float queryonly)", "Provides a way to query if a sound is already precached or not. The return value can also be checked for <=255 to see if it'll work over any network protocol. The sound index can also be used for writebyte hacks, but this is discouraged - use SOUNDFLAG_UNICAST instead.")},
 	{"getmodelindex",	PF_getmodelindex,	0,		0,		0,		200,	D("float(string modelname, optional float queryonly)", "Acts as an alternative to precache_model(foo);setmodel(bar, foo); return bar.modelindex;\nIf queryonly is set and the model was not previously precached, the builtin will return 0 without needlessly precaching the model.")},
+	{"getsoundindex",	PF_getsoundindex,	0,		0,		0,		0,		D("float(string soundname, optional float queryonly)", "Provides a way to query if a sound is already precached or not. The return value can also be checked for <=255 to see if it'll work over any network protocol. The sound index can also be used for writebyte hacks, but this is discouraged - use SOUNDFLAG_UNICAST instead.")},
 	{"externcall",		PF_externcall,		0,		0,		0,		201,	D("__variant(float prnum, string funcname, ...)", "Directly call a function in a different/same progs by its name.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
 	{"addprogs",		PF_addprogs,		0,		0,		0,		202,	D("float(string progsname)", "Loads an additional .dat file into the current qcvm. The returned handle can be used with any of the externcall/externset/externvalue builtins.\nThere are cvars that allow progs to be loaded automatically.")},
 	{"externvalue",		PF_externvalue,		0,		0,		0,		203,	D("__variant(float prnum, string varname)", "Reads a global in the named progs by the name of that global.\nprnum=0 is the 'default' or 'main' progs.\nprnum=-1 means current progs.\nprnum=-2 will scan through the active progs and will use the first it finds.")},
@@ -11544,7 +11670,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"WriteFloat",		PF_WriteFloat,		0,		0,		0,		280,	D("void(float buf, float fl)", "Writes a full 32bit float without any data conversions at all, for full precision.")},//
 	{"WriteDouble",		PF_WriteDouble,		0,		0,		0,		0,		D("void(float buf, __double dbl)", "Writes a full 64bit double-precision float without any data conversions at all, for excessive precision.")},//
 	{"WriteInt",		PF_WriteInt,		0,		0,		0,		0,		D("void(float buf, int fl)", "Writes all 4 bytes of a 32bit integer without truncating to a float first before converting back to an int (unlike WriteLong does, but otherwise equivelent).")},//
-	{"WriteInt64",		PF_WriteInt64,		0,		0,		0,		0,		D("void(float buf, __int64 fl)", "Writes all 8 bytes of a 64bit integer.")},//
+	{"WriteInt64",		PF_WriteInt64,		0,		0,		0,		0,		D("void(float buf, __int64 fl)", "Writes all 8 bytes of a 64bit integer. This uses variable-length coding and will send only a single byte for any value between -64 and 63.")},//
+	{"WriteUInt64",		PF_WriteUInt64,		0,		0,		0,		0,		D("void(float buf, __uint64 fl)", "Writes all 8 bytes of a 64bit unsigned integer. Values between 0-127 will be sent in a single byte.")},//
 	{"skel_ragupdate",	PF_skel_ragedit,	0,		0,		0,		281,	D("float(entity skelent, string dollcmd, float animskel)", "Updates the skeletal object attached to the entity according to its origin and other properties.\nif animskel is non-zero, the ragdoll will animate towards the bone state in the animskel skeletal object, otherwise they will pick up the model's base pose which may not give nice results.\nIf dollcmd is not set, the ragdoll will update (this should be done each frame).\nIf the doll is updated without having a valid doll, the model's default .doll will be instanciated.\ncommands:\n doll foo.doll : sets up the entity to use the named doll file\n dollstring TEXT : uses the doll file directly embedded within qc, with that extra prefix.\n cleardoll : uninstanciates the doll without destroying the skeletal object.\n animate 0.5 : specifies the strength of the ragdoll as a whole \n animatebody somebody 0.5 : specifies the strength of the ragdoll on a specific body (0 will disable ragdoll animations on that body).\n enablejoint somejoint 1 : enables (or disables) a joint. Disabling joints will allow the doll to shatter.")}, // (FTE_CSQC_RAGDOLL)
 	{"skel_mmap",		PF_skel_mmap,		0,		0,		0,		282,	D("float*(float skel)", "Map the bones in VM memory. They can then be accessed via pointers. Each bone is 12 floats, the four vectors interleaved (sadly).")},// (FTE_QC_RAGDOLL)
 	{"skel_set_bone_world",PF_skel_set_bone_world,0,0,		0,		283,	D("void(entity ent, float bonenum, vector org, optional vector angorfwd, optional vector right, optional vector up)", "Sets the world position of a bone within the given entity's attached skeletal object. The world position is dependant upon the owning entity's position. If no orientation argument is specified, v_forward+v_right+v_up are used for the orientation instead. If 1 is specified, it is understood as angles. If 3 are specified, they are the forawrd/right/up vectors to use.")},
@@ -11568,7 +11695,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"clearscene",		PF_Fixme,	0,		0,		0,		300,	D("void()", "Forgets all rentities, polygons, and temporary dlights. Resets all view properties to their default values.")},// (EXT_CSQC)
 	{"addentities",		PF_Fixme,	0,		0,		0,		301,	D("void(float mask)", "Walks through all entities effectively doing this:\n if (ent.drawmask&mask){ if (!ent.predaw()) addentity(ent); }\nIf mask&MASK_DELTA, non-csqc entities, particles, and related effects will also be added to the rentity list.\n If mask&MASK_STDVIEWMODEL then the default view model will also be added.")},// (EXT_CSQC)
 	{"addentity",		PF_Fixme,	0,		0,		0,		302,	D("void(entity ent)", "Copies the entity fields into a new rentity for later rendering via addscene.")},// (EXT_CSQC)
-	{"removeentity",	PF_Fixme,	0,		0,		0,		0,		D("void(entity ent)", "Undoes all addentities added to the scene from the given entity, without removing ALL entities (useful for splitscreen/etc, readd modified versions as desired).")},// (EXT_CSQC)
+	{"addentity_lighting",PF_Fixme,	0,		0,		0,		0,		D("void(entity ent, vector lightdir, vector lightavg, vector lightrange, int reserved1=0,void*reserved2=0)", "Copies the entity fields into a new rentity for later rendering via addscene, but with explicit lighting info.")},
+	{"removeentity",	PF_Fixme,	0,		0,		0,		0,		D("void(entity ent)", "Undoes all addentities added to the scene from the given entity, without removing ALL entities (useful for splitscreen/etc, readd modified versions as desired).")},
 	{"addtrisoup_simple",PF_Fixme,	0,		0,		0,		0,		D("typedef float vec2[2];\ntypedef float vec3[3];\ntypedef float vec4[4];\ntypedef struct trisoup_simple_vert_s {vec3 xyz;vec2 st;vec4 rgba;} trisoup_simple_vert_t;\nvoid(string texturename, int flags, struct trisoup_simple_vert_s *verts, int *indexes, int numindexes)", "Adds the specified trisoup into the scene as additional geometry. This permits caching geometry to reduce builtin spam. Indexes are a triangle list (so eg quads will need 6 indicies to form two triangles). NOTE: this is not going to be a speedup over polygons if you're still generating lots of new data every frame.")},
 	{"setproperty",		PF_Fixme,	0,		0,		0,		303,	D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
 	{"renderscene",		PF_Fixme,	0,		0,		0,		304,	D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
@@ -11622,7 +11750,8 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 
 //EXT_CSQC
 	{"setmodelindex",	PF_Fixme,	0,		0,		0,		333,	D("void(entity e, float mdlindex)", "Sets a model by precache index instead of by name. Otherwise identical to setmodel.")},//
-	{"modelnameforindex",PF_Fixme,	0,		0,		0,		334,	D("string(float mdlindex)", "Retrieves the name of the model based upon a precache index. This can be used to reduce csqc network traffic by enabling model matching.")},//
+	{"modelnameforindex",PF_modelnameforindex,0,0,	0,		334,	D("string(float mdlindex)", "Retrieves the name of the model based upon a precache index. This can be used to reduce csqc network traffic by enabling model matching (with getmodelindex).")},//
+	{"soundnameforindex",PF_soundnameforindex,0,0,	0,		0,		D("string(float sndindex)", "Retrieves the name of the sound based upon a precache index. This can be used to reduce csqc network traffic by enabling sound matching (with getsoundindex).")},//
 
 	{"particleeffectnum",PF_sv_particleeffectnum,0,0,0,		335,	D("float(string effectname)", "Precaches the named particle effect. If your effect name is of the form 'foo.bar' then particles/foo.cfg will be loaded by the client if foo.bar was not already defined.\nDifferent engines will have different particle systems, this specifies the QC API only.")},// (EXT_CSQC)
 	{"trailparticles",	PF_sv_trailparticles,0,0,	0,		336,	D("void(float effectnum, entity ent, vector start, vector end)", "Draws the given effect between the two named points. If ent is not world, distances will be cached in the entity in order to avoid framerate dependancies. The entity is not otherwise used.")},// (EXT_CSQC),
@@ -11664,7 +11793,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"SetListener",		PF_Fixme, 	0,		0,		0,		351,	D("void(vector origin, vector forward, vector right, vector up, optional float reverbtype)", "Sets the position of the view, as far as the audio subsystem is concerned. This should be called once per CSQC_UpdateView as it will otherwise revert to default. For reverbtype, see setup_reverb or treat as 'underwater'.")},// (EXT_CSQC)
 	{"setup_reverb",	PF_Fixme, 	0,		0,		0,		0,		D("typedef struct {\n\tfloat flDensity;\n\tfloat flDiffusion;\n\tfloat flGain;\n\tfloat flGainHF;\n\tfloat flGainLF;\n\tfloat flDecayTime;\n\tfloat flDecayHFRatio;\n\tfloat flDecayLFRatio;\n\tfloat flReflectionsGain;\n\tfloat flReflectionsDelay;\n\tvector flReflectionsPan;\n\tfloat flLateReverbGain;\n\tfloat flLateReverbDelay;\n\tvector flLateReverbPan;\n\tfloat flEchoTime;\n\tfloat flEchoDepth;\n\tfloat flModulationTime;\n\tfloat flModulationDepth;\n\tfloat flAirAbsorptionGainHF;\n\tfloat flHFReference;\n\tfloat flLFReference;\n\tfloat flRoomRolloffFactor;\n\tint   iDecayHFLimit;\n} reverbinfo_t;\nvoid(float reverbslot, reverbinfo_t *reverbinfo, int sizeofreverinfo_t)", "Reconfigures a reverb slot for weird effects. Slot 0 is reserved for no effects. Slot 1 is reserved for underwater effects. Reserved slots will be reinitialised on snd_restart, but can otherwise be changed. These reverb slots can be activated with SetListener. Note that reverb will currently only work when using OpenAL.")},
 	{"registercommand",	PF_sv_registercommand,0,0,	0,		352,	D("void(string cmdname)", "Register the given console command, for easy console use.\nConsole commands that are later used will invoke CSQC_ConsoleCommand/m_consolecommand/ConsoleCmd according to module.")},//(EXT_CSQC)
-	{"wasfreed",		PF_WasFreed,0,		0,		0,		353,	D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the two-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
+	{"wasfreed",		PF_WasFreed,0,		0,		0,		353,	D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the half-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
 	{"serverkey",		PF_sv_serverkeystring,0,0,	0,		354,	D("string(string key)", "Look up a key in the server's public serverinfo string. If the key contains binary data then it will be truncated at the first null.")},//
 	{"serverkeyfloat",	PF_sv_serverkeyfloat,0,0,	0,		0,		D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
 	{"serverkeyblob",	PF_sv_serverkeyblob,0,0,	0,		0,		D("int(string key, optional void *ptr, int maxsize)", "Version of serverkey that returns data as a blob (ie: binary data that may contain nulls). Returns the full blob size, even if truncated (pass maxsize=0 to query required storage).")},//
@@ -11685,9 +11814,10 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"readangle",		PF_Fixme,	0,		0,		0,		365,	D("float()", "Reads a value matching the unspecified precision written ONLY by WriteAngle.")},// (EXT_CSQC)
 	{"readstring",		PF_Fixme,	0,		0,		0,		366,	D("string()", "Reads a null-terminated string.")},// (EXT_CSQC)
 	{"readfloat",		PF_Fixme,	0,		0,		0,		367,	D("float()", "Reads a float without any truncation nor conversions. Data MUST have originally been written with WriteFloat.")},// (EXT_CSQC)
-	{"readdouble",		PF_Fixme,	0,		0,		0,		0,		D("__double()", "Reads a double-precision float without any truncation nor conversions. Data MUST have originally been written with WriteDouble.")},// (EXT_CSQC)
+	{"readdouble",		PF_Fixme,	0,		0,		0,		0,		D("__double()", "Reads a double-precision float without any truncation nor conversions. Data MUST have originally been written with WriteDouble.")},
 	{"readint",			PF_Fixme,	0,		0,		0,		0,		D("int()", "Reads a 32bit int without any conversions to float, otherwise interchangable with readlong.")},// (EXT_CSQC)
-	{"readint64",		PF_Fixme,	0,		0,		0,		0,		D("__int64()", "Reads a 64bit int. Paired with WriteInt64.")},// (EXT_CSQC)
+	{"readint64",		PF_Fixme,	0,		0,		0,		0,		D("__int64()", "Reads a 64bit signed int. Paired with WriteInt64.")},
+	{"readuint64",		PF_Fixme,	0,		0,		0,		0,		D("__uint64()", "Reads a 64bit unsigned int. Paired with WriteUInt64.")},
 	{"readentitynum",	PF_Fixme,	0,		0,		0,		368,	D("float()", "Reads the serverside index of an entity, paired with WriteEntity. There may be nothing else known about the entity yet, so the result typically needs to be saved as-is and re-looked up each frame. This can be done via getentity(NUM, GE_*) for non-csqc ents, or findentity(world,entnum,NUM) - both of which can fail due to latency.")},// (EXT_CSQC)
 
 //	{"readserverentitystate",PF_Fixme,0,	0,		0,		369,	"void(float flags, float simtime)"},// (EXT_CSQC_1)
@@ -12229,23 +12359,23 @@ void PR_ResetBuiltins(progstype_t type)	//fix all nulls to PF_FIXME and add any 
 		}
 	}
 
-#ifdef HAVE_LEGACY
+#ifdef HAVE_LEGACY	//FIXME: this should no longer be needed, but there may be unmaintained mods...
 	if (sv.world.remasterlogic)
 	{	//everyone needs their own set of incompatibile builtins... yay!...
-		PR_EnableEBFSBuiltin("finaleFinished",		79);//logfrag,	(tq_strzone)
-		PR_EnableEBFSBuiltin("localsound_qex",		80);//infokey,	(tq_strunzone)
-		PR_EnableEBFSBuiltin("draw_point_qex",		81);//stof,		(tq_strlen)
-		PR_EnableEBFSBuiltin("draw_line_qex",		82);//multicast,(tq_strcat)
-		PR_EnableEBFSBuiltin("draw_arrow_qex",		83);//			(tq_substring)
-		PR_EnableEBFSBuiltin("draw_ray_qex",		84);//			(tq_stof)
-		PR_EnableEBFSBuiltin("draw_circle_qex",		85);//			(tq_stov)
-		PR_EnableEBFSBuiltin("draw_bounds_qex",		86);//			(tq_fopen)
-		PR_EnableEBFSBuiltin("draw_worldtext_qex",	87);//			(tq_fclose)
-		PR_EnableEBFSBuiltin("draw_sphere_qex",		88);//			(tq_fgets)
-		PR_EnableEBFSBuiltin("draw_cylinder_qex",	89);//			(tq_fputs)
-		PR_EnableEBFSBuiltin("centerprint_qex",		90);//tracebox
-		PR_EnableEBFSBuiltin("bprint_qex",			91);//randomvec
-		PR_EnableEBFSBuiltin("sprint_qex",			92);//getlight
+		PR_EnableEBFSBuiltin("ex_finaleFinished",	79);//logfrag,	(tq_strzone)
+		PR_EnableEBFSBuiltin("ex_localsound",		80);//infokey,	(tq_strunzone)
+		PR_EnableEBFSBuiltin("ex_draw_point",		81);//stof,		(tq_strlen)
+		PR_EnableEBFSBuiltin("ex_draw_line",		82);//multicast,(tq_strcat)
+		PR_EnableEBFSBuiltin("ex_draw_arrow",		83);//			(tq_substring)
+		PR_EnableEBFSBuiltin("ex_draw_ray",			84);//			(tq_stof)
+		PR_EnableEBFSBuiltin("ex_draw_circle",		85);//			(tq_stov)
+		PR_EnableEBFSBuiltin("ex_draw_bounds",		86);//			(tq_fopen)
+		PR_EnableEBFSBuiltin("ex_draw_worldtext",	87);//			(tq_fclose)
+		PR_EnableEBFSBuiltin("ex_draw_sphere",		88);//			(tq_fgets)
+		PR_EnableEBFSBuiltin("ex_draw_cylinder",	89);//			(tq_fputs)
+		PR_EnableEBFSBuiltin("ex_centerprint",		90);//tracebox
+		PR_EnableEBFSBuiltin("ex_bprint",			91);//randomvec
+		PR_EnableEBFSBuiltin("ex_sprint",			92);//getlight
 
 		PR_EnableEBFSBuiltin("checkextension",		99);
 	}
@@ -12320,7 +12450,7 @@ void PR_SVExtensionList_f(void)
 	int num;
 	char biissues[8192];
 
-	extcheck_t extcheck = {&sv.world, Net_PextMask(PROTOCOL_VERSION_FTE1, false), Net_PextMask(PROTOCOL_VERSION_FTE2, false)};
+	extcheck_t extcheck = {&sv.world, Net_PextMask(PROTOCOL_VERSION_FTE1, false)&PEXT_SERVERADVERTISE, Net_PextMask(PROTOCOL_VERSION_FTE2, false)&PEXT2_SERVERADVERTISE};
 
 #define SHOW_ACTIVEEXT 1
 #define SHOW_ACTIVEBI 2
@@ -13351,7 +13481,7 @@ void PR_DumpPlatform_f(void)
 		{"SOUNDFLAG_RELIABLE",		"const float",	QW|NQ,		D("The sound will be sent reliably, and without regard to phs."), CF_SV_RELIABLE},
 		{"SOUNDFLAG_ABSVOLUME",		"const float",	CS,			D("The sample's volume is not scaled by the volume cvar. Use with caution"), CF_CL_ABSVOLUME},
 		{"SOUNDFLAG_FORCELOOP",		"const float",	QW|NQ|CS,	D("The sound will restart once it reaches the end of the sample."), CF_FORCELOOP},
-		{"SOUNDFLAG_NOSPACIALISE",	"const float",	/*QW|NQ|*/CS,D("The different audio channels are played at the same volume regardless of which way the player is facing, without needing to use 0 attenuation."), CF_NOSPACIALISE},
+		{"SOUNDFLAG_NOSPACIALISE",	"const float",	QW|NQ|CS,	D("The different audio channels are played at the same volume regardless of which way the player is facing, without needing to use 0 attenuation."), CF_NOSPACIALISE},
 		{"SOUNDFLAG_NOREVERB",		"const float",	QW|NQ|CS,	D("Disables the use of underwater/reverb effects on this sound effect."), CF_NOREVERB},
 		{"SOUNDFLAG_FOLLOW",		"const float",	QW|NQ|CS,	D("The sound's origin will updated to follow the emitting entity."), CF_FOLLOW},
 		{"SOUNDFLAG_NOREPLACE",		"const float",	QW|NQ|CS,	D("Sounds started with this flag will be ignored when there's already a sound playing on that same ent-channel."), CF_NOREPLACE},
@@ -13720,9 +13850,9 @@ void PR_DumpPlatform_f(void)
 		{"FILE_READ",			"const float", ALL, D("The file may be read via fgets to read a single line at a time."), FRIK_FILE_READ},
 		{"FILE_APPEND",			"const float", ALL, D("Like FILE_WRITE, but writing starts at the end of the file."), FRIK_FILE_APPEND},
 		{"FILE_WRITE",			"const float", ALL, D("fputs will be used to write to the file."), FRIK_FILE_WRITE},
-		{"FILE_READNL",			"const float", QW|NQ|CS, D("Like FILE_READ, except newlines are not special. fgets reads the entire file into a tempstring."), FRIK_FILE_READNL},
-		{"FILE_MMAP_READ",		"const float", QW|NQ|CS, D("The file will be loaded into memory. fgets returns a pointer to the first byte (and will always return the same value for this file). Cast this to your datatype."), FRIK_FILE_MMAP_READ},
-		{"FILE_MMAP_RW",		"const float", QW|NQ|CS, D("Like FILE_MMAP_READ, except any changes to the data will be written back to disk once the file is closed."), FRIK_FILE_MMAP_RW},
+		{"FILE_READNL",			"const float", ALL, D("Like FILE_READ, except newlines are not special. fgets reads the entire file into a tempstring."), FRIK_FILE_READNL},
+		{"FILE_MMAP_READ",		"const float", ALL, D("The file will be loaded into memory. fgets returns a pointer to the first byte (and will always return the same value for this file). Cast this to your datatype."), FRIK_FILE_MMAP_READ},
+		{"FILE_MMAP_RW",		"const float", ALL, D("Like FILE_MMAP_READ, except any changes to the data will be written back to disk once the file is closed."), FRIK_FILE_MMAP_RW},
 
 		{"MASK_ENGINE",			"const float", CS, D("Valid as an argument for addentities. If specified, all non-csqc entities will be added to the scene."), MASK_DELTA},
 		{"MASK_VIEWMODEL",		"const float", CS, D("Valid as an argument for addentities. If specified, the regular engine viewmodel will be added to the scene."), MASK_STDVIEWMODEL},

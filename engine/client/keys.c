@@ -196,6 +196,8 @@ keyname_t keynames[] =
 	{"MOUSE10",		K_MOUSE10},
 	{"MWHEELUP",	K_MWHEELUP},
 	{"MWHEELDOWN",	K_MWHEELDOWN},
+	{"MWHEELLEFT",	K_MWHEELLEFT},
+	{"MWHEELRIGHT",	K_MWHEELRIGHT},
 
 	{"LWIN",	K_LWIN},	//windows name
 	{"RWIN",	K_RWIN},	//windows name
@@ -319,6 +321,16 @@ keyname_t keynames[] =
 	{"GP_RTHUMB_DOWN",	K_GP_RIGHT_THUMB_DOWN},
 	{"GP_RTHUMB_LEFT",	K_GP_RIGHT_THUMB_LEFT},
 	{"GP_RTHUMB_RIGHT",	K_GP_RIGHT_THUMB_RIGHT},
+
+#ifdef Q2BSPS
+	//kingpin compat
+	{"ESC",				K_ESCAPE},
+	{"B_SPACE",			K_BACKSPACE},
+	{"U_ARROW",			K_UPARROW},
+	{"D_ARROW",			K_DOWNARROW},
+	{"L_ARROW",			K_LEFTARROW},
+	{"R_ARROW",			K_RIGHTARROW},
+#endif
 
 #ifndef QUAKETC
 	//dp compat
@@ -1081,6 +1093,14 @@ void Key_DefaultLinkClicked(console_t *con, char *text, char *info)
 	if (*c && !strchr(c, ';') && !strchr(c, '\n'))
 	{
 		Cbuf_AddText(va("\nssv \"%s\"\n", c), RESTRICT_LOCAL);
+		return;
+	}
+#endif
+#ifdef SUPPORT_ICE
+	c = Info_ValueForKey(info, "ice");
+	if (*c && !strchr(c, ';') && !strchr(c, '\n'))
+	{
+		Cbuf_AddText(va("\nnet_ice_show \"%s\"\n", c), RESTRICT_LOCAL);
 		return;
 	}
 #endif
@@ -2416,6 +2436,39 @@ static char *Key_KeynumToStringRaw (int keynum)
 const char *Key_KeynumToString (int keynum, int modifier)
 {
 	const char *r = Key_KeynumToStringRaw(keynum);
+	if (r[0] == '<' && r[1])
+		modifier = 0;	//would be too weird.
+	switch(modifier)
+	{
+	case KEY_MODIFIER_CTRL|KEY_MODIFIER_ALT|KEY_MODIFIER_SHIFT:
+		return va("Ctrl+Alt+Shift+%s", r);
+	case KEY_MODIFIER_ALT|KEY_MODIFIER_SHIFT:
+		return va("Alt+Shift+%s", r);
+	case KEY_MODIFIER_CTRL|KEY_MODIFIER_SHIFT:
+		return va("Ctrl+Shift+%s", r);
+	case KEY_MODIFIER_CTRL|KEY_MODIFIER_ALT:
+		return va("Ctrl+Alt+%s", r);
+	case KEY_MODIFIER_CTRL:
+		return va("Ctrl+%s", r);
+	case KEY_MODIFIER_ALT:
+		return va("Alt+%s", r);
+	case KEY_MODIFIER_SHIFT:
+		return va("Shift+%s", r);
+	default:
+		return r;	//no modifier or a bindmap
+	}
+}
+
+const char *Key_KeynumToLocalString (int keynum, int modifier)
+{
+	const char *r;
+#if defined(_WIN32)	|| (defined(__linux__)&&!defined(NO_X11)) //not defined in all targets yet...
+	static char tmp[64];
+	if (INS_KeyToLocalName(keynum, tmp, sizeof(tmp)))
+		r = tmp;
+	else
+#endif
+		r = Key_KeynumToStringRaw(keynum);
 	if (r[0] == '<' && r[1])
 		modifier = 0;	//would be too weird.
 	switch(modifier)

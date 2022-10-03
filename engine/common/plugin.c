@@ -9,22 +9,31 @@
 #define FTEENGINE
 #include "../plugins/plugin.h"
 
-struct q3gamecode_s *q3;
-static struct plugin_s *q3plug;
-
 #ifdef PLUGINS
 
+#if defined(Q3SERVER)||defined(Q3CLIENT)
+struct q3gamecode_s *q3;
+static struct plugin_s *q3plug;
+#endif
+
+#define Q_snprintf Q_snprintfz
+#define Q_strlcpy Q_strncpyz
+#define Q_strlcat Q_strncatz
+#define Sys_Errorf Sys_Error
+
 #ifdef MODELFMT_GLTF
-	#define Q_snprintf Q_snprintfz
-	#define Q_strlcpy Q_strncpyz
-	#define Q_strlcat Q_strncatz
 	#include "../plugins/models/gltf.c"
+#endif
+#ifdef USE_INTERNAL_ODE
+	#include "../engine/common/com_phys_ode.c"
 #endif
 
 cvar_t plug_sbar = CVARD("plug_sbar", "3", "Controls whether plugins are allowed to draw the hud, rather than the engine (when allowed by csqc). This is typically used to permit the ezhud plugin without needing to bother unloading it.\n=0: never use hud plugins.\n&1: Use hud plugins in deathmatch.\n&2: Use hud plugins in singleplayer/coop.\n=3: Always use hud plugins (when loaded).");
 cvar_t plug_loaddefault = CVARD("plug_loaddefault", "1", "0: Load plugins only via explicit plug_load commands\n1: Load built-in plugins and those selected via the package manager\n2: Scan for misc plugins, loading all that can be found, but not built-ins.\n3: Scan for plugins, and then load any built-ins");
 
-qboolean Plug_Q3_Init(void);
+extern qboolean Plug_Q3_Init(void);
+extern qboolean Plug_Bullet_Init(void);
+extern qboolean Plug_ODE_Init(void);
 static struct
 {
 	const char *name;
@@ -102,7 +111,7 @@ typedef struct plugin_s {
 	int (QDECL *conexecutecommand)(qboolean isinsecure);
 	qboolean (QDECL *menufunction)(int eventtype, int keyparam, int unicodeparm, float mousecursor_x, float mousecursor_y, float vidwidth, float vidheight);
 	int (QDECL *sbarlevel[3])(int seat, float x, float y, float w, float h, unsigned int showscores);	//0 - main sbar, 1 - supplementry sbar sections (make sure these can be switched off), 2 - overlays (scoreboard). menus kill all.
-	void (QDECL *reschange)(int width, int height);
+	void (QDECL *reschange)(int width, int height, qboolean restarted);
 
 	//protocol-in-a-plugin
 	int (QDECL *connectionlessclientpacket)(const char *buffer, size_t size, netadr_t *from);
@@ -282,7 +291,7 @@ static plugin_t *Plug_Load(const char *file)
 
 #ifndef SERVERONLY
 	if (newplug->reschange)
-		newplug->reschange(vid.width, vid.height);
+		newplug->reschange(vid.width, vid.height, false);
 #endif
 
 	currentplug = NULL;
@@ -1298,13 +1307,13 @@ void Plug_Tick(void)
 }
 
 #ifndef SERVERONLY
-void Plug_ResChanged(void)
+void Plug_ResChanged(qboolean restarted)
 {
 	plugin_t *oldplug = currentplug;
 	for (currentplug = plugs; currentplug; currentplug = currentplug->next)
 	{
 		if (currentplug->reschange)
-			currentplug->reschange(vid.width, vid.height);
+			currentplug->reschange(vid.width, vid.height, restarted);
 	}
 	currentplug = oldplug;
 }
@@ -1688,11 +1697,13 @@ void Plug_Close(plugin_t *plug)
 	FS_UnRegisterFileSystemModule(plug);
 	Mod_UnRegisterAllModelFormats(plug);
 
+#if defined(Q3SERVER)||defined(Q3CLIENT)
 	if (q3plug == plug)
 	{
 		q3 = NULL;
 		q3plug = NULL;
 	}
+#endif
 
 	//tell the plugin that everything is closed and that it should free up any lingering memory/stuff
 	//it is still allowed to create/have open files.
@@ -2225,9 +2236,11 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			Plug_GetLocalPlayerNumbers,
 			Plug_GetLocationName,
 			Plug_GetLastInputFrame,
-			Plug_GetServerInfo,
+			Plug_GetServerInfoRaw,
+			Plug_GetServerInfoBlob,
 			Plug_SetUserInfo,
 			Plug_SetUserInfoBlob,
+			Plug_GetUserInfoBlob,
 #if defined(HAVE_SERVER) && defined(HAVE_CLIENT)
 			Plug_MapLog_Query,
 #else

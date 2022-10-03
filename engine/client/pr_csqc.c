@@ -1096,6 +1096,29 @@ static void QCBUILTIN PF_R_AddEntity(pubprogfuncs_t *prinst, struct globalvars_s
 		V_AddAxisEntity(&ent);
 	}
 }
+
+static void QCBUILTIN PF_R_AddEntityLighting(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	csqcedict_t *in = (void*)G_EDICT(prinst, OFS_PARM0);
+	entity_t ent;
+	if (ED_ISFREE(in) || in->entnum == 0)
+	{
+		csqc_deprecated("Tried drawing a free/removed/world entity\n");
+		return;
+	}
+
+	if (CopyCSQCEdictToEntity(in, &ent))
+	{
+		ent.light_known = true;
+		VectorCopy(G_VECTOR(OFS_PARM1), ent.light_dir);
+		VectorCopy(G_VECTOR(OFS_PARM2), ent.light_avg);
+		VectorCopy(G_VECTOR(OFS_PARM3), ent.light_range);
+
+		CLQ1_AddShadow(&ent);
+		V_AddAxisEntity(&ent);
+	}
+}
+
 static void QCBUILTIN PF_R_RemoveEntity(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	csqcedict_t *in = (void*)G_EDICT(prinst, OFS_PARM0);
@@ -3290,6 +3313,30 @@ static void QCBUILTIN PF_cs_getmodelindex (pubprogfuncs_t *prinst, struct global
 
 	G_FLOAT(OFS_RETURN) = PF_cs_PrecacheModel_Internal(prinst, s, queryonly);
 }
+static void QCBUILTIN PF_cs_getsoundindex (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	const char	*s = PR_GetStringOfs(prinst, OFS_PARM0);
+	qboolean queryonly = (prinst->callargc >= 2)?G_FLOAT(OFS_PARM1):false;
+	int i;
+
+	G_FLOAT(OFS_RETURN) = 0;
+	//look for the server's names first...
+	for (i = 1; i < MAX_PRECACHE_SOUNDS; i++)
+	{
+		if (!*cl.sound_name[i])
+			break;
+		if (!strcmp(cl.sound_name[i], s))
+		{
+			G_FLOAT(OFS_RETURN) = i;
+			return;
+		}
+	}
+
+	//FIXME: we don't track clientside sound precaches (the sound system has its own, but can be flushed at any time forgetting/reordering them)
+	//can still make sure its cached though.
+	if (!queryonly)
+		S_PrecacheSound(s);
+}
 static void QCBUILTIN PF_cs_precachefile(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char *filename = PR_GetStringOfs(prinst, OFS_PARM0);
@@ -3308,10 +3355,22 @@ static void QCBUILTIN PF_cs_ModelnameForIndex(pubprogfuncs_t *prinst, struct glo
 {
 	int modelindex = G_FLOAT(OFS_PARM0);
 
-	if (modelindex < 0)
+	if (modelindex < 0 && (-modelindex) < MAX_CSMODELS)
 		G_INT(OFS_RETURN) = (int)PR_SetString(prinst, cl.model_csqcname[-modelindex]);
-	else
+	else if (modelindex >= 0 && modelindex < MAX_PRECACHE_MODELS)
 		G_INT(OFS_RETURN) = (int)PR_SetString(prinst, cl.model_name[modelindex]);
+	else
+		G_INT(OFS_RETURN) = 0;
+}
+static void QCBUILTIN PF_cs_SoundnameForIndex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int soundindex = G_FLOAT(OFS_PARM0);
+
+	//FIXME: no private indexes. still useful for sending sound names from the ssqc via indexes.
+	if (soundindex >= 0 && soundindex < MAX_PRECACHE_SOUNDS)
+		G_INT(OFS_RETURN) = (int)PR_SetString(prinst, cl.sound_name[soundindex]);
+	else
+		G_INT(OFS_RETURN) = 0;
 }
 
 static void QCBUILTIN PF_cs_spriteframe(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -3533,11 +3592,21 @@ static void QCBUILTIN PF_ReadInt64(pubprogfuncs_t *prinst, struct globalvars_s *
 {
 	if (!csqc_mayread)
 	{
-		CSQC_Abort("PF_ReadInt is not valid at this time");
+		CSQC_Abort("PF_ReadInt64 is not valid at this time");
 		G_INT(OFS_RETURN) = -1;
 		return;
 	}
 	G_INT64(OFS_RETURN) = MSG_ReadInt64();
+}
+static void QCBUILTIN PF_ReadUInt64(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	if (!csqc_mayread)
+	{
+		CSQC_Abort("PF_ReadUInt64 is not valid at this time");
+		G_INT(OFS_RETURN) = -1;
+		return;
+	}
+	G_INT64(OFS_RETURN) = MSG_ReadUInt64();
 }
 
 static void QCBUILTIN PF_ReadString(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7014,6 +7083,7 @@ static struct {
 
 //200
 	{"getmodelindex",			PF_cs_getmodelindex,	200},
+	{"getsoundindex",			PF_cs_getsoundindex,	0},
 	{"externcall",				PF_externcall,	201},
 	{"addprogs",				PF_cs_addprogs,	202},
 	{"externvalue",				PF_externvalue,	203},
@@ -7179,6 +7249,8 @@ static struct {
 	{"clearscene",				PF_R_ClearScene,	300},				// #300 void() clearscene (EXT_CSQC)
 	{"addentities",				PF_R_AddEntityMask,	301},				// #301 void(float mask) addentities (EXT_CSQC)
 	{"addentity",				PF_R_AddEntity,		302},					// #302 void(entity ent) addentity (EXT_CSQC)
+	{"addentity_lighting",		PF_R_AddEntityLighting,		0},
+
 	{"removeentity",			PF_R_RemoveEntity,	0},
 	{"setproperty",				PF_R_SetViewFlag,	303},				// #303 float(float property, ...) setproperty (EXT_CSQC)
 	{"renderscene",				PF_R_RenderScene,	304},				// #304 void() renderscene (EXT_CSQC)
@@ -7235,6 +7307,7 @@ static struct {
 	{"getplayerstat",			PF_cs_getplayerstat,			0},		// #0 __variant(float playernum, float statnum, float stattype) getplayerstat
 	{"setmodelindex",			PF_cs_SetModelIndex,			333},	// #333 void(entity e, float mdlindex) setmodelindex (EXT_CSQC)
 	{"modelnameforindex",		PF_cs_ModelnameForIndex,		334},	// #334 string(float mdlindex) modelnameforindex (EXT_CSQC)
+	{"soundnameforindex",		PF_cs_SoundnameForIndex,		0},
 
 	{"particleeffectnum",		PF_cs_particleeffectnum,		335},	// #335 float(string effectname) particleeffectnum (EXT_CSQC)
 	{"trailparticles",			PF_cs_trailparticles,			336},	// #336 void(float effectnum, entity ent, vector start, vector end) trailparticles (EXT_CSQC),
@@ -7302,6 +7375,7 @@ static struct {
 	{"readdouble",				PF_ReadDouble,					0},		// #367 __double() readdouble (EXT_CSQC)
 	{"readint",					PF_ReadInt,						0},		// #0 int() readint
 	{"readint64",				PF_ReadInt64,					0},		// #0 __int64() readint64
+	{"readuint64",				PF_ReadUInt64,					0},		// #0 __uint64() readuint64
 	{"readentitynum",			PF_ReadEntityNum,				368},	// #368 float() readentitynum (EXT_CSQC)
 
 //	{"readserverentitystate",	PF_ReadServerEntityState,		369},	// #369 void(float flags, float simtime) readserverentitystate (EXT_CSQC_1)

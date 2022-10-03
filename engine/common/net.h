@@ -114,6 +114,7 @@ struct sockaddr_qstorage
 
 extern	netadr_t	net_local_cl_ipadr;
 extern	netadr_t	net_from;		// address of who sent the packet
+extern	struct ftenet_generic_connection_s *net_from_connection;
 extern	sizebuf_t	net_message;
 //#define	MAX_UDP_PACKET	(MAX_MSGLEN*2)	// one more than msg + header
 #define	MAX_UDP_PACKET	8192	// one more than msg + header
@@ -130,7 +131,7 @@ typedef enum
 
 extern	cvar_t	hostname;
 
-int TCP_OpenStream (netadr_t *remoteaddr);	//makes things easier
+int TCP_OpenStream (netadr_t *remoteaddr, const char *remotename);	//makes things easier. remotename is printable-only
 
 struct ftenet_connections_s;
 void		NET_Init (void);
@@ -151,6 +152,7 @@ int			NET_LocalAddressForRemote(struct ftenet_connections_s *collection, netadr_
 void		NET_PrintAddresses(struct ftenet_connections_s *collection);
 qboolean	NET_AddressSmellsFunny(netadr_t *a);
 qboolean	NET_EnsureRoute(struct ftenet_connections_s *collection, char *routename, char *host, netadr_t *adr);
+void		NET_TerminateRoute(struct ftenet_connections_s *collection, netadr_t *adr);
 void		NET_PrintConnectionsStatus(struct ftenet_connections_s *collection);
 
 enum addressscope_e
@@ -164,6 +166,7 @@ enum addressscope_e
 enum addressscope_e NET_ClassifyAddress(netadr_t *adr, const char **outdesc);
 
 qboolean NET_AddrIsReliable(netadr_t *adr);	//hints that the protocol is reliable. if so, we don't need to wait for acks
+qboolean	NET_IsEncrypted(netadr_t *adr);
 qboolean	NET_CompareAdr (netadr_t *a, netadr_t *b);
 qboolean	NET_CompareBaseAdr (netadr_t *a, netadr_t *b);
 void		NET_AdrToStringResolve (netadr_t *adr, void (*resolved)(void *ctx, void *data, size_t a, size_t b), void *ctx, size_t a, size_t b);
@@ -202,7 +205,10 @@ void NET_DTLS_Timeouts(struct ftenet_connections_s *col);
 extern cvar_t dtls_psk_hint, dtls_psk_user, dtls_psk_key;
 #endif
 #ifdef SUPPORT_ICE
-neterr_t ICE_SendPacket(struct ftenet_connections_s *col, size_t length, const void *data, netadr_t *to);
+neterr_t ICE_SendPacket(size_t length, const void *data, netadr_t *to);
+void ICE_Terminate(netadr_t *to); //if we kicked the client/etc, kill their ICE too.
+qboolean ICE_IsEncrypted(netadr_t *to);
+void ICE_Init(void);
 #endif
 extern cvar_t timeout;
 extern cvar_t tls_ignorecertificateerrors;	//evil evil evil.
@@ -293,7 +299,7 @@ void Net_Master_Init(void);
 
 void Netchan_Init (void);
 int Netchan_Transmit (netchan_t *chan, int length, qbyte *data, int rate);
-void Netchan_OutOfBand (netsrc_t sock, netadr_t *adr, int length, qbyte *data);
+void Netchan_OutOfBand (netsrc_t sock, netadr_t *adr, int length, const qbyte *data);
 void VARGS Netchan_OutOfBandPrint (netsrc_t sock, netadr_t *adr, char *format, ...) LIKEPRINTF(3);
 void VARGS Netchan_OutOfBandTPrintf (netsrc_t sock, netadr_t *adr, int language, translation_t text, ...);
 qboolean Netchan_Process (netchan_t *chan);

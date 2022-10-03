@@ -697,7 +697,7 @@ QCC_opcode_t pr_opcodes[] =
 {7, "-",	"SUB_I64",		PC_ADDSUB,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
 {7, "*",	"MUL_I64",		PC_MULDIV,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
 {7, "/",	"DIV_I64",		PC_MULDIV,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
-{7, "&",	"BITAND_L",		PC_BITAND,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
+{7, "&",	"BITAND_I64",	PC_BITAND,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
 {7, "|",	"BITOR_I64",	PC_BITOR,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
 {7, "^",	"BITXOR_I64",	PC_BITXOR,	ASSOC_LEFT,		&type_int64,		&type_int64,		&type_int64,	OPF_STD},
 {7, "<<",	"LSHIFT_I64I",	PC_SHIFT,	ASSOC_LEFT,		&type_int64,		&type_integer,		&type_int64,	OPF_STD},
@@ -1542,82 +1542,79 @@ static pbool QCC_OPCodeValidForTarget(qcc_targetformat_t targfmt, unsigned int q
 		case OP_STORE_P:	//was omitted.
 			return (qcc_targetversion>=12901);
 
-		//maths and conditionals (simple opcodes that read from specific globals and write to a global)
+//		case OP_STORE_I:
 		case OP_ADD_I:
 		case OP_ADD_FI:
+//		case OP_ADD_IF:
 		case OP_SUB_I:
 		case OP_SUB_FI:
-		case OP_MUL_I:
-		case OP_MUL_FI:
-		case OP_MUL_VI:
-		case OP_DIV_VF:
-		case OP_DIV_I:
-		case OP_DIV_FI:
-		case OP_BITAND_I:
-		case OP_BITOR_I:
-		case OP_BITAND_IF:
-		case OP_BITOR_IF:
-		case OP_GE_I:
-		case OP_LE_I:
-		case OP_GT_I:
-		case OP_LT_I:
-		case OP_AND_I:
-		case OP_OR_I:
-		case OP_GE_IF:
-		case OP_LE_IF:
-		case OP_GT_IF:
-		case OP_LT_IF:
-		case OP_AND_IF:
-		case OP_OR_IF:
-		case OP_GE_FI:
-		case OP_LE_FI:
-		case OP_GT_FI:
-		case OP_LT_FI:
-		case OP_AND_FI:
-		case OP_OR_FI:
-		case OP_NOT_I:
-		case OP_EQ_I:
-		case OP_EQ_IF:
-		case OP_EQ_FI:
-		case OP_NE_I:
-		case OP_NE_IF:
-		case OP_NE_FI:
+//		case OP_SUB_IF:
 		case OP_CONV_ITOF:
 		case OP_CONV_FTOI:
-			return true;
-
-		//stores into a pointer (generated from 'ent.field=XXX')
-		case OP_STOREP_I:	//no worse than the other OP_STOREP_X functions
-		//reads from an entity field
 		case OP_LOAD_I:		//no worse than the other OP_LOAD_X functions.
-			return true;
-
-		case OP_BOUNDCHECK:
-			return true;
-
-		//stores into the globals array.
-		//they can change any global dynamically, but thats supposedly no real security risk.
-		case OP_GSTOREP_I:
+		case OP_STOREP_I:	//no worse than the other OP_STOREP_X functions
+		case OP_BITAND_I:
+		case OP_BITOR_I:
+		case OP_MUL_I:
+		case OP_DIV_I:
+		case OP_EQ_I:
+		case OP_NE_I:
+		case OP_NOT_I:
+		case OP_DIV_VF:
+//		case OP_STORE_P:	//was omitted.
+		case OP_LE_I:
+		case OP_GE_I:
+		case OP_LT_I:
+		case OP_GT_I:
+		case OP_LE_IF:
+		case OP_GE_IF:
+		case OP_LT_IF:
+		case OP_GT_IF:
+		case OP_LE_FI:
+		case OP_GE_FI:
+		case OP_LT_FI:
+		case OP_GT_FI:
+		case OP_EQ_IF:
+		case OP_EQ_FI:
+//		case OP_MUL_IF:
+		case OP_MUL_FI:
+		case OP_MUL_VI:
+//		case OP_DIV_IF:
+		case OP_DIV_FI:
+		case OP_BITAND_IF:
+		case OP_BITOR_IF:
+//		case OP_BITAND_FI:
+//		case OP_BITOR_FI:
+		case OP_AND_I:
+		case OP_OR_I:
+		case OP_AND_IF:
+		case OP_OR_IF:
+		case OP_AND_FI:
+		case OP_OR_FI:
+		case OP_NE_IF:
+		case OP_NE_FI:
+		case OP_GSTOREP_I:		//stores into the globals array, they can change any global dynamically, but thats supposedly no real security risk.
 		case OP_GSTOREP_F:
 		case OP_GSTOREP_ENT:
 		case OP_GSTOREP_FLD:
 		case OP_GSTOREP_S:
 		case OP_GSTOREP_FNC:
 		case OP_GSTOREP_V:
-			return true;
-
-		//this opcode looks weird
-		case OP_GADDRESS://floatc = globals[inta + floatb] (fte does not support)
-			return false;
-
+//		case OP_GADDRESS:
 		case OP_GLOAD_I://c = globals[inta]
 		case OP_GLOAD_F://note: fte does not support these
 		case OP_GLOAD_FLD:
 		case OP_GLOAD_ENT:
 		case OP_GLOAD_S:
 		case OP_GLOAD_FNC:
+		case OP_BOUNDCHECK:
 		case OP_GLOAD_V:
 			return true;
+
+
+		//this opcode looks weird
+		case OP_GADDRESS://floatc = globals[inta + floatb] (fte does not support)
+			return false;
 
 		default:			//anything I forgot to mention is new, and doesn't work in DP that I'm aware of.
 			return false;
@@ -1919,7 +1916,7 @@ Emits a primitive statement, returning the var it places it's value in
 */
 static int QCC_ShouldConvert(QCC_type_t *from, etype_t wanted)
 {
-	if (from->type == ev_boolean)
+	if (from->type == ev_boolean && wanted != ev_boolean)
 		from = from->parentclass;
 
 	/*no conversion needed*/
@@ -1945,6 +1942,31 @@ static int QCC_ShouldConvert(QCC_type_t *from, etype_t wanted)
 
 		if (from->type == ev_integer && wanted == ev_float)
 			return OP_CONV_ITOF;
+
+		if ((from->type == ev_integer||from->type == ev_uint) && (wanted == ev_integer||wanted == ev_uint))
+			return 0;
+		if ((from->type == ev_int64||from->type == ev_uint64) && (wanted == ev_int64||wanted == ev_uint64))
+			return 0;
+		if ((from->type == ev_int64||from->type == ev_uint64) && (wanted == ev_integer||wanted == ev_uint))
+			return OP_CONV_I64I;
+		if ((from->type == ev_integer) && (wanted == ev_int64 || wanted == ev_uint64))
+			return OP_CONV_II64;
+		if (from->type == ev_uint && (wanted == ev_int64 || wanted == ev_uint64))
+			return OP_CONV_UI64;
+
+		if (from->type == ev_float && wanted == ev_double)
+			return OP_CONV_FD;
+		if (from->type == ev_double && wanted == ev_float)
+			return OP_CONV_DF;
+
+		if ((from->type == ev_int64||from->type == ev_uint64) && wanted == ev_float)
+			return OP_CONV_I64F;
+		if (from->type == ev_float && (wanted == ev_int64 || wanted == ev_uint64))
+			return OP_CONV_FI64;
+		if ((from->type == ev_int64||from->type == ev_uint64) && wanted == ev_double)
+			return OP_CONV_I64D;
+		if (from->type == ev_double && (wanted == ev_int64||wanted == ev_uint64))
+			return OP_CONV_DI64;
 	
 		if (from->type == ev_float && wanted == ev_vector)
 			return OP_MUL_FV;
@@ -2021,7 +2043,7 @@ static QCC_sref_t QCC_SupplyConversion(QCC_sref_t  var, etype_t wanted, pbool fa
 		{
 			if (flag_laxcasts)
 			{
-				QCC_PR_ParseWarning(WARN_LAXCAST, "Implicit type mismatch. Needed %s, got %s.", basictypenames[wanted], basictypenames[var.cast->type]);
+				QCC_PR_ParseWarning(WARN_LAXCAST, "Implicit type mismatch. Needed %s%s%s, got %s%s%s.", col_type,basictypenames[wanted],col_none, col_type,basictypenames[var.cast->type],col_none);
 				QCC_PR_ParsePrintSRef(WARN_LAXCAST, var);
 			}
 			else
@@ -3946,10 +3968,13 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			}
 			else
 			{
-				QCC_PR_ParseWarning(WARN_DENORMAL, "OP_ADD_EF: denormals are unsafe");
 				var_c = QCC_PR_EmulationFunc(nextent);
 				if (!var_c.cast)
-					QCC_PR_ParseError(0, "the nextent builtin is not defined");
+				{
+					QCC_PR_ParseWarning(0, "the nextent builtin is not defined");
+					goto badopcode;
+				}
+				QCC_PR_ParseWarning(WARN_DENORMAL, "OP_ADD_EF: denormals are unsafe");
 				var_c = QCC_PR_GenerateFunctionCall1 (nullsref, var_c, QCC_MakeIntConst(0), type_entity);
 				var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_FTOI], var_b, nullsref, NULL, flags&STFL_PRESERVEB);
 				var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_MUL_F], var_c, var_b, NULL, 0);
@@ -3967,7 +3992,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				var_c = QCC_PR_EmulationFunc(nextent);
 				if (!var_c.cast)
-					QCC_PR_ParseError(0, "the nextent builtin is not defined");
+				{
+					QCC_PR_ParseWarning(0, "the nextent builtin is not defined");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall1 (nullsref, var_c, QCC_MakeIntConst(0), type_entity);
 				var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_MUL_I], var_c, var_b, NULL, flags&STFL_PRESERVEB);
 				flags&=~STFL_PRESERVEB;
@@ -4034,7 +4062,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(BitandInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "BitandInt function not defined: cannot emulate int&int");
+				{
+					QCC_PR_ParseWarning(0, "BitandInt function not defined: cannot emulate int&int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4044,7 +4075,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(BitorInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "BitorInt function not defined: cannot emulate int|int");
+				{
+					QCC_PR_ParseWarning(0, "BitorInt function not defined: cannot emulate int|int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4070,7 +4104,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(AddInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "AddInt function not defined: cannot emulate int+int");
+				{
+					QCC_PR_ParseWarning(0, "AddInt function not defined: cannot emulate int+int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4158,7 +4195,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(ModVec);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "ModVec function not defined: cannot emulate vector%%vector");
+				{
+					QCC_PR_ParseWarning(0, "ModVec function not defined: cannot emulate vector%%vector");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_vector, var_b, type_vector);
 				var_c.cast = type_vector;
 				return var_c;
@@ -4168,7 +4208,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(SubInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "SubInt function not defined: cannot emulate int-int");
+				{
+					QCC_PR_ParseWarning(0, "SubInt function not defined: cannot emulate int-int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4178,7 +4221,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(MulInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "MulInt function not defined: cannot emulate int*int");
+				{
+					QCC_PR_ParseWarning(0, "MulInt function not defined: cannot emulate int*int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4188,7 +4234,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(DivInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "DivInt function not defined: cannot emulate int/int");
+				{
+					QCC_PR_ParseWarning(0, "DivInt function not defined: cannot emulate int/int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_integer, var_b, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4206,7 +4255,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(pow);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "pow function not defined: cannot emulate float*^float");
+				{
+					QCC_PR_ParseWarning(0, "pow function not defined: cannot emulate float*^float");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_float, var_b, type_float);
 				var_c.cast = type_float;
 				return var_c;
@@ -4216,7 +4268,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(pow);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "pow function not defined: cannot emulate float*^float");
+				{
+					QCC_PR_ParseWarning(0, "pow function not defined: cannot emulate float*^float");
+					goto badopcode;
+				}
 				var_a = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_FTOI], var_a, nullsref, NULL, flags&STFL_PRESERVEA);
 				var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_FTOI], var_b, nullsref, NULL, (flags&STFL_PRESERVEB)?STFL_PRESERVEA:0);
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_float, var_b, type_float);
@@ -4228,7 +4283,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(pow);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "pow function not defined: cannot emulate float*^int");
+				{
+					QCC_PR_ParseWarning(0, "pow function not defined: cannot emulate float*^int");
+					goto badopcode;
+				}
 				var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_FTOI], var_b, nullsref, NULL, (flags&STFL_PRESERVEB)?STFL_PRESERVEA:0);
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_float, var_b, type_float);
 				var_c.cast = type_float;
@@ -4239,7 +4297,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(pow);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "pow function not defined: cannot emulate int*^float");
+				{
+					QCC_PR_ParseWarning(0, "pow function not defined: cannot emulate int*^float");
+					goto badopcode;
+				}
 				var_a = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_FTOI], var_a, nullsref, NULL, flags&STFL_PRESERVEA);
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_float, var_b, type_float);
 				var_c.cast = type_float;
@@ -4370,7 +4431,9 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(BitxorInt);
 				if (!fnc.cast)
 				{
-					QCC_PR_ParseError(0, "BitxorInt function not defined: cannot emulate int^int");
+					QCC_PR_ParseWarning(0, "BitxorInt function not defined: cannot emulate int^int");
+					goto badopcode;
+
 					var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_BITNOT_I], var_b, nullsref, NULL, STFL_PRESERVEA);
 					var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_BITAND_I], var_a, var_c, NULL, STFL_PRESERVEA);
 					var_a = QCC_PR_StatementFlags(&pr_opcodes[OP_BITNOT_I], var_a, nullsref, NULL, 0);
@@ -4490,7 +4553,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(SubInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "SubInt function not defined: cannot emulate ~int");
+				{
+					QCC_PR_ParseWarning(0, "SubInt function not defined: cannot emulate ~int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, QCC_MakeIntConst(~0), type_integer, var_a, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4886,7 +4952,13 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(LShiftInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "LShiftInt function not defined: cannot emulate int<<int");
+				{
+					const QCC_eval_t *eval_b = QCC_SRef_EvalConst(var_b);
+					if (eval_b)
+						return QCC_PR_StatementFlags(&pr_opcodes[OP_MUL_I], var_a, QCC_MakeIntConst(1<<eval_b->_int), NULL, flags&STFL_PRESERVEB);
+					QCC_PR_ParseWarning(0, "LShiftInt function not defined: cannot emulate int<<int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, QCC_MakeIntConst(~0), type_integer, var_a, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4896,7 +4968,13 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(RShiftInt);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "RShiftInt function not defined: cannot emulate int>>int");
+				{
+					const QCC_eval_t *eval_b = QCC_SRef_EvalConst(var_b);
+					if (eval_b)
+						return QCC_PR_StatementFlags(&pr_opcodes[OP_DIV_I], var_a, QCC_MakeIntConst(1<<eval_b->_int), NULL, flags&STFL_PRESERVEB);
+					QCC_PR_ParseWarning(0, "RShiftInt function not defined: cannot emulate int>>int");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, QCC_MakeIntConst(~0), type_integer, var_a, type_integer);
 				var_c.cast = type_integer;
 				return var_c;
@@ -4940,8 +5018,8 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 					var_c.cast = *op->type_c;
 					return var_c;
 				}
-				QCC_PR_ParseError(0, "bitshift function not defined: cannot emulate OP_LSHIFT_F*");
-				break;
+				QCC_PR_ParseWarning(0, "bitshift function not defined: cannot emulate OP_LSHIFT_F*");
+				goto badopcode;
 			}
 		case OP_RSHIFT_F:
 			if (QCC_OPCodeValid(&pr_opcodes[OP_RSHIFT_I]))
@@ -4973,18 +5051,22 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 					var_c.cast = *op->type_c;
 					return var_c;
 				}
-				QCC_PR_ParseError(0, "bitshift function not defined: cannot emulate OP_RSHIFT_F*");
-				break;
+				QCC_PR_ParseWarning(0, "bitshift function not defined: cannot emulate OP_RSHIFT_F*");
+				goto badopcode;
 			}
 
 		case OP_BITAND_D:
 			var_a = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_DI64], var_a, nullsref, NULL, flags&STFL_PRESERVEA);
 			var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_DI64], var_b, nullsref, NULL, (flags&STFL_PRESERVEB)?STFL_PRESERVEA:0);
-			return QCC_PR_StatementFlags(&pr_opcodes[OP_BITAND_I64], var_a, var_b, NULL, 0);
+			var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_BITAND_I64], var_a, var_b, NULL, 0);
+			var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_I64D], var_c, nullsref, NULL, 0);	//grr
+			return var_c;
 		case OP_BITOR_D:
 			var_a = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_DI64], var_a, nullsref, NULL, flags&STFL_PRESERVEA);
 			var_b = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_DI64], var_b, nullsref, NULL, (flags&STFL_PRESERVEB)?STFL_PRESERVEA:0);
-			return QCC_PR_StatementFlags(&pr_opcodes[OP_BITOR_I64], var_a, var_b, NULL, 0);
+			var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_BITOR_I64], var_a, var_b, NULL, 0);
+			var_c = QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_I64D], var_c, nullsref, NULL, 0);	//grr
+			return var_c;
 
 		case OP_LOAD_I64:
 			var_a.cast = type_integer;
@@ -5230,7 +5312,10 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			{
 				QCC_sref_t fnc = QCC_PR_EmulationFunc(memgetval);
 				if (!fnc.cast)
-					QCC_PR_ParseError(0, "memgetval function not defined: cannot emulate OP_LOADP_*");
+				{
+					QCC_PR_ParseWarning(0, "memgetval function not defined: cannot emulate OP_LOADP_*");
+					goto badopcode;
+				}
 				var_c = QCC_PR_GenerateFunctionCall2(nullsref, fnc, var_a, type_pointer, QCC_PR_StatementFlags(&pr_opcodes[OP_CONV_ITOF], var_b, nullsref, NULL, (flags&STFL_PRESERVEB)?STFL_PRESERVEA:0), type_float);
 				var_c.cast = *op->type_c;
 				return var_c;
@@ -5294,6 +5379,7 @@ QCC_sref_t QCC_PR_StatementFlags ( QCC_opcode_t *op, QCC_sref_t var_a, QCC_sref_
 			return var_b;
 
 		default:
+		badopcode:
 			if (QCC_OPCodeValidForTarget(QCF_FTE, QCTARGVER_FTE_DEF, op))
 				QCC_PR_ParseWarning(ERR_BADEXTENSION, "Opcode \"%s|%s\" not valid for target. Consider the use of: #pragma target fte", op->name, op->opname);
 			else if (QCC_OPCodeValidForTarget(QCF_FTE, QCTARGVER_FTE_MAX, op))
@@ -6977,12 +7063,12 @@ QCC_sref_t QCC_PR_GenerateFunctionCallRef (QCC_sref_t newself, QCC_sref_t func, 
 			case REF_ARRAY:
 				if (!arglist[i]->index.cast || QCC_SRef_EvalConst(arglist[i]->index))
 					break;	//no problem
-				if (QCC_OPCodeValid(&pr_opcodes[OP_LOADA_V]))
+				if (QCC_OPCodeValid(&pr_opcodes[OP_LOADA_F]))
 				{
 					copyop[2] = OP_LOADA_V;
-//					copyop[1] = OP_LOADA_I64;
+					copyop[1] = OP_LOADA_I64;
 					copyop[0] = OP_LOADA_F;
-					copyop_idx = -1;
+					copyop_idx = -2;	//offset the base ref
 					copyop_index = arglist[i]->index;
 					copyop_index = QCC_SupplyConversion(copyop_index, ev_integer, true);
 					sref = arglist[i]->base;
@@ -7003,6 +7089,11 @@ QCC_sref_t QCC_PR_GenerateFunctionCallRef (QCC_sref_t newself, QCC_sref_t func, 
 				copyop[0] = OP_LOAD_F;
 				copyop_index = arglist[i]->index;
 				copyop_idx = -1;
+				if (!QCC_SRef_EvalConst(copyop_index))
+				{	//if its a variable then its probably not a proper field (which has extra field ref values following it). do the shitty thing and make assumptions about ordering. :(
+					copyop_index.cast = type_integer;
+					copyop_idx = OP_ADD_I;
+				}
 				sref = arglist[i]->base;
 				break;
 			case REF_POINTER:
@@ -7050,6 +7141,11 @@ QCC_sref_t QCC_PR_GenerateFunctionCallRef (QCC_sref_t newself, QCC_sref_t func, 
 					{	//with this mode, the base reference can just be updated. no mess with the index.
 						newindex = copyop_index;
 						newindex.ofs += ofs;
+						QCC_UnFreeTemp(copyop_index);
+					}
+					else if (copyop_idx == -2)
+					{	//with this mode, the base reference can just be updated. no mess with the index.
+						newindex = copyop_index;
 						QCC_UnFreeTemp(copyop_index);
 					}
 					else if (copyop_idx == OP_ADD_I)
@@ -7120,30 +7216,30 @@ QCC_sref_t QCC_PR_GenerateFunctionCallRef (QCC_sref_t newself, QCC_sref_t func, 
 					{
 						if (ofs%3)
 							parm--;
-						if (parm+ofs/3>=MAX_PARMS)
+						if (parm>=MAX_PARMS)
 						{
-							fparm = extra_parms[parm+ofs/3 - MAX_PARMS];
+							fparm = extra_parms[parm - MAX_PARMS];
 							if (!fparm.cast)
 							{
 								char name[128];
-								QC_snprintfz(name, sizeof(name), "$parm%u", parm+ofs/3);
-								fparm = extra_parms[parm+ofs/3 - MAX_PARMS] = QCC_PR_GetSRef(type_vector, name, NULL, true, 0, GDF_STRIP);
+								QC_snprintfz(name, sizeof(name), "$parm%u", parm);
+								fparm = extra_parms[parm - MAX_PARMS] = QCC_PR_GetSRef(type_vector, name, NULL, true, 0, GDF_STRIP);
 							}
 							else
 								QCC_ForceUnFreeDef(fparm.sym);
 						}
 						else
 						{
-							fparm.sym = &def_parms[parm+ofs/3];
+							fparm.sym = &def_parms[parm];
 							fparm.cast = type_vector;
 							QCC_ForceUnFreeDef(fparm.sym);
 						}
-						fparm.ofs = ofs;
-//						if (!fparm.ofs)
-//						{
+						fparm.ofs = ofs%3;
+						if (!fparm.ofs)
+						{
 							args[parm].firststatement = numstatements;
 							args[parm].ref = fparm;
-//						}
+						}
 						parm++;
 
 						if (ofs+asz == arglist[i]->cast->size)
@@ -7152,7 +7248,15 @@ QCC_sref_t QCC_PR_GenerateFunctionCallRef (QCC_sref_t newself, QCC_sref_t func, 
 							QCC_FreeTemp(copyop_index);
 						}
 						QCC_FreeTemp(newindex);
-						QCC_PR_SimpleStatement(&pr_opcodes[copyop[asz-1]], src, newindex, fparm, false);
+
+						if (copyop_idx == -2)
+						{	//with this mode, the base reference can just be updated. no mess with the index.
+							src.ofs += ofs;
+							QCC_PR_SimpleStatement(&pr_opcodes[copyop[asz-1]], src, newindex, fparm, false);
+							src.ofs -= ofs;
+						}
+						else
+							QCC_PR_SimpleStatement(&pr_opcodes[copyop[asz-1]], src, newindex, fparm, false);
 					}
 
 					ofs += asz;
@@ -8917,7 +9021,7 @@ QCC_ref_t *QCC_PR_ParseRefArrayPointer (QCC_ref_t *retbuf, QCC_ref_t *r, pbool a
 	QCC_type_t *t;
 	QCC_sref_t idx;
 	QCC_sref_t tmp;
-	pbool allowarray;
+	pbool allowarray, arraytype;
 	unsigned int arraysize;
 	unsigned int rewindpoint = numstatements;
 	pbool dereference = false;
@@ -8932,11 +9036,14 @@ QCC_ref_t *QCC_PR_ParseRefArrayPointer (QCC_ref_t *retbuf, QCC_ref_t *r, pbool a
 	while(1)
 	{
 		allowarray = false;
+		arraytype = (t->type == ev_union && t->num_parms == 1 && !t->params[0].paramname);	//FIXME
+		if (arraytype)
+			arraytype = true;
 		if (idx.cast)
 			allowarray = arraysize>0 ||
 						(t->type == ev_vector) ||
 						(t->type == ev_field && t->aux_type->type == ev_vector) ||
-						(t->type == ev_union && t->num_parms == 1 && !t->params[0].paramname && !arraysize);
+						(arraytype && !arraysize);
 		else if (!idx.cast)
 		{
 			allowarray = arraysize>0 ||
@@ -8944,6 +9051,7 @@ QCC_ref_t *QCC_PR_ParseRefArrayPointer (QCC_ref_t *retbuf, QCC_ref_t *r, pbool a
 						(t->type == ev_string) ||	//strings are effectively pointers
 						(t->type == ev_vector) ||	//vectors are mini arrays
 						(t->type == ev_field && t->aux_type->type == ev_vector) ||	//as are field vectors
+						(arraytype && !arraysize) ||
 						(!arraysize&&t->accessors);	//custom accessors
 		}
 
@@ -8968,7 +9076,7 @@ QCC_ref_t *QCC_PR_ParseRefArrayPointer (QCC_ref_t *retbuf, QCC_ref_t *r, pbool a
 			/*if its a pointer that got dereferenced, follow the type*/
 			if (!idx.cast && t->type == ev_pointer && !arraysize)
 				t = t->aux_type;
-			else if (idx.cast && (t->type == ev_union && t->num_parms == 1 && !t->params[0].paramname && !arraysize))
+			else if (idx.cast && (arraytype && !arraysize))
 			{
 				arraysize = t->params[0].arraysize;
 				t = t->params[0].type;
@@ -9116,6 +9224,17 @@ fieldarrayindex:
 			QCC_FreeTemp(r->index);
 			QCC_FreeTemp(idx);
 			return QCC_PR_BuildRef(retbuf, REF_GLOBAL, QCC_MakeIntConst(arraysize), nullsref, type_integer, true);
+		}
+		else if (arraytype && (QCC_PR_CheckToken(".") || QCC_PR_CheckToken("->")))
+		{
+			//the only field of an array type is the 'length' property.
+			//if we calculated offsets etc, discard those statements.
+			numstatements = rewindpoint;
+			QCC_PR_Expect("length");
+			QCC_FreeTemp(r->base);
+			QCC_FreeTemp(r->index);
+			QCC_FreeTemp(idx);
+			return QCC_PR_BuildRef(retbuf, REF_GLOBAL, QCC_MakeIntConst(t->params[0].arraysize), nullsref, type_integer, true);
 		}
 		else if (t->type == ev_vector && !arraysize && !t->accessors && QCC_PR_CheckToken("."))
 		{
@@ -9723,6 +9842,49 @@ QCC_ref_t	*QCC_PR_ParseRefValue (QCC_ref_t *refbuf, QCC_type_t *assumeclass, pbo
 	return QCC_PR_ParseRefArrayPointer(refbuf, QCC_DefToRef(refbuf, d), allowarrayassign, makearraypointers);
 }
 
+//true if its NOT 0
+QCC_sref_t QCC_PR_GenerateLogicalTruth(QCC_sref_t e, const char *errormessage)
+{
+	etype_t	t;
+	QCC_type_t *type = e.cast;
+	while(type->type == ev_accessor || type->type == ev_boolean)
+		type = type->parentclass;
+	t = type->type;
+	if (t == ev_float)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_F], e, QCC_MakeFloatConst(0), NULL);
+	else if (t == ev_string)
+		return QCC_PR_Statement (&pr_opcodes[flag_brokenifstring?OP_NE_E:OP_NE_S], e, QCC_MakeIntConst(0), NULL);
+	else if (t == ev_entity)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_E], e, QCC_MakeIntConst(0), NULL);
+	else if (t == ev_vector)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_V], e, QCC_MakeVectorConst(0,0,0), NULL);
+	else if (t == ev_function)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_FNC], e, QCC_MakeIntConst(0), NULL);
+	else if (t == ev_integer || t == ev_uint)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_I], e, QCC_MakeIntConst(0), NULL);	//functions are integer values too.
+	else if (t == ev_pointer)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_I], e, QCC_MakeIntConst(0), NULL);	//Pointers are too.
+	else if (t == ev_double)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_D], e, QCC_MakeDoubleConst(0), NULL);
+	else if (t == ev_int64)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_I64], e, QCC_MakeInt64Const(0), NULL);
+	else if (t == ev_uint64)
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_U64], e, QCC_MakeUInt64Const(0), NULL);
+	else if (t == ev_void && flag_laxcasts)
+	{
+		QCC_PR_ParseWarning(WARN_LAXCAST, errormessage, "void");
+		return QCC_PR_Statement (&pr_opcodes[OP_NE_F], e, QCC_MakeFloatConst(0), NULL);
+	}
+	else
+	{
+		char etype[256];
+		TypeName(e.cast, etype, sizeof(etype));
+
+		QCC_PR_ParseError (ERR_BADNOTTYPE, errormessage, etype);
+		return nullsref;
+	}
+}
+
 QCC_sref_t QCC_PR_GenerateLogicalNot(QCC_sref_t e, const char *errormessage)
 {
 	etype_t	t;
@@ -9812,11 +9974,12 @@ static QCC_sref_t QCC_TryEvaluateCast(QCC_sref_t src, QCC_type_t *cast, pbool im
 	QCC_type_t *tmp;
 	int totype;
 
-	while (src.cast->type == ev_boolean)
-		src.cast = src.cast->parentclass;
-	for (tmp = cast; tmp->type == ev_accessor || tmp->type == ev_boolean; tmp = tmp->parentclass)
+	for (tmp = cast; tmp->type == ev_accessor; tmp = tmp->parentclass)
 		;
 	totype = tmp->type;
+
+	while (src.cast->type == ev_boolean)
+		src.cast = src.cast->parentclass;
 
 	/*you may cast from a type to itself*/
 	if (!typecmp(src.cast, cast))
@@ -9832,6 +9995,12 @@ static QCC_sref_t QCC_TryEvaluateCast(QCC_sref_t src, QCC_type_t *cast, pbool im
 		else
 			src = QCC_MakeIntConst(0);
 		src.cast = cast;
+	}
+	else if (totype == ev_boolean)
+	{
+		src = QCC_PR_GenerateLogicalTruth(src, "cast to boolean");
+		//src will often be a float(eg:NQ_F) with a bint totype. make sure we evaluate it fully.
+		return QCC_TryEvaluateCast(src, tmp->parentclass, implicit);
 	}
 	/*cast from int->float will convert*/
 	else if (totype == ev_float && (src.cast->type == ev_uint || src.cast->type == ev_integer || (src.cast->type == ev_entity && !implicit)))
@@ -10594,6 +10763,9 @@ static void QCC_StoreToSRef(QCC_sref_t dest, QCC_sref_t source, QCC_type_t *type
 	case ev_field:
 		QCC_FreeTemp(QCC_PR_StatementFlags(&pr_opcodes[OP_STORE_FLD], source, dest, NULL, flags));
 		break;
+	case ev_boolean:
+		QCC_StoreToSRef(dest, source, type->parentclass, preservesource, preservedest);
+		return;
 	case ev_integer:
 	case ev_uint:
 		QCC_FreeTemp(QCC_PR_StatementFlags(&pr_opcodes[OP_STORE_I], source, dest, NULL, flags));
@@ -11154,6 +11326,13 @@ QCC_sref_t QCC_LoadFromArray(QCC_sref_t base, QCC_sref_t index, QCC_type_t *t, p
 						base.ofs += 3;
 						r.ofs+=3;
 					}
+					else if (t->size - i >= 2 && QCC_OPCodeValid(&pr_opcodes[OP_LOADA_I64]))
+					{
+						QCC_PR_SimpleStatement(&pr_opcodes[OP_LOADA_I64], base, index, r, false);
+						i+=2;
+						base.ofs += 2;
+						r.ofs+=2;
+					}
 					else
 					{
 						QCC_PR_SimpleStatement(&pr_opcodes[OP_LOADA_I], base, index, r, false);
@@ -11617,8 +11796,26 @@ QCC_sref_t QCC_StoreSRefToRef(QCC_ref_t *dest, QCC_sref_t source, pbool readable
 			char typeb[256];
 			if (source.cast->type == ev_variant || dest->cast->type == ev_variant)
 				QCC_PR_ParseWarning(WARN_IMPLICITVARIANTCAST, "type mismatch: %s %s to %s %s.%s", typea, QCC_GetSRefName(source), typeb, QCC_GetSRefName(dest->base), QCC_GetSRefName(dest->index));
-			else if ((dest->cast->type == ev_float || dest->cast->type == ev_integer) && (source.cast->type == ev_float || source.cast->type == ev_integer))
-				source = QCC_SupplyConversion(source, dest->cast->type, true);
+			else if ((dest->cast->type == ev_float ||
+					 dest->cast->type == ev_integer ||
+					 dest->cast->type == ev_uint ||
+					 dest->cast->type == ev_int64 ||
+					 dest->cast->type == ev_uint64 ||
+					 dest->cast->type == ev_double ||
+					 dest->cast->type == ev_boolean) && (
+					 source.cast->type == ev_float ||
+					 source.cast->type == ev_integer ||
+					 source.cast->type == ev_uint ||
+					 source.cast->type == ev_int64 ||
+					 source.cast->type == ev_uint64 ||
+					 source.cast->type == ev_double ||
+					 source.cast->type == ev_boolean))
+			{
+				if (dest->cast->type == ev_boolean)
+					source = QCC_SupplyConversion(QCC_PR_GenerateLogicalTruth(source, "cannot convert to boolean"), dest->cast->parentclass->type, true);
+				else
+					source = QCC_SupplyConversion(source, dest->cast->type, true);
+			}
 			else
 			{
 				TypeName(source.cast, typea, sizeof(typea));
@@ -11960,6 +12157,14 @@ static QCC_opcode_t *QCC_PR_ChooseOpcode(QCC_sref_t lhs, QCC_sref_t rhs, QCC_opc
 //			type_a = lhs.cast->type;
 		}
 	}
+
+	if (type_a == ev_boolean)
+	{
+		lhs.cast = lhs.cast->parentclass;
+		type_a = lhs.cast->type;
+	}
+	if (rhs.cast->type == ev_boolean)
+		rhs.cast = rhs.cast->parentclass;
 
 	if (op->name[0] == '.')// field access gets type from field
 	{
@@ -13429,16 +13634,11 @@ void QCC_PR_ParseStatement (void)
 		QCC_PR_ParseDefs (NULL, true);
 		return;
 	}
-	if (QCC_PR_CheckKeyword(keyword_typedef, "typedef"))
-	{
-		QCC_PR_ParseTypedef();
-		return;
-	}
 
 	if (pr_token_type == tt_name)
 	{
 		QCC_type_t *type = QCC_TypeForName(pr_token);
-		if (type && type->typedefed)
+		if (type)
 		{
 			if (strncmp(pr_file_p, "::", 2))
 			{
@@ -13461,8 +13661,10 @@ void QCC_PR_ParseStatement (void)
 			(keyword_int && !STRCMP ("int", pr_token)) ||
 			(keyword_short && !STRCMP ("short", pr_token)) ||
 			(keyword_char && !STRCMP ("char", pr_token)) ||
+			(				!STRCMP ("_Bool", pr_token)) ||
 			(keyword_static && !STRCMP ("static", pr_token)) ||
 			(keyword_class && !STRCMP ("class", pr_token)) ||
+			(keyword_typedef && !STRCMP ("typedef", pr_token)) ||
 			(keyword_const && !STRCMP ("const", pr_token)))
 		{
 			QCC_PR_ParseDefs (NULL, true);
@@ -15536,6 +15738,11 @@ QCC_function_t *QCC_PR_ParseImmediateStatements (QCC_def_t *def, QCC_type_t *typ
 						QCC_FreeTemp(QCC_PR_Statement (&pr_opcodes[OP_STORE_V], extra_parms[p - MAX_PARMS], parm, NULL));
 						parm.ofs+=3;
 					}
+					else if (type->params[u].type->size-o*3 == 2 && QCC_OPCodeValid(&pr_opcodes[OP_STORE_I64]))
+					{
+						QCC_FreeTemp(QCC_PR_Statement (&pr_opcodes[OP_STORE_I64], extra_parms[p - MAX_PARMS], parm, NULL));
+						parm.ofs+=2;
+					}
 					else if (type->params[u].type->size-o*3 == 2)
 					{
 						QCC_sref_t t = extra_parms[p - MAX_PARMS];
@@ -16407,6 +16614,9 @@ QCC_def_t *QCC_PR_DummyDef(QCC_type_t *type, const char *name, QCC_function_t *s
 					break;
 				case ev_void:
 					break;
+				case ev_typedef:	//invalid
+					QCC_PR_ParseWarning(ERR_INTERNAL, "unexpected typedef");
+					break;
 				}
 			}
 		}
@@ -16865,6 +17075,9 @@ static QCC_def_t *QCC_PR_DummyFieldDef(QCC_type_t *type, QCC_function_t *scope, 
 					break;
 				case ev_void:
 					break;
+				case ev_typedef:	//invalid
+					QCC_PR_ParseWarning(ERR_INTERNAL, "unexpected typedef");
+					break;
 				}
 				if (*fieldofs > maxfield)
 					maxfield = *fieldofs;
@@ -16982,6 +17195,20 @@ finalnotconst:
 				i+=3;
 				def.ofs += 3;
 				rhs.ofs += 3;
+			}
+			else if (type->size - i >= 2)
+			{
+				rhs.cast = def.cast = type_vector;
+				if (type->size - i == 2)
+				{
+					QCC_FreeTemp(QCC_PR_StatementFlags(&pr_opcodes[OP_STORE_I64], nullsource?QCC_MakeVectorConst(0,0,0):rhs, def, NULL, STFL_PRESERVEB));
+					return ret;
+				}
+				else
+					QCC_FreeTemp(QCC_PR_StatementFlags(&pr_opcodes[OP_STORE_I64], nullsource?QCC_MakeVectorConst(0,0,0):rhs, def, NULL, STFL_PRESERVEA|STFL_PRESERVEB));
+				i+=2;
+				def.ofs += 2;
+				rhs.ofs += 2;
 			}
 			else
 			{
@@ -17103,7 +17330,6 @@ QCC_sref_t QCC_PR_ParseInitializerType_Internal(int arraysize, QCC_def_t *basede
 	}
 	else
 	{
-		pbool isblock;
 		QCC_type_t *type = def.cast;
 		if (type->type == ev_function && pr_token_type == tt_punct)
 		{
@@ -17302,8 +17528,14 @@ QCC_sref_t QCC_PR_ParseInitializerType_Internal(int arraysize, QCC_def_t *basede
 			QCC_PR_Lex();
 			QCC_PR_Expect(")");
 		}
-		else if ((isblock=(type->type == ev_struct || type->type == ev_union) && QCC_PR_CheckToken("{"))
-				|| (type->type == ev_union && type->num_parms == 1 && !type->params->paramname))
+		else if (type->type == ev_union && type->num_parms == 1 && !type->params->paramname)
+		{	//weird typedefed array hack
+			def.cast = (type)->params[0].type;
+			ret &= QCC_PR_ParseInitializerType((type)->params[0].arraysize, basedef, def, flags);
+			def.cast = type;
+			return ret?def:nullsref;
+		}
+		else if ((type->type == ev_struct || type->type == ev_union) && QCC_PR_CheckToken("{"))
 		{
 			//structs go recursive
 			QCC_type_t *parenttype;
@@ -17375,8 +17607,6 @@ QCC_sref_t QCC_PR_ParseInitializerType_Internal(int arraysize, QCC_def_t *basede
 					ret &= QCC_PR_ParseInitializerType((type)->params[partnum].arraysize, basedef, def, flags);
 					if (isunion || !QCC_PR_CheckToken(","))
 					{
-						if (!isblock)
-							break;
 						QCC_PR_Expect("}");
 						break;
 					}
@@ -17752,64 +17982,6 @@ QCC_type_t *QCC_PR_ParseEnum(pbool flags)
 	return enumtype?enumtype:basetype;
 }
 
-void QCC_PR_ParseTypedef(void)
-{
-	QCC_type_t *type = QCC_PR_ParseType(false, false);
-	if (!type)
-	{
-		QCC_PR_ParseError(ERR_NOTATYPE, "typedef found unexpected tokens");
-	}
-	do
-	{
-		char *name;
-		if (QCC_PR_CheckToken(";"))
-			return;
-
-		while (QCC_PR_CheckToken("*"))
-			type = QCC_PointerTypeTo(type);
-
-		if (QCC_PR_CheckToken("("))
-		{	//c-style function pointers are annoying.
-			int levels = 0;
-			while (QCC_PR_CheckToken("*"))
-				levels++;
-			name = QCC_PR_ParseName();
-			QCC_PR_Expect(")");
-
-			//now parse its args
-			QCC_PR_Expect("(");
-			type = QCC_PR_ParseFunctionType(false, type);
-
-			//and bring it to the intended indirection level...
-			while (levels --> 1)
-				type = QCC_PointerTypeTo(type);
-		}
-		else
-			name = QCC_PR_ParseName();
-
-		if (QCC_PR_CheckToken("["))
-		{
-			struct QCC_typeparam_s *param = qccHunkAlloc(sizeof(*param));
-			param->type = type;
-			param->arraysize = QCC_PR_IntConstExpr();
-			type = QCC_PR_NewType(name, ev_union, true);
-			type->params = param;
-			type->num_parms = 1;
-			type->size = param->type->size * param->arraysize;
-			QCC_PR_Expect("]");
-		}
-		else
-		{
-			type = QCC_PR_DuplicateType(type, false);
-			type->name = name;
-			type->typedefed = true;
-			pHash_Add(&typedeftable, name, type, qccHunkAlloc(sizeof(bucket_t)));
-		}
-	} while(QCC_PR_CheckToken(","));
-	QCC_PR_Expect(";");
-	return;
-}
-
 /*
 ================
 PR_ParseDefs
@@ -17827,6 +17999,7 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 	pbool shared=false;
 	pbool isstatic=defaultstatic;
 	pbool externfnc=false;
+	pbool istypedef=false;
 	pbool isconstant = false;
 	pbool isvar = false;
 	pbool isinitialised = false;
@@ -17850,12 +18023,6 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 
 	while (QCC_PR_CheckToken(";"))
 		;
-
-	if (QCC_PR_CheckKeyword (keyword_typedef, "typedef"))
-	{
-		QCC_PR_ParseTypedef();
-		return;
-	}
 
 	if (flag_acc)
 	{
@@ -18015,7 +18182,9 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 
 	while(1)
 	{
-		if (QCC_PR_CheckKeyword(keyword_extern, "extern"))
+		if (QCC_PR_CheckKeyword (keyword_typedef, "typedef"))
+			istypedef=true;
+		else if (QCC_PR_CheckKeyword(keyword_extern, "extern"))
 			externfnc=true;
 		else if (QCC_PR_CheckKeyword(keyword_shared, "shared"))
 		{
@@ -18153,7 +18322,10 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 		type = QCC_PR_ParseFunctionTypeReacc(false, basetype);
 		QCC_PR_Expect(";");
 
-		def = QCC_PR_GetDef (basetype, name, NULL, true, 0, false);
+		if (istypedef)
+			return;
+		else
+			def = QCC_PR_GetDef (basetype, name, NULL, true, 0, false);
 
 		if (autoprototype || dostrip)
 		{	//ignore the code and stuff
@@ -18221,6 +18393,11 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 
 		if (QCC_PR_CheckToken (";"))
 		{
+			if (istypedef)
+			{
+				QCC_PR_ParseWarning(WARN_UNEXPECTEDPUNCT, "typedef defines no types");
+				return;
+			}
 			if (type->type == ev_field && (type->aux_type->type == ev_union || type->aux_type->type == ev_struct))
 			{
 				QCC_PR_ExpandUnionToFields(type, &pr.size_fields);
@@ -18246,7 +18423,7 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 			name = QCC_PR_ParseName ();
 		}
 
-		if (QCC_PR_CheckToken("::") && !classname)
+		if (!istypedef && QCC_PR_CheckToken("::") && !classname)
 		{
 			classname = name;
 			name = QCC_PR_ParseName();
@@ -18264,7 +18441,7 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 			if (QCC_PR_CheckToken("]"))
 			{
 				//FIXME: preprocessor will hate this with a passion.
-				if (QCC_PR_CheckToken("="))
+				if (!istypedef && QCC_PR_CheckToken("="))
 				{
 					QCC_PR_Expect("{");
 					arraysize++;
@@ -18365,8 +18542,55 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 		else
 			defclass = NULL;
 
-		isinitialised = QCC_PR_CheckToken ("=") || ((type->type == ev_function) && (pr_token[0] == '{' || pr_token[0] == '[' || pr_token[0] == ':'));
+		if (istypedef)
+		{
+			QCC_type_t *old;
+			if (externfnc||shared||isconstant||isvar||forceused||dostrip||allowinline||dowrap||doweak||accumulate||aliasof||deprecated
+					||(isstatic && !defaultstatic)
+					||(noref && !defaultnoref)
+					||(nosave && !defaultnosave) )
+				QCC_PR_ParseWarning(ERR_BADEXTENSION, "bad combination of modifiers with typedef (defining %s%s%s)", col_type,name,col_none);
+			if (arraysize)
+			{
+				struct QCC_typeparam_s *param = qccHunkAlloc(sizeof(*param));
+//				QCC_PR_ParseWarning(ERR_BADEXTENSION, "unsupported typedefed array (defining %s%s%s[%i])", col_type,name,col_none, arraysize);
+				param->type = type;
+				param->arraysize = arraysize;
+				param->paramname = NULL;
+				type = QCC_PR_NewType(name, ev_union, true);
+				type->params = param;
+				type->num_parms = 1;
+				type->size = param->type->size * param->arraysize;
+			}
+			else if (dynlength.cast)
+			{
+				QCC_PR_ParseWarning(ERR_BADEXTENSION, "unsupported typedefed array (defining %s%s%s[])", col_type,name,col_none);
+				type = QCC_PointerTypeTo(type);
+			}
 
+			old = QCC_TypeForName(name);
+			if (old && old->scope == pr_scope)
+			{
+				if (typecmp(old, type))
+				{
+					char obuf[1024];
+					char nbuf[1024];
+					QCC_PR_ParseWarning(ERR_NOTATYPE, "Cannot redeclare typedef %s%s%s from %s%s%s to %s%s%s", col_type,name,col_none, col_type,TypeName(old, obuf, sizeof(obuf)),col_none, col_type,TypeName(type, nbuf, sizeof(nbuf)),col_none);
+				}
+			}
+			else
+			{
+				old = type;
+				type = QCC_PR_NewType(name, ev_typedef, true);
+				type->aux_type = old;
+				type->scope = pr_scope;
+			}
+
+			def = NULL;
+			continue;
+		}
+
+		isinitialised = QCC_PR_CheckToken ("=") || ((type->type == ev_function) && (pr_token[0] == '{' || pr_token[0] == '[' || pr_token[0] == ':'));
 
 		gd_flags = 0;
 		if (isstatic)
@@ -18665,10 +18889,10 @@ void QCC_PR_ParseDefs (char *classname, pbool fatal_unused)
 	} while (QCC_PR_CheckToken (","));
 
 	if (type->type == ev_function)
-		QCC_PR_CheckTokenComment (";", &def->comment);
+		QCC_PR_CheckTokenComment (";", def?&def->comment:NULL);
 	else
 	{
-		if (!QCC_PR_CheckTokenComment (";", &def->comment))
+		if (!QCC_PR_CheckTokenComment (";", def?&def->comment:NULL))
 			QCC_PR_ParseWarning(WARN_UNDESIRABLECONVENTION, "Missing semicolon at end of definition");
 	}
 }

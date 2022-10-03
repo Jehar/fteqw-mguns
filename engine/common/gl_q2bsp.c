@@ -220,7 +220,11 @@ extern qbyte *mod_base;
 			dist = plane->dist - dist;						\
 			break;
 
-unsigned char d_q28to24table[1024];
+#ifdef Q2BSPS
+#ifdef HAVE_CLIENT
+static unsigned char q2_palette[256*3];
+#endif
+#endif
 
 
 /*
@@ -1283,7 +1287,7 @@ static qboolean CModQ2_LoadSurfaces (model_t *mod, qbyte *mod_base, lump_t *l)
 
 	return true;
 }
-#ifndef SERVERONLY
+#ifdef HAVE_CLIENT
 static texture_t *Mod_LoadWall(model_t *loadmodel, char *mapname, char *texname, char *shadername, unsigned int imageflags)
 {
 	char name[MAX_QPATH];
@@ -1359,7 +1363,7 @@ static texture_t *Mod_LoadWall(model_t *loadmodel, char *mapname, char *texname,
 
 		tex->srcdata = out = BZ_Malloc(size);
 		tex->srcfmt = TF_MIP4_8PAL24_T255;
-		tex->palette = host_basepal;
+		tex->palette = q2_palette;
 		memcpy(out, (qbyte *)wal + wal->offsets[0], (wal->width>>0)*(wal->height>>0));
 		out += (wal->width>>0)*(wal->height>>0);
 		memcpy(out, (qbyte *)wal + wal->offsets[1], (wal->width>>1)*(wal->height>>1));
@@ -1434,6 +1438,8 @@ static qboolean CModQ2_LoadTexInfo (model_t *mod, qbyte *mod_base, lump_t *l, ch
 			Q_strncatz(sname, "#ALPHA=0.66", sizeof(sname));
 		else if (out->flags & TI_TRANS33)
 			Q_strncatz(sname, "#ALPHA=0.33", sizeof(sname));
+		else if (out->flags & TI_KINGPIN_ALPHATEST) //kingpin...
+			Q_strncatz(sname, "#MASK=0.666#MASKLT", sizeof(sname));
 		else if (out->flags & (TI_WARP))
 			Q_strncatz(sname, "#ALPHA=1", sizeof(sname));
 		if (in->nexttexinfo != -1)	//used to ensure non-looping and looping don't conflict and get confused.
@@ -4031,7 +4037,7 @@ static int CM_GetQ2Palette (void)
 		Con_Printf (CON_WARNING "Couldn't find pics/colormap.pcx\n");
 		return -1;
 	}
-	if (!ReadPCXPalette(f, sz, d_q28to24table))
+	if (!ReadPCXPalette(f, sz, q2_palette))
 	{
 		Con_Printf (CON_WARNING "Couldn't read pics/colormap.pcx\n");
 		FS_FreeFile(f);
@@ -4040,14 +4046,14 @@ static int CM_GetQ2Palette (void)
 	FS_FreeFile(f);
 
 
-#if 1
+#if 0
 	{
 		float	inf;
 		qbyte	palette[768];
 		qbyte *pal;
 		int		i;
 
-		pal = d_q28to24table;
+		pal = q2_palette;
 
 		for (i=0 ; i<768 ; i++)
 		{
@@ -4059,7 +4065,7 @@ static int CM_GetQ2Palette (void)
 			palette[i] = inf;
 		}
 
-		memcpy (d_q28to24table, palette, sizeof(palette));
+		memcpy (q2_palette, palette, sizeof(palette));
 	}
 #endif
 	return 0;
@@ -4818,7 +4824,7 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 
 #ifdef HAVE_CLIENT
 		if (CM_GetQ2Palette())
-			memcpy(d_q28to24table, host_basepal, 768);
+			memcpy(q2_palette, host_basepal, 768);
 #endif
 
 
@@ -7276,30 +7282,31 @@ static size_t	CM_LoadAreaPortalBlob (model_t *mod, void *ptr, size_t ptrsize)
 		switch(prv->mapisq3)
 		{
 #ifdef Q3BSPS
-		case 1:
-			if (ptrsize < sizeof(prv->q3areas))
-				Con_Printf("CM_ReadPortalState() expected %u, but only %u available\n",(unsigned int)sizeof(prv->q3areas),(unsigned int)ptrsize);
-			else
-			{
-				memcpy(prv->q3areas, ptr, sizeof(prv->q3areas));
-
-				FloodAreaConnections (prv);
-				return sizeof(prv->q3areas);
+		case 1:	//area*area refcounts. byte sizes don't tell us how many areas there were - would need sqrt(ptrsize/4) and I cba.
+			if (ptrsize != sizeof(prv->q3areas))
+			{	//don't bother trying to handle graceful expansion/truncation, just reset the entire thing.
+				size_t x,y;
+				if (ptrsize)
+					Con_Printf("CM_ReadPortalState() expected %u, but only %u available\n",(unsigned int)sizeof(prv->q3areas),(unsigned int)ptrsize);
+				for (x = 0; x < countof(prv->q3areas); x++)
+					for (y = 0; y < countof(prv->q3areas[x].numareaportals); y++)
+						prv->q3areas[x].numareaportals[y] = map_autoopenportals.ival;
 			}
-			break;
+			else
+				memcpy(prv->q3areas, ptr, ptrsize);
+			FloodAreaConnections (prv);
+			return sizeof(prv->q3areas);
 #endif
 #ifdef Q2BSPS
-		case 0:
-			if (ptrsize < sizeof(prv->q2portalopen))
+		case 0:	//per-portal booleans. we can just pad any missing portals.
+			if (ptrsize && ptrsize != sizeof(prv->q2portalopen))
 				Con_Printf("CM_ReadPortalState() expected %u, but only %u available\n",(unsigned int)sizeof(prv->q2portalopen),(unsigned int)ptrsize);
-			else
-			{
-				memcpy(prv->q2portalopen, ptr, sizeof(prv->q2portalopen));
-
-				FloodAreaConnections (prv);
-				return sizeof(prv->q2portalopen);
-			}
-			break;
+			if (ptrsize > sizeof(prv->q2portalopen))
+				ptrsize = sizeof(prv->q2portalopen);
+			memcpy(prv->q2portalopen, ptr, ptrsize);
+			memset(prv->q2portalopen+ptrsize, map_autoopenportals.ival, sizeof(prv->q2portalopen)-ptrsize);
+			FloodAreaConnections (prv);
+			return sizeof(prv->q2portalopen);
 #endif
 		default: break;
 		}

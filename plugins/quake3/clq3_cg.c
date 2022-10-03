@@ -1,15 +1,5 @@
 #include "q3common.h"
-//#include "cg_public.h"
 #if defined(VM_CG) && defined(HAVE_CLIENT)
-
-#include "shader.h"
-
-#if 1
-#include "glquake.h"//hack
-#else
-typedef float m3by3_t[3][3];
-#endif
-
 #include "clq3defs.h"
 #include "com_mesh.h"
 
@@ -833,8 +823,8 @@ static qintptr_t CG_SystemCalls(void *offset, quintptr_t mask, qintptr_t fn, con
 			{
 				if (mod->loadstate == MLS_NOTLOADED)
 					scenefuncs->LoadModel(mod->publicname, MLV_SILENTSYNC);
-				if (mod->loadstate == MLS_LOADING)
-					COM_WorkerPartialSync(mod, &mod->loadstate, MLS_LOADING);
+				if (mod->loadstate == MLS_LOADING && threadfuncs)
+					threadfuncs->WaitForCompletion(mod, &mod->loadstate, MLS_LOADING);
 				if (mod->loadstate != MLS_LOADED)
 				{
 					memset(results, 0, sizeof(*results));
@@ -905,8 +895,8 @@ static qintptr_t CG_SystemCalls(void *offset, quintptr_t mask, qintptr_t fn, con
 			model_t *mod = scenefuncs->ModelFromId(arg[0]);
 			if (mod)
 			{
-				if (mod->loadstate == MLS_LOADING)
-					COM_WorkerPartialSync(mod, &mod->loadstate, MLS_LOADING);
+				if (mod->loadstate == MLS_LOADING && threadfuncs)
+					threadfuncs->WaitForCompletion(mod, &mod->loadstate, MLS_LOADING);
 
 				VectorCopy(mod->mins, ((float*)VM_POINTER(arg[1])));
 				VectorCopy(mod->maxs, ((float*)VM_POINTER(arg[2])));

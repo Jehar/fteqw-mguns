@@ -598,7 +598,8 @@ void FlushEntityPacket (void)
 
 	memset (&olde, 0, sizeof(olde));
 
-	cl.validsequence = 0;		// can't render a frame
+	if ((cl.validsequence&UPDATE_MASK) == (cls.netchan.incoming_sequence&UPDATE_MASK))
+		cl.validsequence = 0;		// last-known-good sequence is becoming invalid.
 	cl.inframes[cls.netchan.incoming_sequence&UPDATE_MASK].invalid = true;
 
 	// read it all, but ignore it
@@ -630,6 +631,8 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 		bits |= MSG_ReadByte()<<16;
 	if (bits & UF_EXTEND3)
 		bits |= MSG_ReadByte()<<24;
+	if (bits & UF_EXTEND4)
+		Host_EndGame("ent update bit %#x\n", UF_EXTEND4);
 
 	if (cl_shownet.ival >= 3)
 		Con_Printf("%3i:     Update %4i 0x%x\n", MSG_GetReadCount(), entnum, bits);
@@ -653,10 +656,15 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 	
 	if (bits & UF_FRAME)
 	{
-		if (bits & UF_16BIT)
-			news->frame = MSG_ReadShort();
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->frame = MSG_ReadULEB128();
 		else
-			news->frame = MSG_ReadByte();
+		{
+			if (bits & UF_16BIT_LERPTIME)
+				news->frame = MSG_ReadShort();
+			else
+				news->frame = MSG_ReadByte();
+		}
 	}
 
 	if (cls.ezprotocolextensions1 & EZPEXT1_FLOATENTCOORDS)
@@ -702,12 +710,24 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 			news->angles[1] = MSG_ReadAngle();
 	}
 
-	if ((bits & (UF_EFFECTS | UF_EFFECTS2)) == (UF_EFFECTS | UF_EFFECTS2))
-		news->effects = MSG_ReadLong();
-	else if (bits & UF_EFFECTS2)
-		news->effects = (unsigned short)MSG_ReadShort();
-	else if (bits & UF_EFFECTS)
-		news->effects = MSG_ReadByte();
+	if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+	{
+		if (bits & UF_16BIT_LERPTIME)
+			news->lerpend = cl.gametime + MSG_ReadULEB128()*(1/1000.0);	//most things will animate at 100ms, so this will usually fit a single byte, without capping out.
+		if (bits & UF_EFFECTS)
+			news->effects = MSG_ReadULEB128();
+		if (bits & UF_EFFECTS2_OLD)
+			Host_EndGame("Received unexpected (redefined) bit %#x\n", UF_EFFECTS2_OLD);
+	}
+	else
+	{
+		if ((bits & (UF_EFFECTS | UF_EFFECTS2_OLD)) == (UF_EFFECTS | UF_EFFECTS2_OLD))
+			news->effects = MSG_ReadLong();
+		else if (bits & UF_EFFECTS2_OLD)
+			news->effects = (unsigned short)MSG_ReadShort();
+		else if (bits & UF_EFFECTS)
+			news->effects = MSG_ReadByte();
+	}
 
 	news->u.q1.movement[0] = 0;
 	news->u.q1.movement[1] = 0;
@@ -792,20 +812,35 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 
 	if (bits & UF_MODEL)
 	{
-		if (bits & UF_16BIT)
-			news->modelindex = MSG_ReadShort();
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->modelindex = MSG_ReadULEB128();
 		else
-			news->modelindex = MSG_ReadByte();
+		{
+			if (bits & UF_16BIT_LERPTIME)
+				news->modelindex = MSG_ReadShort();
+			else
+				news->modelindex = MSG_ReadByte();
+		}
 	}
 	if (bits & UF_SKIN)
 	{
-		if (bits & UF_16BIT)
-			news->skinnum = MSG_ReadShort();
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->skinnum = MSG_ReadULEB128()-64;	//biased for content overrides
 		else
-			news->skinnum = MSG_ReadByte();
+		{
+			if (bits & UF_16BIT_LERPTIME)
+				news->skinnum = MSG_ReadShort();
+			else
+				news->skinnum = MSG_ReadByte();
+		}
 	}
 	if (bits & UF_COLORMAP)
-		news->colormap = MSG_ReadByte();
+	{
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->colormap = MSG_ReadULEB128();
+		else
+			news->colormap = MSG_ReadByte();
+	}
 
 	if (bits & UF_SOLID)
 	{
@@ -832,7 +867,12 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 	}
 
 	if (bits & UF_FLAGS)
-		news->dpflags = MSG_ReadByte();
+	{
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->dpflags = MSG_ReadULEB128();
+		else
+			news->dpflags = MSG_ReadByte();
+	}
 
 	if (bits & UF_ALPHA)
 		news->trans = MSG_ReadByte();
@@ -855,8 +895,16 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 			news->bonecount = 0;	//oo, it went away.
 		if (fl & 0x40)
 		{
-			news->basebone = MSG_ReadByte();
-			news->baseframe = MSG_ReadShort();
+			if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			{
+				news->basebone = MSG_ReadULEB128();
+				news->baseframe = MSG_ReadULEB128();
+			}
+			else
+			{
+				news->basebone = MSG_ReadByte();
+				news->baseframe = MSG_ReadShort();
+			}
 		}
 		else
 		{
@@ -885,9 +933,14 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 	if (bits & UF_TAGINFO)
 	{
 		news->tagentity = MSGCL_ReadEntity();
-		news->tagindex = MSG_ReadByte();
-		if (news->tagindex == 0xff)
-			news->tagindex = ~0;
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->tagindex = MSG_ReadULEB128()-1;	//biased for q3-like portals.
+		else
+		{
+			news->tagindex = MSG_ReadByte();
+			if (news->tagindex == 0xff)
+				news->tagindex = ~0;
+		}
 	}
 	if (bits & UF_LIGHT)
 	{
@@ -895,20 +948,32 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 		news->light[1] = MSG_ReadShort();
 		news->light[2] = MSG_ReadShort();
 		news->light[3] = MSG_ReadShort();
-		news->lightstyle = MSG_ReadByte();
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->lightstyle = MSG_ReadULEB128();
+		else
+			news->lightstyle = MSG_ReadByte();
 		news->lightpflags = MSG_ReadByte();
 	}
 	if (bits & UF_TRAILEFFECT)
 	{
-		unsigned short s;
-		s = MSG_ReadShort();
-		news->u.q1.traileffectnum = s & 0x3fff;
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+		{
+			news->u.q1.traileffectnum = MSG_ReadULEB128();
+			news->u.q1.emiteffectnum = MSG_ReadULEB128();
+		}
+		else
+		{
+			unsigned short s;
+			s = MSG_ReadShort();
+			news->u.q1.traileffectnum = s & 0x3fff;
+			if (s & 0x8000)
+				news->u.q1.emiteffectnum = MSG_ReadShort() & 0x3fff;
+			else
+				news->u.q1.emiteffectnum = 0;
+		}
+
 		if (news->u.q1.traileffectnum >= countof(cl.particle_ssprecache))
 			news->u.q1.traileffectnum = 0;
-		if (s & 0x8000)
-			news->u.q1.emiteffectnum = MSG_ReadShort() & 0x3fff;
-		else
-			news->u.q1.emiteffectnum = 0;
 		if (news->u.q1.emiteffectnum >= countof(cl.particle_ssprecache))
 			news->u.q1.emiteffectnum = 0;
 	}
@@ -931,23 +996,24 @@ void CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, entity_state_t *
 		news->fatness = MSG_ReadByte();
 	if (bits & UF_MODELINDEX2)
 	{
-		if (bits & UF_16BIT)
-			news->modelindex2 = MSG_ReadShort();
+		if (cls.fteprotocolextensions2 & PEXT2_LERPTIME)
+			news->modelindex2 = MSG_ReadULEB128();
 		else
-			news->modelindex2 = MSG_ReadByte();
+		{
+			if (bits & UF_16BIT_LERPTIME)
+				news->modelindex2 = MSG_ReadShort();
+			else
+				news->modelindex2 = MSG_ReadByte();
+		}
 	}
 	if (bits & UF_GRAVITYDIR)
 	{
 		news->u.q1.gravitydir[0] = MSG_ReadByte();
 		news->u.q1.gravitydir[1] = MSG_ReadByte();
 	}
-	if (bits & UF_UNUSED2)
-	{
-		Host_EndGame("UF_UNUSED2 bit\n");
-	}
 	if (bits & UF_UNUSED1)
 	{
-		Host_EndGame("UF_UNUSED1 bit\n");
+		Host_EndGame("ent update bit %#x\n", UF_UNUSED1);
 	}
 }
 
@@ -1251,36 +1317,18 @@ void CLQW_ParsePacketEntities (qboolean delta)
 		from = MSG_ReadByte ();
 
 //		Con_Printf("%i %i from %i\n", cls.netchan.outgoing_sequence, cls.netchan.incoming_sequence, from);
-
-		oldpacket = cl.inframes[newpacket].delta_sequence;
 		if (cls.demoplayback == DPB_MVD || cls.demoplayback == DPB_EZTV)
 			from = oldpacket = cls.netchan.incoming_sequence - 1;
+		oldpacket = cl.inframes[from & UPDATE_MASK].frameid;
 
-		if (cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence >= UPDATE_BACKUP - 1) {
-			// there are no valid frames left, so drop it
-			FlushEntityPacket ();
-			cl.validsequence = 0;
-			return;
-		}
-
-		if ((from & UPDATE_MASK) != (oldpacket & UPDATE_MASK)) {
-			Con_DPrintf ("WARNING: from mismatch\n");
-//			FlushEntityPacket ();
-//			cl.validsequence = 0;
-//			return;
-		}
-
-		if (cls.netchan.outgoing_sequence - oldpacket >= UPDATE_BACKUP - 1)
+		if (cl.inframes[from&UPDATE_MASK].invalid ||	//old frame is unusable
+			cls.netchan.outgoing_sequence - oldpacket >= UPDATE_BACKUP - 1)	// we must have lost the sequence its trying to delta from (or just too old).
 		{
-			// we can't use this, it is too old
 			FlushEntityPacket ();
-			// don't clear cl.validsequence, so that frames can still be rendered;
-			// it is possible that a fresh packet will be received before
-			// (outgoing_sequence - incoming_sequence) exceeds UPDATE_BACKUP - 1
 			return;
 		}
 
-		oldp = &cl.inframes[oldpacket & UPDATE_MASK].packet_entities;
+		oldp = &cl.inframes[from & UPDATE_MASK].packet_entities;
 		full = false;
 	}
 	else
@@ -1363,7 +1411,7 @@ void CLQW_ParsePacketEntities (qboolean delta)
 				newp->entities = BZ_Realloc(newp->entities, sizeof(entity_state_t)*newp->max_entities);
 			}
 			if (oldindex >= oldp->max_entities)
-					Host_EndGame("Old packet entity too big\n");
+				Host_EndGame("Old packet entity too big\n");
 			newp->entities[newindex] = oldp->entities[oldindex];
 			newindex++;
 			oldindex++;
@@ -4251,7 +4299,7 @@ void CL_LinkPacketEntities (void)
 		if (cl.model_precache_vwep[0] && state->modelindex2 < MAX_VWEP_MODELS)
 		{
 			if (state->modelindex == cl_playerindex && cl.model_precache_vwep[0]->loadstate == MLS_LOADED &&
-				cl.model_precache_vwep[state->modelindex2] && cl.model_precache_vwep[state->modelindex2]->loadstate == MLS_LOADED)
+				state->modelindex2 && cl.model_precache_vwep[state->modelindex2] && cl.model_precache_vwep[state->modelindex2]->loadstate == MLS_LOADED)
 			{
 				model = cl.model_precache_vwep[0];
 				model2 = cl.model_precache_vwep[state->modelindex2];
@@ -4386,10 +4434,7 @@ void CL_LinkPacketEntities (void)
 			ent->shaderRGBAf[1] = (state->colormod[1]*8.0f)/256;
 			ent->shaderRGBAf[2] = (state->colormod[2]*8.0f)/256;
 		}
-		if (state->colormod[0] == 32 && state->colormod[1] == 32 && state->colormod[2] == 32)
-			VectorSet(ent->glowmod, 1, 1, 1);
-		else
-			VectorScale(state->glowmod, 1/255.0, ent->glowmod);
+		VectorScale(state->glowmod, 8.0/256.0, ent->glowmod);
 
 #ifdef PEXT_FATNESS
 		//set trans

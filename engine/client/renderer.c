@@ -277,6 +277,9 @@ cvar_t vid_conautoscale						= CVARAF ("vid_conautoscale", "2",
 cvar_t vid_conautoscale						= CVARAFD ("vid_conautoscale", "0",
 												"scr_conscale"/*qs*/ /*"vid_conscale"ez*/, CVAR_ARCHIVE | CVAR_RENDERERCALLBACK, "Changes the 2d scale, including hud, console, and fonts. To specify an explicit font size, divide the desired 'point' size by 8 to get the scale. High values will be clamped to maintain at least a 320*200 virtual size.");
 #endif
+cvar_t vid_baseheight						= CVARD ("vid_baseheight", "", "Specifies a mod's target height and used only when the 2d scale is not otherwise forced. Unlike vid_conheight the size is not fixed and will be padded to avoid inconsistent filtering.");
+cvar_t vid_minsize							= CVARFD ("vid_minsize", "320 200",
+												CVAR_NOTFROMSERVER, "Specifies a mod's minimum virtual size.");
 cvar_t vid_conheight						= CVARF ("vid_conheight", "0",
 												CVAR_ARCHIVE);
 cvar_t vid_conwidth							= CVARF ("vid_conwidth", "0",
@@ -682,6 +685,13 @@ void R_ListSkins_f(void)
 void R_SetRenderer_f (void);
 void R_ReloadRenderer_f (void);
 
+#ifdef _DEBUG
+static void R_ShowBatches_f(void)
+{
+	sh_config.showbatches = true;
+}
+#endif
+
 void R_ToggleFullscreen_f(void)
 {
 	double time;
@@ -757,6 +767,10 @@ void Renderer_Init(void)
 	Cmd_AddCommand("r_remapshader", Shader_RemapShader_f);
 	Cmd_AddCommand("r_showshader", Shader_ShowShader_f);
 
+#ifdef _DEBUG
+	Cmd_AddCommand("r_showbatches", R_ShowBatches_f);
+#endif
+
 #ifdef SWQUAKE
 	{
 	extern cvar_t sw_interlace;
@@ -791,9 +805,11 @@ void Renderer_Init(void)
 	Cvar_Register (&vid_bpp, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_depthbits, VIDCOMMANDGROUP);
 
+	Cvar_Register (&vid_baseheight, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_conwidth, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_conheight, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_conautoscale, VIDCOMMANDGROUP);
+	Cvar_Register (&vid_minsize, VIDCOMMANDGROUP);
 
 	Cvar_Register (&vid_triplebuffer, VIDCOMMANDGROUP);
 	Cvar_Register (&vid_width, VIDCOMMANDGROUP);
@@ -1691,7 +1707,7 @@ TRACE(("dbg: R_ApplyRenderer: clearing world\n"));
 
 		if (sv.world.worldmodel->loadstate != MLS_LOADED)
 			SV_UnspawnServer();
-		else if (svs.gametype == GT_PROGS)
+		else if (svs.gametype == GT_PROGS || svs.gametype == GT_Q1QVM)
 		{
 			for (i = 0; i < MAX_PRECACHE_MODELS; i++)
 			{
@@ -1756,7 +1772,7 @@ TRACE(("dbg: R_ApplyRenderer: clearing world\n"));
 	}
 #endif
 #ifdef PLUGINS
-	Plug_ResChanged();
+	Plug_ResChanged(true);
 #endif
 	Cvar_ForceCallback(&r_particlesystem);
 #ifdef MENU_NATIVECODE

@@ -13,8 +13,45 @@ typedef struct
 #define STUN_REPLY		0x0100
 #define STUN_ERROR		0x0110
 #define STUN_INDICATION	0x0010
-//
+//request
 #define STUN_BINDING	0x0001
+#define STUN_ALLOCATE	0x0003 //TURN
+#define STUN_REFRESH	0x0004 //TURN
+#define STUN_SEND		0x0006 //TURN
+#define STUN_DATA		0x0007 //TURN
+#define STUN_CREATEPERM	0x0008 //TURN
+#define STUN_CHANBIND	0x0009 //TURN
+
+//misc stuff...
+#define STUN_MAGIC_COOKIE	0x2112a442
+
+//attributes
+#define STUNATTR_MAPPED_ADDRESS			0x0001
+#define STUNATTR_USERNAME				0x0006
+#define STUNATTR_MESSAGEINTEGRITIY		0x0008
+#define STUNATTR_ERROR_CODE				0x0009
+//#define STUNATTR_CHANNELNUMBER			0x000c	//TURN
+#define STUNATTR_LIFETIME				0x000d	//TURN
+#define STUNATTR_XOR_PEER_ADDRESS		0x0012	//TURN
+#define STUNATTR_DATA					0x0013	//TURN
+#define STUNATTR_REALM					0x0014	//TURN
+#define STUNATTR_NONCE					0x0015	//TURN
+#define STUNATTR_XOR_RELAYED_ADDRESS	0x0016	//TURN
+#define STUNATTR_REQUESTED_ADDRFAM		0x0017	//TURN
+//#define STUNATTR_EVEN_PORT			0x0018	//TURN
+#define STUNATTR_REQUESTED_TRANSPORT	0x0019	//TURN
+#define STUNATTR_DONT_FRAGMENT			0x001a	//TURN
+#define	STUNATTR_XOR_MAPPED_ADDRESS		0x0020
+#define	STUNATTR_ICE_PRIORITY			0x0024	//ICE
+#define	STUNATTR_ICE_USE_CANDIDATE		0x0025	//ICE
+
+//0x8000 attributes are optional, and may be silently ignored without issue.
+#define STUNATTR_ADDITIONAL_ADDRFAM		0x8000	//TURN -- listen for ipv6 in addition to ipv4
+#define STUNATTR_SOFTWARE				0x8022	//TURN
+#define STUNATTR_FINGERPRINT			0x8028
+#define	STUNATTR_ICE_CONTROLLED			0x8029	//ICE
+#define STUNATTR_ICE_CONTROLLING		0x802A	//ICE
+
 
 typedef struct
 {
@@ -25,8 +62,21 @@ typedef struct
 #include "zlib.h"
 #endif
 #ifdef SUPPORT_ICE
-cvar_t net_ice_exchangeprivateips = CVARFD("net_ice_exchangeprivateips", "", CVAR_NOTFROMSERVER, "Boolean. When set to 0, hides private IP addresses from your peers. Only addresses determined from the other side of your router will be shared. Setting it to 0 may be desirable but it can cause connections to fail when your router does not support hairpinning, whereas 1 fixes that at the cost of exposing private IP addresses.");
-cvar_t net_ice_usewebrtc = CVARFD("net_ice_usewebrtc", "", CVAR_NOTFROMSERVER, "Use webrtc's extra overheads rather than simple ICE. This makes packets larger and is slower to connect, but is compatible with the web port.");
+static cvar_t net_ice_exchangeprivateips = CVARFD("net_ice_exchangeprivateips", "", CVAR_NOTFROMSERVER, "Boolean. When set to 0, hides private IP addresses from your peers. Only addresses determined from the other side of your router will be shared. Setting it to 0 may be desirable but it can cause connections to fail when your router does not support hairpinning, whereas 1 fixes that at the cost of exposing private IP addresses.");
+static cvar_t net_ice_allowstun = CVARFD("net_ice_allowstun", "1", CVAR_NOTFROMSERVER, "Boolean. When set to 0, prevents the use of stun to determine our public address (does not prevent connecting to our peer's server-reflexive candidates).");
+static cvar_t net_ice_allowturn = CVARFD("net_ice_allowturn", "1", CVAR_NOTFROMSERVER, "Boolean. When set to 0, prevents registration of turn connections (does not prevent connecting to our peer's relay candidates).");
+static cvar_t net_ice_allowmdns = CVARFD("net_ice_allowmdns", "1", CVAR_NOTFROMSERVER, "Boolean. When set to 0, prevents the use of multicast-dns to obtain candidates using random numbers instead of revealing private network info.");
+static cvar_t net_ice_relayonly = CVARFD("net_ice_relayonly", "0", CVAR_NOTFROMSERVER, "Boolean. When set to 1, blocks reporting non-relay local candidates, does not attempt to connect to remote candidates other than via a relay.");
+static cvar_t net_ice_usewebrtc = CVARFD("net_ice_usewebrtc", "", CVAR_NOTFROMSERVER, "Use webrtc's extra overheads rather than simple ICE. This makes packets larger and is slower to connect, but is compatible with the web port.");
+static cvar_t net_ice_servers = CVARFD("net_ice_servers", "", CVAR_NOTFROMSERVER, "A space-separated list of ICE servers, eg stun:host.example:3478 or turn:host.example:3478?user=foo?auth=blah");
+static cvar_t net_ice_debug = CVARFD("net_ice_debug", "0", CVAR_NOTFROMSERVER, "0: Hide messy details.\n1: Show new candidates.\n2: Show each connectivity test.");
+
+#if 0	//enable this for testing only. will generate excessive error messages with non-hacked turn servers...
+	#define ASCOPE_TURN_REQUIRESCOPE	ASCOPE_HOST //try sending it any address.
+#else
+	#define ASCOPE_TURN_REQUIRESCOPE	ASCOPE_LAN	//don't report loopback/link-local addresses to turn relays.
+#endif
+
 /*
 Interactive Connectivity Establishment (rfc 5245)
 find out your peer's potential ports.
@@ -36,7 +86,8 @@ the 'controller' assigns some final candidate pair to ensure that both peers sen
 if no candidates are available, try using stun to find public nat addresses.
 
 in fte, a 'pair' is actually in terms of each local socket and remote address. hopefully that won't cause too much weirdness.
-(this does limit which interfaces we can send packets from (probably only an issue with VPNs, which should negate the value of ICE), and prevents us from being able to report reladdr in candidate offers (although these are merely diagnostic rather than useful)
+	this does limit which interfaces we can send packets from, which may cause issues with local TURN relays(does not result in extra prflx candidates) and VPNs(may need to be set up as the default route), and prevents us from being able to report reladdr in candidate offers (again mostly only of use with TURN)
+	lan connections should resolve to a host interface anyway
 
 stun test packets must contain all sorts of info. username+integrity+fingerprint for validation. priority+usecandidate+icecontrol(ing) to decree the priority of any new remote candidates, whether its finished, and just who decides whether its finished.
 peers don't like it when those are missing.
@@ -52,6 +103,8 @@ this allows the connection to pick a new route if some router dies (like a relay
 FIXME: the client currently disconnects from the broker. the server tracks players via ip rather than ICE.
 
 tcp rtp framing should generally be done with a 16-bit network-endian length prefix followed by the data.
+
+NOTE: we do NOT distinguish between media-level and session-level attributes, as such we can only handle ONE media stream per session. we also don't support rtcp.
 */
 
 struct icecandidate_s
@@ -63,10 +116,12 @@ struct icecandidate_s
 	netadr_t peer;
 	//peer needs telling or something.
 	qboolean dirty;
+	qboolean ismdns;		//indicates that the candidate is a .local domain and thus can be shared without leaking private info.
 
 	//these are bitmasks. one bit for each local socket.
-	unsigned int reachable;
-	unsigned int tried;
+	unsigned int reachable;	//looked like it was up a while ago...
+	unsigned int reached;	//timestamp of when it was last reachable. pick a new one if too old.
+	unsigned int tried;		//don't try again this round
 };
 struct icestate_s
 {
@@ -76,17 +131,46 @@ struct icestate_s
 	netadr_t qadr;			//address reported to the rest of the engine (packets from our peer get remapped to this)
 	netadr_t chosenpeer;	//address we're sending our data to.
 
-	netadr_t pubstunserver;
-	unsigned int stunretry;	//once a second, extended to once a minite on reply
-	char *stunserver;//where to get our public ip from.
-	int stunport;
-	unsigned int stunrnd[3];
+	struct iceserver_s
+	{	//stun/turn servers
+		netadr_t addr;
+		qboolean isstun;
+		unsigned int stunretry;	//once a second, extended to once a minite on reply
+		unsigned int stunrnd[3];
 
-	unsigned int timeout;	//time when we consider the connection dead
+		//turn stuff.
+		ftenet_generic_connection_t *con;	//TURN needs unique client addresses otherwise it gets confused and starts reporting errors about client ids. make sure these connections are unique.
+											//FIXME: should be able to get away with only one if the addr field is unique... move to icestate_s
+		netadrtype_t family;	//ipv4 or ipv6. can't send to other peers.
+		char *user, *auth;
+		enum {
+			TURN_UNINITED,		//never tried to poke server, need to send a quicky allocate request.
+			TURN_HAVE_NONCE,	//nonce should be valid, need to send a full allocate request.
+			TURN_ALLOCATED,		//we have an allocation that we need to refresh every now and then.
+			TURN_TERMINATING,		//we have an allocation that we need to refresh every now and then.
+		} state;
+		unsigned int expires;	//allocation expiry time.
+		char *nonce, *realm;	//gathered from the server
+//		netadr_t relay, srflx;	//our relayed port, and our local address for the sake of it.
+
+		unsigned int peers;
+		struct
+		{
+			unsigned int expires;		//once a second, extended to once a minite on reply
+			unsigned int retry;			//gotta keep retrying
+			unsigned int stunrnd[3];	//so we know when to stop retrying.
+			struct icecandidate_s *rc;	//if its not rc then we need to reauth now.
+		} peer[32];
+	} server[8];
+	unsigned int servers;
+
+	qboolean brokerless;	//we lost connection to our broker... clean up on failure status.
+	unsigned int icetimeout;	//time when we consider the connection dead
 	unsigned int keepalive;	//sent periodically...
 	unsigned int retries;	//bumped after each round of connectivity checks. affects future intervals.
 	enum iceproto_e proto;
 	enum icemode_e mode;
+	qboolean initiator;		//sends the initial sdpoffer.
 	qboolean controlled;	//controller chooses final ports.
 	enum icestate_e state;
 	char *conname;		//internal id.
@@ -108,7 +192,7 @@ struct icestate_s
 	unsigned int tielow;
 	int foundation;
 
-	qboolean blockcandidates;		//don't send candidates yet.
+	qboolean blockcandidates;		//don't send candidates yet. FIXME: replace with gathering.
 #ifdef HAVE_DTLS
 	void *dtlsstate;
 	struct sctp_s *sctp;	//ffs! extra processing needed.
@@ -118,6 +202,8 @@ struct icestate_s
 	dtlscred_t cred;	//credentials info for dtls (both peer and local info)
 	quint16_t mysctpport;
 	quint16_t peersctpport;
+	qboolean sctpoptional;
+	qboolean peersctpoptional; //still uses dtls at least.
 #endif
 
 	ftenet_connections_t *connections;	//used only for PRIVATE sockets.
@@ -170,10 +256,28 @@ typedef struct sctp_s
 	unsigned short qstreamid;	//in network endian.
 } sctp_t;
 #ifdef HAVE_DTLS
+extern cvar_t net_enable_dtls;
 static neterr_t SCTP_Transmit(sctp_t *sctp, struct icestate_s *peer, const void *data, size_t length);
 #endif
+static neterr_t ICE_Transmit(void *cbctx, const qbyte *data, size_t datasize);
+static neterr_t TURN_Encapsulate(struct icestate_s *ice, netadr_t *to, const qbyte *data, size_t datasize);
+static void TURN_AuthorisePeer(struct icestate_s *con, struct iceserver_s *srv, int peer);
 
 static struct icestate_s *icelist;
+
+
+const char *ICE_GetCandidateType(struct icecandinfo_s *info)
+{
+	switch(info->type)
+	{
+	case ICE_HOST:	return "host";
+	case ICE_SRFLX:	return "srflx";
+	case ICE_PRFLX:	return "prflx";
+	case ICE_RELAY:	return "relay";
+	}
+	return "?";
+}
+
 
 static struct icecodecslot_s *ICE_GetCodecSlot(struct icestate_s *ice, int slot)
 {
@@ -281,7 +385,7 @@ qboolean NET_RTP_Transmit(unsigned int sequence, unsigned int timestamp, const c
 						if (buf.overflowed)
 							return built;
 					}
-					NET_SendPacket(cls.sockets, buf.cursize, buf.data, &con->chosenpeer);
+					ICE_Transmit(con, buf.data, buf.cursize);
 					break;
 				}
 			}
@@ -324,13 +428,184 @@ static ftenet_connections_t *ICE_PickConnection(struct icestate_s *con)
 	}
 	return NULL;
 }
+static qboolean TURN_AddXorAddressAttrib(sizebuf_t *buf, unsigned int attr, netadr_t *to)
+{	//12 or 24 bytes.
+	int alen, atype, aofs, i;
+	if (to->type == NA_IP)
+	{
+		alen = 4;
+		atype = 1;
+		aofs = 0;
+	}
+	else if (to->type == NA_IPV6 &&
+				!*(int*)&to->address.ip6[0] &&
+				!*(int*)&to->address.ip6[4] &&
+				!*(short*)&to->address.ip6[8] &&
+				*(short*)&to->address.ip6[10] == (short)0xffff)
+	{	//just because we use an ipv6 address for ipv4 internally doesn't mean we should tell the peer that they're on ipv6...
+		alen = 4;
+		atype = 1;
+		aofs = sizeof(to->address.ip6) - sizeof(to->address.ip);
+	}
+	else if (to->type == NA_IPV6)
+	{
+		alen = 16;
+		atype = 2;
+		aofs = 0;
+	}
+	else
+		return false;
+
+	MSG_WriteShort(buf, BigShort(attr));
+	MSG_WriteShort(buf, BigShort(4+alen));
+	MSG_WriteShort(buf, BigShort(atype));
+	MSG_WriteShort(buf, to->port ^ *(short*)(buf->data+4));
+	for (i = 0; i < alen; i++)
+		MSG_WriteByte(buf, ((qbyte*)&to->address)[aofs+i] ^ (buf->data+4)[i]);
+	return true;
+}
+#define FTEENGINE
+#include "../../plugins/emailnot/md5.c"
+static qboolean TURN_AddAuth(sizebuf_t *buf, struct iceserver_s *srv)
+{	//adds auth info to a stun packet
+	unsigned short len;
+	char integrity[20];
+
+	if (!srv->user || !srv->nonce || !srv->realm)
+		return false;
+	MSG_WriteShort(buf, BigShort(STUNATTR_USERNAME));
+	len = strlen(srv->user);
+	MSG_WriteShort(buf, BigShort(len));
+	SZ_Write (buf, srv->user, len);
+	if (len&3)
+		SZ_Write (buf, "\0\0\0\0", 4-(len&3));
+
+	MSG_WriteShort(buf, BigShort(STUNATTR_REALM));
+	len = strlen(srv->realm);
+	MSG_WriteShort(buf, BigShort(len));
+	SZ_Write (buf, srv->realm, len);
+	if (len&3)
+		SZ_Write (buf, "\0\0\0\0", 4-(len&3));
+
+	MSG_WriteShort(buf, BigShort(STUNATTR_NONCE));
+	len = strlen(srv->nonce);
+	MSG_WriteShort(buf, BigShort(len));
+	SZ_Write (buf, srv->nonce, len);
+	if (len&3)
+		SZ_Write (buf, "\0\0\0\0", 4-(len&3));
+
+	//message integrity is a bit annoying
+	buf->data[2] = ((buf->cursize+4+sizeof(integrity)-20)>>8)&0xff;	//hashed header length is up to the end of the hmac attribute
+	buf->data[3] = ((buf->cursize+4+sizeof(integrity)-20)>>0)&0xff;
+	//but the hash is to the start of the attribute's header
+	{	//long-term credentials do stuff weird.
+		char *tmpkey = va("%s:%s:%s", srv->user, srv->realm, srv->auth);
+		MD5_ToBinary(tmpkey, strlen(tmpkey), integrity, 16);
+	}
+	CalcHMAC(&hash_sha1, integrity, sizeof(integrity), buf->data, buf->cursize, integrity,16);
+	MSG_WriteShort(buf, BigShort(STUNATTR_MESSAGEINTEGRITIY));
+	MSG_WriteShort(buf, BigShort(sizeof(integrity)));	//sha1 key length
+	SZ_Write(buf, integrity, sizeof(integrity));	//integrity data
+	return true;
+}
+
+static const char *ICE_NetworkToName(struct icestate_s *ice, int network)
+{
+	network -= 1;
+	if (network >= 0 && network < MAX_CONNECTIONS)
+	{	//return the cvar name
+		ftenet_connections_t *col = ICE_PickConnection(ice);
+		if (col && col->conn[network])
+			return col->conn[network]->name;
+	}
+	else if (network >= MAX_CONNECTIONS)
+	{
+		network -= MAX_CONNECTIONS;
+		if (network >= countof(ice->server))
+		{	//a peer-reflexive address from poking a TURN server...
+			network -= countof(ice->server);
+			if (network < ice->servers)
+				return "turn-reflexive";
+		}
+		else
+			return va("turn:%s", ice->server[network].realm);
+	}
+
+	return "<UNKNOWN>";
+}
+static neterr_t TURN_Encapsulate(struct icestate_s *ice, netadr_t *to, const qbyte *data, size_t datasize)
+{
+	sizebuf_t buf;
+	unsigned int network = to->connum-1;
+	struct iceserver_s *srv;
+	if (to->type == NA_INVALID)
+		return NETERR_NOROUTE;
+	if (to->connum && network >= MAX_CONNECTIONS)
+	{	//fancy turn-related gubbins
+		network -= MAX_CONNECTIONS;
+		if (network >= countof(ice->server))
+		{	//really high, its from the raw socket, unstunned.
+			network -= countof(ice->server);
+			if (network >= countof(ice->server))
+				return NETERR_NOROUTE;
+			srv = &ice->server[network];
+
+			if (!srv->con || net_ice_relayonly.ival)
+				return NETERR_CLOGGED;
+			return srv->con->SendPacket(srv->con, datasize, data, &srv->addr);
+		}
+		srv = &ice->server[network];
+
+		memset(&buf, 0, sizeof(buf));
+		buf.maxsize =	20+//stun header
+						8+16+//(max)peeraddr
+						4+((datasize+3)&~3);//data
+		buf.cursize = 0;
+		buf.data = alloca(buf.maxsize);
+
+		MSG_WriteShort(&buf, BigShort(STUN_INDICATION|STUN_SEND));
+		MSG_WriteShort(&buf, 0);	//fill in later
+		MSG_WriteLong(&buf, BigLong(STUN_MAGIC_COOKIE));
+		MSG_WriteLong(&buf, 0);	//randomid
+		MSG_WriteLong(&buf, 0);	//randomid
+		MSG_WriteLong(&buf, 0);	//randomid
+
+		if (!TURN_AddXorAddressAttrib(&buf, STUNATTR_XOR_PEER_ADDRESS, to))
+			return NETERR_NOROUTE;
+
+		MSG_WriteShort(&buf, BigShort(STUNATTR_DATA));
+		MSG_WriteShort(&buf, BigShort(datasize));
+		SZ_Write(&buf, data, datasize);
+		if (datasize&3)
+			SZ_Write(&buf, "\0\0\0\0", 4-(datasize&3));
+
+		//fill in the length (for the final time, after filling in the integrity and fingerprint)
+		buf.data[2] = ((buf.cursize-20)>>8)&0xff;
+		buf.data[3] = ((buf.cursize-20)>>0)&0xff;
+
+		if (!srv->con)
+			return NETERR_CLOGGED;
+		return srv->con->SendPacket(srv->con, buf.cursize, buf.data, &srv->addr);
+	}
+	if (net_ice_relayonly.ival)
+		return NETERR_CLOGGED;
+	return NET_SendPacket(ICE_PickConnection(ice), datasize, data, to);
+}
 static neterr_t ICE_Transmit(void *cbctx, const qbyte *data, size_t datasize)
 {
 	struct icestate_s *ice = cbctx;
-	return NET_SendPacket(ICE_PickConnection(ice), datasize, data, &ice->chosenpeer);
+	if (ice->chosenpeer.type == NA_INVALID)
+	{
+		if (ice->state == ICE_FAILED)
+			return NETERR_DISCONNECTED;
+		else
+			return NETERR_CLOGGED;
+	}
+
+	return TURN_Encapsulate(ice, &ice->chosenpeer, data, datasize);
 }
 
-static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, const char *peername, enum icemode_e mode, enum iceproto_e proto)
+static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, const char *peername, enum icemode_e mode, enum iceproto_e proto, qboolean initiator)
 {
 	ftenet_connections_t *collection;
 	struct icestate_s *con;
@@ -402,6 +677,8 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 	con->originversion = 1;
 	Q_strncpyz(con->originaddress, "127.0.0.1", sizeof(con->originaddress));
 
+	con->initiator = initiator;
+	con->controlled = !initiator;
 	con->blockcandidates = true;	//until offers/answers are sent.
 
 #ifdef HAVE_DTLS
@@ -419,8 +696,14 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 		if (con->dtlsfuncs && con->dtlsfuncs->GenTempCertificate && !con->cred.local.certsize)
 		{
 			Con_DPrintf("Generating dtls certificate...\n");
-			con->dtlsfuncs->GenTempCertificate(NULL, &con->cred.local);
-			Con_DPrintf("Done\n");
+			if (!con->dtlsfuncs->GenTempCertificate(NULL, &con->cred.local))
+			{
+				con->dtlsfuncs = NULL;
+				mode = ICEM_ICE;
+				Con_DPrintf("Failed\n");
+			}
+			else
+				Con_DPrintf("Done\n");
 		}
 		else
 		{	//failure if we can't do the whole dtls thing.
@@ -429,10 +712,14 @@ static struct icestate_s *QDECL ICE_Create(void *module, const char *conname, co
 			mode = ICEM_ICE;	//fall back on unencrypted (this doesn't depend on the peer, so while shitty it hopefully shouldn't be exploitable with a downgrade-attack)
 		}
 
-		con->mysctpport = 27500;
+		if (mode == ICEM_WEBRTC && !net_ice_usewebrtc.ival)
+			con->sctpoptional = true;
+
+		if (mode == ICEM_WEBRTC)
+			con->mysctpport = 27500;
 	}
 
-	con->qadr.port = con->mysctpport;
+	con->qadr.port = htons(con->mysctpport);
 #endif
 	con->qadr.type = NA_ICE;
 	con->qadr.prot = NP_DGRAM;
@@ -494,19 +781,47 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 		return false;
 
 	//only send one ping to each.
-	for (i = 0; i < MAX_CONNECTIONS; i++)
+	for(rc = con->rc; rc; rc = rc->next)
 	{
-		if (collection->conn[i] && (collection->conn[i]->addrtype[0]==NA_IP||collection->conn[i]->addrtype[0]==NA_IPV6))
+		for (i = 0; i < MAX_CONNECTIONS; i++)
 		{
-			for(rc = con->rc; rc; rc = rc->next)
+			if (collection->conn[i] && collection->conn[i]->prot == NP_DGRAM && (collection->conn[i]->addrtype[0]==NA_IP||collection->conn[i]->addrtype[0]==NA_IPV6))
 			{
-				if (!(rc->tried & (1u<<i)) && !(rc->tried & (1u<<i)))
+				if (!(rc->tried & (1u<<i)))
+				{					
+					if (!bestpeer || bestpeer->info.priority < rc->info.priority)
+					{
+						if (NET_ClassifyAddress(&rc->peer, NULL) < ASCOPE_TURN_REQUIRESCOPE)
+						{	//don't waste time asking the relay to poke its loopback. if only because it'll report lots of errors.
+							rc->tried |= (1u<<i);
+							continue;
+						}
+
+						bestpeer = rc;
+						bestlocal = i;
+					}
+				}
+			}
+		}
+
+		//send via appropriate turn servers
+		if (rc->info.type == ICE_RELAY || rc->info.type == ICE_SRFLX)
+		{
+			for (i = 0; i < con->servers; i++)
+			{
+				if (con->server[i].state!=TURN_ALLOCATED)
+					continue;	//not ready yet...
+				if (!con->server[i].con)
+					continue;	//can't...
+				if (!(rc->tried & (1u<<(MAX_CONNECTIONS+i))))
 				{
 					//fixme: no local priority. a multihomed machine will try the same ip from different ports.
 					if (!bestpeer || bestpeer->info.priority < rc->info.priority)
 					{
+						if (con->server[i].family && rc->peer.type != con->server[i].family)
+							continue;	//if its ipv4-only then don't send it ipv6 packets or whatever.
 						bestpeer = rc;
-						bestlocal = i;
+						bestlocal = MAX_CONNECTIONS+i;
 					}
 				}
 			}
@@ -516,12 +831,15 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 
 	if (bestpeer && bestlocal >= 0)
 	{
+		neterr_t err;
 		netadr_t to;
 		sizebuf_t buf;
 		char data[512];
 		char integ[20];
 		int crc;
 		qboolean usecandidate = false;
+		const char *candtype;
+		unsigned int priority;
 		memset(&buf, 0, sizeof(buf));
 		buf.maxsize = sizeof(data);
 		buf.cursize = 0;
@@ -529,28 +847,69 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 
 		bestpeer->tried |= (1u<<bestlocal);
 
-		if (!NET_StringToAdr(bestpeer->info.addr, bestpeer->info.port, &to))
-			return true;
-		Con_DPrintf("ICE checking %s -> %s:%i\n", collection->conn[bestlocal]->name, bestpeer->info.addr, bestpeer->info.port);
+		to = bestpeer->peer;
+		to.connum = 1+bestlocal;
 
-		if (!con->controlled && NET_CompareAdr(&to, &con->chosenpeer))
+		if (to.type == NA_INVALID)
+			return true; //erk?
+
+		safeswitch(bestpeer->info.type)
+		{
+		case ICE_HOST:	candtype="host";	break;
+		case ICE_SRFLX:	candtype="srflx";	break;
+		case ICE_PRFLX:	candtype="prflx";	break;
+		case ICE_RELAY:	candtype="relay";	break;
+		safedefault: candtype="?";
+		}
+
+		if (bestlocal >= MAX_CONNECTIONS)
+		{
+			struct iceserver_s *srv = &con->server[bestlocal-MAX_CONNECTIONS];
+			unsigned int i;
+			unsigned int now = Sys_Milliseconds();
+
+			for (i = 0; ; i++)
+			{
+				if (i == srv->peers)
+				{
+					if (i == countof(srv->peer))
+						return true;
+					srv->peer[i].expires = now;
+					srv->peer[i].rc = bestpeer;
+					Sys_RandomBytes((char*)srv->peer[i].stunrnd, sizeof(srv->peer[i].stunrnd));
+					srv->peer[i].retry = now;
+					srv->peers++;
+				}
+				if (srv->peer[i].rc == bestpeer)
+				{
+					break;
+				}
+			}
+			if ((int)(srv->peer[i].retry-now) <= 0)
+			{
+				srv->peer[i].retry = now + (con->state==ICE_CONNECTED?2000:50);	//keep retrying till we get an ack. be less agressive once it no longer matters so much
+				TURN_AuthorisePeer(con, srv, i);
+			}
+		}
+
+		if (!con->controlled && NET_CompareAdr(&to, &con->chosenpeer) && to.connum == con->chosenpeer.connum)
 			usecandidate = true;
 
-		MSG_WriteShort(&buf, BigShort(0x0001));
+		MSG_WriteShort(&buf, BigShort(STUN_BINDING));
 		MSG_WriteShort(&buf, 0);	//fill in later
-		MSG_WriteLong(&buf, BigLong(0x2112a442));			//magic
+		MSG_WriteLong(&buf, BigLong(STUN_MAGIC_COOKIE));	//magic
 		MSG_WriteLong(&buf, BigLong(0));					//randomid
 		MSG_WriteLong(&buf, BigLong(0));					//randomid
 		MSG_WriteLong(&buf, BigLong(0x80000000|bestlocal));	//randomid
 
 		if (usecandidate)
 		{
-			MSG_WriteShort(&buf, BigShort(0x25));//ICE-USE-CANDIDATE
+			MSG_WriteShort(&buf, BigShort(STUNATTR_ICE_USE_CANDIDATE));//ICE-USE-CANDIDATE
 			MSG_WriteShort(&buf, BigShort(0));	//just a flag, so no payload to this attribute
 		}
 
 		//username
-		MSG_WriteShort(&buf, BigShort(0x6));	//USERNAME
+		MSG_WriteShort(&buf, BigShort(STUNATTR_USERNAME));	//USERNAME
 		MSG_WriteShort(&buf, BigShort(strlen(con->rufrag) + 1 + strlen(con->lufrag)));
 		SZ_Write(&buf, con->rufrag, strlen(con->rufrag));
 		MSG_WriteChar(&buf, ':');
@@ -559,28 +918,33 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 			MSG_WriteChar(&buf, 0);	//pad
 
 		//priority
-		MSG_WriteShort(&buf, BigShort(0x24));//ICE-PRIORITY
-		MSG_WriteShort(&buf, BigShort(4));
-		MSG_WriteLong(&buf, 0);	//FIXME. should be set to:
+		priority =
+			//FIXME. should be set to:
 			//			priority =	(2^24)*(type preference) +
 			//						(2^8)*(local preference) +
 			//						(2^0)*(256 - component ID)
 			//type preference should be 126 and is a function of the candidate type (direct sending should be highest priority at 126)
 			//local preference should reflect multi-homed preferences. ipv4+ipv6 count as multihomed.
 			//component ID should be 1 (rtcp would be 2 if we supported it)
+			(1<<24)*(bestlocal>=MAX_CONNECTIONS?0:126) +
+			(1<<8)*((bestpeer->peer.type == NA_IP?32768:0)+bestlocal*256+(255/*-adrno*/)) +
+			(1<<0)*(256 - bestpeer->info.component);
+		MSG_WriteShort(&buf, BigShort(STUNATTR_ICE_PRIORITY));//ICE-PRIORITY
+		MSG_WriteShort(&buf, BigShort(4));
+		MSG_WriteLong(&buf, BigLong(priority));
 
 		//these two attributes carry a random 64bit tie-breaker.
 		//the controller is the one with the highest number.
 		if (con->controlled)
 		{
-			MSG_WriteShort(&buf, BigShort(0x8029));//ICE-CONTROLLED
+			MSG_WriteShort(&buf, BigShort(STUNATTR_ICE_CONTROLLED));//ICE-CONTROLLED
 			MSG_WriteShort(&buf, BigShort(8));
 			MSG_WriteLong(&buf, BigLong(con->tiehigh));
 			MSG_WriteLong(&buf, BigLong(con->tielow));
 		}
 		else
 		{
-			MSG_WriteShort(&buf, BigShort(0x802A));//ICE-CONTROLLING
+			MSG_WriteShort(&buf, BigShort(STUNATTR_ICE_CONTROLLING));//ICE-CONTROLLING
 			MSG_WriteShort(&buf, BigShort(8));
 			MSG_WriteLong(&buf, BigLong(con->tiehigh));
 			MSG_WriteLong(&buf, BigLong(con->tielow));
@@ -591,14 +955,14 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 		data[3] = ((buf.cursize+4+sizeof(integ)-20)>>0)&0xff;
 		//but the hash is to the start of the attribute's header
 		CalcHMAC(&hash_sha1, integ, sizeof(integ), data, buf.cursize, con->rpwd, strlen(con->rpwd));
-		MSG_WriteShort(&buf, BigShort(0x8));	//MESSAGE-INTEGRITY
+		MSG_WriteShort(&buf, BigShort(STUNATTR_MESSAGEINTEGRITIY));	//MESSAGE-INTEGRITY
 		MSG_WriteShort(&buf, BigShort(20));	//sha1 key length
 		SZ_Write(&buf, integ, sizeof(integ));	//integrity data
 
 		data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
 		data[3] = ((buf.cursize+8-20)>>0)&0xff;
 		crc = crc32(0, data, buf.cursize)^0x5354554e;
-		MSG_WriteShort(&buf, BigShort(0x8028));	//FINGERPRINT
+		MSG_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));	//FINGERPRINT
 		MSG_WriteShort(&buf, BigShort(sizeof(crc)));
 		MSG_WriteLong(&buf, BigLong(crc));
 
@@ -606,49 +970,819 @@ static qboolean ICE_SendSpam(struct icestate_s *con)
 		data[2] = ((buf.cursize-20)>>8)&0xff;
 		data[3] = ((buf.cursize-20)>>0)&0xff;
 
-		collection->conn[bestlocal]->SendPacket(collection->conn[bestlocal], buf.cursize, data, &to);
+		err = TURN_Encapsulate(con, &to, buf.data, buf.cursize);
+
+		switch(err)
+		{
+		case NETERR_SENT:
+			if (net_ice_debug.ival >= 2)
+				Con_Printf(S_COLOR_GRAY"[%s]: checking %s -> %s:%i (%s)\n", con->friendlyname, ICE_NetworkToName(con, to.connum), bestpeer->info.addr, bestpeer->info.port, candtype);
+			break;
+		case NETERR_CLOGGED:	//oh well... we retry anyway.
+			break;
+		default:
+			if (net_ice_debug.ival >= 2)
+				Con_Printf("ICE send error to %s:%i(%s)\n", bestpeer->info.addr, bestpeer->info.port, candtype);
+			break;
+		}
 		return true;
 	}
 	return false;
 }
 
-static void ICE_ToStunServer(struct icestate_s *con)
+extern ftenet_generic_connection_t *FTENET_Datagram_EstablishConnection(ftenet_connections_t *col, const char *address, netadr_t adr);
+#ifdef HAVE_TCP
+struct turntcp_connection_s
+{	//this sends packets only to the relay, and accepts them only from there too. all packets must be stun packets (for byte-count framing)
+	ftenet_generic_connection_t pub;
+	vfsfile_t *f;
+	struct
+	{
+		qbyte buf[20+65536];
+		unsigned int offset;
+		unsigned int avail;
+	} recv, send;
+	netadr_t adr;
+};
+static qboolean TURN_TCP_GetPacket(struct ftenet_generic_connection_s *con)
+{
+	struct turntcp_connection_s *n = (struct turntcp_connection_s*)con;
+	qboolean tried = false;
+	int err;
+
+	if (n->send.avail)
+	{
+		err = VFS_WRITE(n->f, n->send.buf+n->send.offset, n->send.avail);
+		if (err >= 0)
+		{
+			n->send.avail -= err;
+			n->send.offset += err;
+		}
+	}
+
+	for (;;)
+	{
+		if (n->recv.avail >= 20) //must be a stun packet...
+		{
+			unsigned int psize = 20 + (n->recv.buf[n->recv.offset+2]<<8)+n->recv.buf[n->recv.offset+3];
+			if (psize <= n->recv.avail)
+			{
+				memcpy(net_message.data, n->recv.buf+n->recv.offset, psize);
+				n->recv.avail -= psize;
+				n->recv.offset += psize;
+				net_message.cursize = psize;
+				net_from = n->adr;
+				return true;
+			}
+		}
+		if (n->recv.offset && n->recv.offset+n->recv.avail == sizeof(n->recv.buf))
+		{
+			memmove(n->recv.buf, n->recv.buf+n->recv.offset, n->recv.avail);
+			n->recv.offset = 0;
+		}
+		else if (tried)
+			return false;	//don't infinitely loop.
+		err = VFS_READ(n->f, n->recv.buf+n->recv.offset+n->recv.avail, sizeof(n->recv.buf) - (n->recv.offset+n->recv.avail));
+		if (!err)	//no data...
+			return false;
+		else if (err < 0)
+			return false;
+		else
+		{
+			tried = true;
+			n->recv.avail += err;
+		}
+	}
+}
+static neterr_t TURN_TCP_SendPacket(struct ftenet_generic_connection_s *con, int length, const void *data, netadr_t *to)
+{
+	int err;
+	struct turntcp_connection_s *n = (struct turntcp_connection_s*)con;
+	if (!NET_CompareAdr(to, &n->adr))
+		return NETERR_NOROUTE;
+
+	//validate the packet - make sure its a TURN one. only checking size here cos we're lazy and that's enough.
+	if (length < 20 || length != 20 + (((const qbyte*)data)[2]<<8)+((const qbyte*)data)[3])
+		return NETERR_NOROUTE;
+
+	if (!n->send.avail && length < sizeof(n->send.buf))
+	{	//avoid copying if we have to
+		err = VFS_WRITE(n->f, data, length);
+		if (err >= 0 && err < length)
+		{	//but sometimes its partial.
+			data = (const char*)data + err;
+			length -= err;
+			n->send.offset = 0;
+			memcpy(n->send.buf, data, length);
+			n->send.avail = length;
+		}
+		if (!err)
+			return NETERR_CLOGGED;	//mostly so we don't spam while still doing tcp/tls handshakes.
+	}
+	else
+	{
+		if (               n->send.avail+length > sizeof(n->send.buf))
+			return NETERR_CLOGGED; //can't possibly fit.
+		if (n->send.offset+n->send.avail+length > sizeof(n->send.buf))
+		{	//move it down if we need.
+			memmove(n->send.buf, n->send.buf+n->send.offset, n->send.avail);
+			n->send.offset = 0;
+		}
+		memcpy(n->send.buf+n->send.offset, data, length);
+		n->send.avail += length;
+		err = VFS_WRITE(n->f, n->send.buf+n->send.offset, n->send.avail);
+		if (err >= 0)
+		{
+			n->send.offset += err;
+			n->send.avail -= err;
+		}
+	}
+	if (err >= 0)
+	{
+		return NETERR_SENT;	//sent something at least.
+	}
+	else
+	{
+		//one of the VFS_ERROR_* codes
+		return NETERR_DISCONNECTED;
+	}
+}
+static void TURN_TCP_Close(struct ftenet_generic_connection_s *con)
+{
+	struct turntcp_connection_s *n = (struct turntcp_connection_s*)con;
+	if (n->f)
+		VFS_CLOSE(n->f);
+}
+static ftenet_generic_connection_t *TURN_TCP_EstablishConnection(ftenet_connections_t *col, const char *address, netadr_t adr)
+{
+	struct turntcp_connection_s *n = Z_Malloc(sizeof(*n));
+	n->pub.thesocket = TCP_OpenStream(&adr, address);
+	n->f = FS_WrapTCPSocket(n->pub.thesocket, true, address);
+
+#ifdef HAVE_SSL
+	//convert to tls...
+	if (adr.prot == NP_TLS || adr.prot == NP_RTC_TLS)
+		n->f = FS_OpenSSL(address, n->f, false);
+#endif
+
+	if (!n->f)
+	{
+		Z_Free(n);
+		return NULL;
+	}
+	n->pub.owner = col;
+	n->pub.SendPacket = TURN_TCP_SendPacket;
+	n->pub.GetPacket = TURN_TCP_GetPacket;
+	n->pub.Close = TURN_TCP_Close;
+	n->adr = adr;
+
+	return &n->pub;
+}
+#endif
+
+static void ICE_ToStunServer(struct icestate_s *con, struct iceserver_s *srv)
 {
 	sizebuf_t buf;
 	char data[512];
 	int crc;
 	ftenet_connections_t *collection = ICE_PickConnection(con);
+	neterr_t err;
 	if (!collection)
 		return;
-	if (!con->stunrnd[0])
-		Sys_RandomBytes((char*)con->stunrnd, sizeof(con->stunrnd));
-
-	Con_DPrintf("ICE: Checking public IP via %s\n", NET_AdrToString(data, sizeof(data), &con->pubstunserver));
 
 	memset(&buf, 0, sizeof(buf));
 	buf.maxsize = sizeof(data);
 	buf.cursize = 0;
 	buf.data = data;
 
-	MSG_WriteShort(&buf, BigShort(0x0001));
+	if (srv->isstun)
+	{
+		if (!net_ice_allowstun.ival || net_ice_relayonly.ival)
+			return;
+		if (net_ice_debug.ival >= 2)
+			Con_Printf(S_COLOR_GRAY"[%s]: STUN: Checking public IP via %s\n", con->friendlyname, NET_AdrToString(data, sizeof(data), &srv->addr));
+		MSG_WriteShort(&buf, BigShort(STUN_BINDING));
+	}
+	else
+	{
+		if (!net_ice_allowturn.ival)
+		{
+			if (net_ice_relayonly.ival)
+			{
+				Con_Printf("%s: forcing %s on\n", net_ice_relayonly.name, net_ice_allowturn.name);
+				Cvar_Set(&net_ice_allowturn, "1");
+			}
+			return;
+		}
+		if (!srv->con)
+		{
+			if (srv->addr.type == NA_INVALID)
+				return; //nope...
+			if (srv->addr.prot != NP_DGRAM)
+			{
+#ifdef HAVE_TCP
+				srv->con = TURN_TCP_EstablishConnection(collection, srv->realm, srv->addr);
+#else
+				srv->con = NULL;
+#endif
+			}
+			else
+			{
+				netadr_t localadr;
+				memset(&localadr, 0, sizeof(localadr));
+				localadr.type = srv->addr.type;
+				localadr.prot = srv->addr.prot;
+				srv->con = FTENET_Datagram_EstablishConnection(collection, srv->realm, localadr);
+			}
+			if (!srv->con)
+			{
+				srv->addr.type = NA_INVALID; //fail it.
+				return;
+			}
+			srv->con->connum = 1+MAX_CONNECTIONS+countof(con->server)+(srv-con->server);	//*sigh*
+		}
+
+		if (srv->state==TURN_TERMINATING)
+		{
+			if (net_ice_debug.ival >= 2)
+				Con_Printf(S_COLOR_GRAY"[%s]: TURN: Terminating %s\n", con->friendlyname, NET_AdrToString(data, sizeof(data), &srv->addr));
+			MSG_WriteShort(&buf, BigShort(STUN_REFRESH));
+		}
+		else if (srv->state==TURN_ALLOCATED)
+		{
+			if (net_ice_debug.ival >= 2)
+				Con_Printf(S_COLOR_GRAY"[%s]: TURN: Refreshing %s\n", con->friendlyname, NET_AdrToString(data, sizeof(data), &srv->addr));
+			MSG_WriteShort(&buf, BigShort(STUN_REFRESH));
+		}
+		else
+		{
+			if (net_ice_debug.ival >= 2)
+				Con_Printf(S_COLOR_GRAY "[%s]: TURN: Allocating %s\n", con->friendlyname, NET_AdrToString(data, sizeof(data), &srv->addr));
+			MSG_WriteShort(&buf, BigShort(STUN_ALLOCATE));
+		}
+	}
+	Sys_RandomBytes((char*)srv->stunrnd, sizeof(srv->stunrnd));
+
 	MSG_WriteShort(&buf, 0);	//fill in later
-	MSG_WriteLong(&buf, BigLong(0x2112a442));
-	MSG_WriteLong(&buf, BigLong(con->stunrnd[0]));	//randomid
-	MSG_WriteLong(&buf, BigLong(con->stunrnd[1]));	//randomid
-	MSG_WriteLong(&buf, BigLong(con->stunrnd[2]));	//randomid
+	MSG_WriteLong(&buf, BigLong(STUN_MAGIC_COOKIE));
+	MSG_WriteLong(&buf, srv->stunrnd[0]);	//randomid
+	MSG_WriteLong(&buf, srv->stunrnd[1]);	//randomid
+	MSG_WriteLong(&buf, srv->stunrnd[2]);	//randomid
 
-	data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
-	data[3] = ((buf.cursize+8-20)>>0)&0xff;
-	crc = crc32(0, data, buf.cursize)^0x5354554e;
-	MSG_WriteShort(&buf, BigShort(0x8028));	//FINGERPRINT
-	MSG_WriteShort(&buf, BigShort(sizeof(crc)));
-	MSG_WriteLong(&buf, BigLong(crc));
+	if (!srv->isstun)
+	{
+		if (srv->state<TURN_ALLOCATED)
+		{
+			MSG_WriteShort(&buf, BigShort(STUNATTR_REQUESTED_TRANSPORT));
+			MSG_WriteShort(&buf, BigShort(4));
+			MSG_WriteLong(&buf, 17/*udp*/);
 
-	//fill in the length (for the fourth time, after filling in the integrity and fingerprint)
+			switch (srv->family)
+			{
+			case NA_IP:
+				//MSG_WriteShort(&buf, BigShort(STUNATTR_REQUESTED_ADDRFAM));
+				//MSG_WriteShort(&buf, BigShort(4));
+				//MSG_WriteLong(&buf, 1/*ipv4*/);
+				break;
+			case NA_IPV6:
+				MSG_WriteShort(&buf, BigShort(STUNATTR_REQUESTED_ADDRFAM));
+				MSG_WriteShort(&buf, BigShort(4));
+				MSG_WriteLong(&buf, 2/*ipv6*/);
+				break;
+			case NA_INVALID:	//ask for both ipv4+ipv6.
+				MSG_WriteShort(&buf, BigShort(STUNATTR_ADDITIONAL_ADDRFAM));
+				MSG_WriteShort(&buf, BigShort(4));
+				MSG_WriteLong(&buf, 2/*ipv6*/);
+				break;
+			default:
+				return;	//nope... not valid.
+			}
+		}
+
+//		MSG_WriteShort(&buf, BigShort(STUNATTR_DONT_FRAGMENT));
+//		MSG_WriteShort(&buf, BigShort(0));
+
+/*		MSG_WriteShort(&buf, BigShort(STUNATTR_SOFTWARE));
+		crc = strlen(FULLENGINENAME);
+		MSG_WriteShort(&buf, BigShort(crc));
+		SZ_Write (&buf, FULLENGINENAME, crc);
+		if (crc&3)
+			SZ_Write (&buf, "\0\0\0\0", 4-(crc&3));
+*/
+
+		if (srv->state==TURN_TERMINATING)
+		{
+			MSG_WriteShort(&buf, BigShort(STUNATTR_LIFETIME));
+			MSG_WriteShort(&buf, BigShort(4));
+			MSG_WriteLong(&buf, 0);
+		}
+		else
+		{
+//			MSG_WriteShort(&buf, BigShort(STUNATTR_LIFETIME));
+//			MSG_WriteShort(&buf, BigShort(4));
+//			MSG_WriteLong(&buf, BigLong(300));
+
+			if (srv->state != TURN_UNINITED)
+			{
+				if (!TURN_AddAuth(&buf, srv))
+					return;
+			}
+		}
+	}
+	else
+	{
+		data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
+		data[3] = ((buf.cursize+8-20)>>0)&0xff;
+		crc = crc32(0, data, buf.cursize)^0x5354554e;
+		MSG_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));
+		MSG_WriteShort(&buf, BigShort(sizeof(crc)));
+		MSG_WriteLong(&buf, BigLong(crc));
+	}
+
+	//fill in the length (for the final time, after filling in the integrity and fingerprint)
 	data[2] = ((buf.cursize-20)>>8)&0xff;
 	data[3] = ((buf.cursize-20)>>0)&0xff;
 
-	NET_SendPacket(collection, buf.cursize, data, &con->pubstunserver);
+	if (srv->isstun)
+		err = NET_SendPacket(collection, buf.cursize, data, &srv->addr);
+	else if (srv->con)
+		err = srv->con->SendPacket(srv->con, buf.cursize, data, &srv->addr);
+	else
+		return;
+	if (err == NETERR_CLOGGED)
+		srv->stunretry = Sys_Milliseconds();	//just keep retrying until it actually goes through.
+}
+
+static void TURN_AuthorisePeer(struct icestate_s *con, struct iceserver_s *srv, int peer)
+{
+	struct icecandidate_s *rc = srv->peer[peer].rc;
+	sizebuf_t buf;
+	netadr_t to2;
+	char data[512];
+	if (srv->state != TURN_ALLOCATED)
+		return;
+	memset(&buf, 0, sizeof(buf));
+	buf.maxsize = sizeof(data);
+	buf.cursize = 0;
+	buf.data = data;
+
+	MSG_WriteShort(&buf, BigShort(STUN_CREATEPERM));
+	MSG_WriteShort(&buf, 0);	//fill in later
+	MSG_WriteLong(&buf, BigLong(STUN_MAGIC_COOKIE));		//magic
+	MSG_WriteLong(&buf, srv->peer[peer].stunrnd[0]);	//randomid
+	MSG_WriteLong(&buf, srv->peer[peer].stunrnd[1]);	//randomid
+	MSG_WriteLong(&buf, srv->peer[peer].stunrnd[2]);	//randomid
+
+	if (!TURN_AddXorAddressAttrib(&buf, STUNATTR_XOR_PEER_ADDRESS, &rc->peer))
+		return;
+	if (*rc->info.reladdr && strcmp(rc->info.addr, rc->info.reladdr))	//allow the relay to bypass the peer's relay if its different (TURN doesn't care about port permissions).
+		if (NET_StringToAdr(rc->info.reladdr, rc->info.relport, &to2))
+			TURN_AddXorAddressAttrib(&buf, STUNATTR_XOR_PEER_ADDRESS, &to2);
+	if (!TURN_AddAuth(&buf, srv))
+		return;
+
+	buf.data[2] = ((buf.cursize-20)>>8)&0xff;
+	buf.data[3] = ((buf.cursize-20)>>0)&0xff;
+	srv->con->SendPacket(srv->con, buf.cursize, buf.data, &srv->addr);
+
+	if (net_ice_debug.ival >= 1)
+		Con_Printf(S_COLOR_GRAY"[%s]: (re)registering %s -> %s:%i (%s)\n", con->friendlyname, srv->realm, rc->info.addr, rc->info.port, ICE_GetCandidateType(&rc->info));
+}
+
+static void QDECL ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandinfo_s *n);
+
+static struct mdns_peer_s
+{
+	double nextretry;
+	int tries;	//stop sending after 4, forget a couple seconds after that.
+
+	struct icestate_s *con;
+	struct icecandinfo_s can;
+
+	struct mdns_peer_s *next;
+} *mdns_peers;
+static SOCKET mdns_socket = INVALID_SOCKET;
+static char mdns_name[2][43];	//client, server (so we reply with the right set of sockets... make per-ice?)
+
+struct dnshdr_s
+{
+	unsigned short tid, flags, questions, answerrr, authrr, addrr;
+};
+static qbyte *MDNS_ReadCName(qbyte *in, qbyte *end, char *out, char *outend)
+{
+	char *cname = out;
+	while (*in && in < end)
+	{
+		if (cname != out)
+			*cname++ = '.';
+		if (cname+1+*in > outend)
+			return end;	//if it overflows then its an error.
+		memcpy(cname, in+1, *in);
+		cname += *in;
+		in += 1+*in;
+	}
+	*cname = 0;
+	return ++in;
+}
+static void MDNS_ProcessPacket(qbyte *inmsg, size_t inmsgsize, netadr_t *source)
+{
+	struct dnshdr_s *rh = (struct dnshdr_s *)inmsg;
+	unsigned short flags;
+	qbyte *in, *end;
+	struct {
+		unsigned short idx, count;
+		char name[256];
+		unsigned short type;
+		unsigned short class;
+		unsigned int ttl;
+		qbyte *data;
+		unsigned short datasize;
+	} a;
+	struct mdns_peer_s *peer;
+
+	end = inmsg + inmsgsize;
+
+	//ignore packets from outside the lan...
+	if (NET_ClassifyAddress(source, NULL) > ASCOPE_LAN)
+		return;
+	if (source->port != htons(5353))
+		return;	//don't answer/read anything unless its actually mdns. there's supposed to be legacy stuff, but browsers don't seem to respond to that either so lets just play safe.
+
+	if (inmsgsize < sizeof(*rh))
+		return;	//some kind of truncation...
+
+	flags = ntohs(rh->flags);
+	if (flags & 0x780f)
+		return;	//opcode must be 0, response must be 0
+
+	in = (qbyte*)(rh+1);
+
+	if (rh->questions)
+	{
+		a.count = ntohs(rh->questions);
+		for (a.idx = 0; a.idx < a.count; a.idx++)
+		{
+			ftenet_connections_t *collection = NULL;
+
+			qbyte *questionstart = in;
+			in = MDNS_ReadCName(in, end, a.name, a.name+sizeof(a.name));
+			if (in+4 > end)
+				return;	//error...
+			a.type = *in++<<8;
+			a.type |= *in++<<0;
+			a.class = *in++<<8;
+			a.class |= *in++<<0;
+
+#ifdef HAVE_CLIENT
+			if (*mdns_name[0] && !strcmp(a.name, mdns_name[0]))
+				collection = cls.sockets;
+#endif
+#ifdef HAVE_SERVER
+			if (*mdns_name[1] && !strcmp(a.name, mdns_name[1]))
+				collection = svs.sockets;
+#endif
+			if (collection && (a.type == 1/*A*/ || a.type == 28/*AAAA*/) && a.class == 1/*IN*/)
+			{
+				qbyte resp[512], *o = resp;
+				int n,m, found=0, sz,ty;
+				netadr_t	addr[16];
+				struct ftenet_generic_connection_s			*gcon[sizeof(addr)/sizeof(addr[0])];
+				unsigned int			flags[sizeof(addr)/sizeof(addr[0])];
+				const char *params[sizeof(addr)/sizeof(addr[0])];
+				struct sockaddr_qstorage dest;
+				const unsigned int ttl = 120;
+
+				m = NET_EnumerateAddresses(collection, gcon, flags, addr, params, sizeof(addr)/sizeof(addr[0]));
+				*o++ = 0;*o++ = 0;	//tid - must be 0 for mdns responses.
+				*o++=0x84;*o++= 0;	//flags
+				*o++ = 0;*o++ = 0;	//questions
+				*o++ = 0;*o++ = 0;	//answers
+				*o++ = 0;*o++ = 0;	//auths
+				*o++ = 0;*o++ = 0;	//additionals
+				for (n = 0; n < m; n++)
+				{
+					if (NET_ClassifyAddress(&addr[n], NULL) == ASCOPE_LAN)
+					{	//just copy a load of crap over
+						if (addr[n].type == NA_IP)
+							sz = 4, ty=1;/*A*/
+						else if (addr[n].type == NA_IPV6)
+							sz = 16, ty=28;/*AAAA*/
+						else
+							continue;	//nope.
+						if (ty != a.type)
+							continue;
+						a.class |= 0x8000;
+
+						if (o+(in-questionstart)+6+sz > resp+sizeof(resp))
+							break;	//won't fit.
+
+						memcpy(o, questionstart, in-questionstart-4);
+						o += in-questionstart-4;
+						*o++ = ty>>8; *o++ = ty;
+						*o++ = a.class>>8; *o++ = a.class;
+						*o++ = ttl>>24; *o++ = ttl>>16; *o++ = ttl>>8; *o++ = ttl>>0;
+						*o++ = sz>>8; *o++ = sz;
+						memcpy(o, &addr[n].address, sz);
+						o+=sz;
+
+						found++;
+					}
+				}
+				resp[6] = found>>8; resp[7] = found&0xff;	//replace the answer count now that we actually know
+
+				if (!found)	//don't bother if we can't actually answer it.
+					continue;
+
+				//send a multicast response... (browsers don't seem to respond to unicasts).
+				if (a.type & 0x8000)
+				{	//they asked for a unicast response.
+					resp[0] = inmsg[0]; resp[1] = inmsg[1];	//redo the tid.
+					sz = NetadrToSockadr(source, &dest);
+				}
+				else
+				{
+					sz = sizeof(struct sockaddr_in);
+					memset(&dest, 0, sz);
+					((struct sockaddr_in*)&dest)->sin_family = AF_INET;
+					((struct sockaddr_in*)&dest)->sin_port = htons(5353);
+					((struct sockaddr_in*)&dest)->sin_addr.s_addr = inet_addr("224.0.0.251");
+				}
+				sendto(mdns_socket, resp, o-resp, 0, (struct sockaddr*)&dest, sz);
+			}
+		}
+	}
+
+	a.count = ntohs(rh->answerrr);
+	for (a.idx = 0; a.idx < a.count; a.idx++)
+	{
+		in = MDNS_ReadCName(in, end, a.name, a.name+sizeof(a.name));
+		if (in+10 > end)
+			return;	//error...
+		a.type = *in++<<8;
+		a.type |= *in++<<0;
+		a.class = *in++<<8;
+		a.class |= *in++<<0;
+		a.ttl = *in++<<24;
+		a.ttl |= *in++<<16;
+		a.ttl |= *in++<<8;
+		a.ttl |= *in++<<0;
+		a.datasize = *in++<<8;
+		a.datasize |= *in++<<0;
+		a.data = in;
+		in += a.datasize;
+		if (in > end)
+			return;
+
+		for (peer = mdns_peers; peer; peer = peer->next)
+		{
+			if (!strcmp(a.name, peer->can.addr))
+			{	//this is the record we were looking for. yay.
+
+				struct icestate_s *ice;
+				for	(ice = icelist; ice; ice = ice->next)
+					if (ice == peer->con)
+						break;
+				if (!ice)
+					break;	//no longer valid...
+
+				if ((a.type&0x7fff) == 1/*A*/ && (a.class&0x7fff) == 1/*IN*/ && a.datasize == 4)
+				{	//we got a proper ipv4 address. yay.
+					Q_snprintfz(peer->can.addr, sizeof(peer->can.addr), "%i.%i.%i.%i", a.data[0], a.data[1], a.data[2], a.data[3]);
+				}
+				else if ((a.type&0x7fff) == 28/*AAAA*/ && (a.class&0x7fff) == 1/*IN*/ && a.datasize == 16)
+				{	//we got a proper ipv4 address. yay.
+					Q_snprintfz(peer->can.addr, sizeof(peer->can.addr), "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x",
+							(a.data[ 0]<<8)|a.data[ 1],
+							(a.data[ 2]<<8)|a.data[ 3],
+							(a.data[ 4]<<8)|a.data[ 5],
+							(a.data[ 6]<<8)|a.data[ 7],
+							(a.data[ 8]<<8)|a.data[ 9],
+							(a.data[10]<<8)|a.data[11],
+							(a.data[12]<<8)|a.data[13],
+							(a.data[14]<<8)|a.data[15]);
+				}
+				else
+				{
+					Con_Printf("Useless answer\n");
+					break;
+				}
+				if (net_ice_debug.ival)
+					Con_Printf(S_COLOR_GRAY"[%s]: Resolved %s to %s\n", peer->con->friendlyname, a.name, peer->can.addr);
+				if (peer->tries != 4)
+				{	//first response?...
+					peer->tries = 4;
+					peer->nextretry = Sys_DoubleTime()+0.5;
+				}
+				ICE_AddRCandidateInfo(peer->con, &peer->can);	//restore it, so we can handle alternatives properly.
+				Q_strncpyz(peer->can.addr, a.name, sizeof(peer->can.addr));
+				break;
+			}
+		}
+	}
+}
+static void MDNS_ReadPackets(void)
+{
+	qbyte inmsg[9000];
+	ssize_t inmsgsize;
+	netadr_t adr;
+	struct sockaddr_qstorage source;
+
+	for(;;)
+	{
+		int slen = sizeof(source);
+		inmsgsize = recvfrom(mdns_socket, inmsg, sizeof(inmsg), 0, (struct sockaddr*)&source, &slen);
+		if (inmsgsize <= 0)
+			break;
+		SockadrToNetadr(&source, slen, &adr);
+		MDNS_ProcessPacket(inmsg, inmsgsize, &adr);
+	}
+}
+
+static void MDNS_Shutdown(void)
+{
+	if (mdns_socket == INVALID_SOCKET)
+		return;
+	closesocket(mdns_socket);
+	mdns_socket = INVALID_SOCKET;
+}
+
+static void MDNS_GenChars(char *d, size_t len, qbyte *s)
+{	//big endian hex, big endian data, can just do it by bytes.
+	static char tohex[16] = "0123456789abcdef";
+	for (; len--; s++)
+	{
+		*d++ = tohex[*s>>4];
+		*d++ = tohex[*s&15];
+	}
+}
+static void MDNS_Generate(char name[43])
+{	//generate a suitable mdns name.
+	unsigned char uuid[16];
+	Sys_RandomBytes((char*)uuid, sizeof(uuid));
+
+	uuid[8]&=~(1<<6);	//clear clk_seq_hi_res bit 6
+	uuid[8]|=(1<<7);	//set clk_seq_hi_res bit 7
+
+	uuid[6] &= ~0xf0;	//clear time_hi_and_version's high 4 bits
+	uuid[6] |= 0x40;	//replace with version
+
+	MDNS_GenChars(name+0, 4, uuid+0);
+	name[8] = '-';
+	MDNS_GenChars(name+9, 2, uuid+4);
+	name[13] = '-';
+	MDNS_GenChars(name+14, 2, uuid+6);
+	name[18] = '-';
+	MDNS_GenChars(name+19, 2, uuid+8);
+	name[23] = '-';
+	MDNS_GenChars(name+24, 6, uuid+10);
+	strcpy(name+36, ".local");
+}
+
+static qboolean MDNS_Setup(void)
+{
+	struct sockaddr_in adr;
+	int _true = true;
+//	int _false = false;
+	struct ip_mreq mbrship;
+	qboolean success = true;
+
+	if (mdns_socket != INVALID_SOCKET)
+		return true;	//already got one
+
+	memset(&adr, 0, sizeof(adr));
+	adr.sin_family = AF_INET;
+	adr.sin_port = htons(5353);
+	adr.sin_addr.s_addr = INADDR_ANY;
+
+	memset(&mbrship, 0, sizeof(mbrship));
+	mbrship.imr_multiaddr.s_addr = inet_addr("224.0.0.251");
+
+	//browsers don't seem to let us take the easy route, so we can't just use our existing helpers.
+	mdns_socket = socket (PF_INET, SOCK_CLOEXEC|SOCK_DGRAM, IPPROTO_UDP);
+	if (mdns_socket == INVALID_SOCKET) success = false;
+	if (!success || 0 > ioctlsocket(mdns_socket, FIONBIO, (void*)&_true)) success = false;
+	//other processes on the same host may be listening for mdns packets to insert their own responses (eg two browsers), so we need to ensure that other processes can use the same port. there's no real security here for us (that comes from stun's user/pass stuff).
+	if (!success || 0 > setsockopt (mdns_socket, SOL_SOCKET, SO_REUSEADDR, (const void*)&_true, sizeof(_true))) success = false;
+#ifdef SO_REUSEPORT	//not on windows.
+	if (!success || 0 > setsockopt (mdns_socket, SOL_SOCKET, SO_REUSEPORT, (const void*)&_true, sizeof(_true))) success = false;
+#endif
+#if IP_MULTICAST_LOOP	//ideally we'd prefer to not receive our own requests, but this is host-level, not socket-level, so unusable for communication with browsers on the same machine
+//	if (success)		setsockopt (mdns_socket, IPPROTO_IP, IP_MULTICAST_LOOP, &_false, sizeof(_false));
+#endif
+	if (!success || 0 > setsockopt (mdns_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const void*)&mbrship, sizeof(mbrship))) success = false;
+
+	adr.sin_addr.s_addr = INADDR_ANY;
+	if (!success || bind (mdns_socket, (void *)&adr, sizeof(adr)) < 0)
+		success = false;
+	if (!success)
+	{
+		MDNS_Shutdown();
+		Con_Printf("mdns setup failed\n");
+	}
+	else
+		MDNS_Generate(mdns_name[0]), MDNS_Generate(mdns_name[1]);
+	return success;
+}
+
+static void MDNS_SendQuery(struct mdns_peer_s *peer)
+{
+	char *n = peer->can.addr, *dot;
+	struct sockaddr_in dest;
+	qbyte outmsg[1024], *o = outmsg;
+
+	memset(&dest, 0, sizeof(dest));
+	dest.sin_family = AF_INET;
+	dest.sin_port = htons(5353);
+	dest.sin_addr.s_addr = inet_addr("224.0.0.251");
+
+	*o++ = 0;*o++ = 0;	//tid
+	*o++ = 0;*o++ = 0;	//flags
+	*o++ = 0;*o++ = 1;	//questions
+	*o++ = 0;*o++ = 0;	//answers
+	*o++ = 0;*o++ = 0;	//auths
+	*o++ = 0;*o++ = 0;	//additionals
+
+	//mdns is strictly utf-8. no punycode needed.
+	for(;;)
+	{
+		dot = strchr(n, '.');
+		if (!dot)
+			dot = n + strlen(n);
+		if (dot == n)
+			return; //err... can't write a 0-length label.
+		*o++ = dot-n;
+		memcpy(o, n, dot-n); o += dot-n; n += dot-n;
+		if (!*n)
+			break;
+		n++;
+	}
+	*o++ = 0;
+
+	*o++ = 0; *o++ = 1; //type: 'A' record
+	*o++ = 0; *o++ = 1; //class: 'IN'
+
+	sendto(mdns_socket, outmsg, o-outmsg, 0, (struct sockaddr*)&dest, sizeof(dest));
+	peer->tries++;
+	peer->nextretry = Sys_DoubleTime() + (50/1000.0);
+}
+static void MDNS_SendQueries(void)
+{
+	double time;
+	struct mdns_peer_s *peer, **link;
+	if (mdns_socket == INVALID_SOCKET)
+		return;
+	MDNS_ReadPackets();
+	if (!mdns_peers)
+		return;
+	time = Sys_DoubleTime();
+
+	for (link = &mdns_peers; (peer=*link); )
+	{
+		if (peer->nextretry < time)
+		{
+			if (peer->tries == 4)
+			{	//bye bye.
+				*link = peer->next;
+				BZ_Free(peer);
+				continue;
+			}
+
+			MDNS_SendQuery(peer);
+
+			if (peer->tries == 4)
+				peer->nextretry = Sys_DoubleTime() + 2.0;
+			break;	//don't spam multiple each frame.
+		}
+		link = &peer->next;
+	}
+}
+static void MDNS_AddQuery(struct icestate_s *con, struct icecandinfo_s *can)
+{
+	struct mdns_peer_s *peer;
+	if (!MDNS_Setup())
+		return;
+	peer = Z_Malloc(sizeof(*peer));
+	peer->con = con;
+	peer->can = *can;
+	peer->next = mdns_peers;
+	peer->tries = 0;
+	peer->nextretry = Sys_DoubleTime();
+	mdns_peers = peer;
+	MDNS_SendQuery(peer);
+}
+
+static qboolean MDNS_CharsAreHex(char *s, size_t len)
+{
+	for (; len--; s++)
+	{
+		if (*s >= '0' && *s <= '9')
+			;
+		else if (*s >= 'a' && *s <= 'f')
+			;
+		else
+			return false;
+	}
+	return true;
 }
 
 int ParsePartialIP(const char *s, netadr_t *a);
@@ -658,16 +1792,28 @@ static void QDECL ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandin
 	qboolean isnew;
 	netadr_t peer;
 	int peerbits;
-	//I don't give a damn about rtpc.
+	//I don't give a damn about rtcp.
 	if (n->component != 1)
 		return;
 	if (n->transport != 0)
 		return;	//only UDP is supported.
 
-	//don't use the regular string->addr, because browsers seem to shove internal gibberish names in there that waste time to resolve. hostnames don't really make sense here anyway.
+	//check if its an mDNS name - must be a UUID, with a .local on the end.
+	if (net_ice_allowmdns.ival &&
+		MDNS_CharsAreHex(n->addr, 8) && n->addr[8]=='-' &&
+		MDNS_CharsAreHex(n->addr+9, 4) && n->addr[13]=='-' &&
+		MDNS_CharsAreHex(n->addr+14, 4) && n->addr[18]=='-' &&
+		MDNS_CharsAreHex(n->addr+19, 4) && n->addr[23]=='-' &&
+		MDNS_CharsAreHex(n->addr+24, 12) && !strcmp(&n->addr[36], ".local"))
+	{
+		MDNS_AddQuery(con, n);
+		return;
+	}
+
+	//don't use the regular string->addr, they can fail and stall and make us unresponsive etc. hostnames don't really make sense here anyway.
 	peerbits = ParsePartialIP(n->addr, &peer);
 	peer.prot = NP_DGRAM;
-	peer.port = n->port;
+	peer.port = htons(n->port);
 	if (peer.type == NA_IP && peerbits == 32)
 	{
 		//ignore invalid addresses
@@ -732,7 +1878,21 @@ static void QDECL ICE_AddRCandidateInfo(struct icestate_s *con, struct icecandin
 	o->tried = 0;
 	o->reachable = 0;
 
-	Con_DPrintf("%s remote candidate %s: [%s]:%i\n", isnew?"Added":"Updated", o->info.candidateid, o->info.addr, o->info.port);
+	if (net_ice_debug.ival >= 1)
+		Con_Printf(S_COLOR_GRAY"[%s]: %s remote candidate %s: [%s]:%i\n", con->friendlyname, isnew?"Added":"Updated", o->info.candidateid, o->info.addr, o->info.port);
+
+	if (n->type == ICE_RELAY && *n->reladdr && (strcmp(n->addr, n->reladdr) || n->port != n->relport))
+	{	//for relay candidates, add an srflx candidate too.
+		struct icecandinfo_s t = o->info;
+		t.type = ICE_SRFLX;
+		strcpy(t.addr, n->reladdr);
+		t.port = n->relport;
+		*t.reladdr = 0;
+		t.relport = 0;
+		t.priority |= 1<<24;	//nudge its priority up slightly to favour more direct links when we can.
+		*t.candidateid = 0;		//anonymous...
+		ICE_AddRCandidateInfo(con, &t);
+	}
 }
 
 static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const char *value);
@@ -756,7 +1916,7 @@ static void ICE_ParseSDPLine(struct icestate_s *con, const char *value)
 		value = COM_ParseOut(value+14, name, sizeof(name));
 		if (!strcasecmp(name, "sha-1"))
 			con->cred.peer.hash = &hash_sha1;
-		else if (!strcasecmp(name, "sha-2224"))
+		else if (!strcasecmp(name, "sha-224"))
 			con->cred.peer.hash = &hash_sha224;
 		else if (!strcasecmp(name, "sha-256"))
 			con->cred.peer.hash = &hash_sha256;
@@ -804,6 +1964,8 @@ static void ICE_ParseSDPLine(struct icestate_s *con, const char *value)
 	}
 	else if (!strncmp(value, "a=sctp-port:", 12))
 		con->peersctpport = atoi(value+12);
+	else if (!strncmp(value, "a=sctp-optional:", 16))
+		con->peersctpoptional = atoi(value+16);
 #endif
 	else if (!strncmp(value, "a=rtpmap:", 9))
 	{
@@ -881,6 +2043,17 @@ static void ICE_ParseSDPLine(struct icestate_s *con, const char *value)
 				value += 6;
 				n.relport = strtoul(value, (char**)&value, 0);
 			}
+			/*else if (!strncmp(value, "network-cost ", 13))
+			{
+				value += 13;
+				n.netcost = strtoul(value, (char**)&value, 0);
+			}*/
+			/*else if (!strncmp(value, "ufrag ", 6))
+			{
+				value += 6;
+				while (*value && *value != ' ')
+					value++;
+			}*/
 			else
 			{
 				//this is meant to be extensible.
@@ -902,19 +2075,35 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 	{
 		int oldstate = con->state;
 		if (!strcmp(value, STRINGIFY(ICE_CONNECTING)))
+		{
 			con->state = ICE_CONNECTING;
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: ice state connecting\n", con->friendlyname);
+		}
 		else if (!strcmp(value, STRINGIFY(ICE_INACTIVE)))
+		{
 			con->state = ICE_INACTIVE;
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: ice state inactive\n", con->friendlyname);
+		}
 		else if (!strcmp(value, STRINGIFY(ICE_FAILED)))
+		{
 			con->state = ICE_FAILED;
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: ice state failed\n", con->friendlyname);
+		}
 		else if (!strcmp(value, STRINGIFY(ICE_CONNECTED)))
+		{
 			con->state = ICE_CONNECTED;
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: ice state connected\n", con->friendlyname);
+		}
 		else
 		{
 			Con_Printf("ICE_Set invalid state %s\n", value);
 			con->state = ICE_INACTIVE;
 		}
-		con->timeout = Sys_Milliseconds() + 30;
+		con->icetimeout = Sys_Milliseconds() + 30*1000;
 
 		con->retries = 0;
 
@@ -926,14 +2115,26 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 
 		if (con->state >= ICE_CONNECTING)
 		{
+#ifndef SERVERONLY
+			if (con->proto == ICEP_QWCLIENT)
+				CL_Transfer(&con->qadr);	//okay, the client should be using this ice connection now.
+#endif
 #ifdef HAVE_DTLS
 			if (con->mode == ICEM_WEBRTC)
 			{
 				if (!con->dtlsstate && con->dtlsfuncs)
 				{
-					con->dtlsstate = con->dtlsfuncs->CreateContext(&con->cred, con, ICE_Transmit, con->dtlspassive);
+					if (con->cred.peer.hash)
+						con->dtlsstate = con->dtlsfuncs->CreateContext(&con->cred, con, ICE_Transmit, con->dtlspassive);
+					else if (net_enable_dtls.ival >= 3)
+					{	//peer doesn't seem to support dtls.
+						con->state = ICE_FAILED;
+						Con_Printf(CON_WARNING"WARNING: peer does not support dtls. Set net_enable_dtls to 0 to make optional.\n");
+					}
+					else if (con->state == ICE_CONNECTING && net_enable_dtls.ival>=2)
+						Con_Printf(CON_WARNING"WARNING: peer does not support dtls.\n");
 				}
-				if (!con->sctp)
+				if (!con->sctp && (!con->sctpoptional || !con->peersctpoptional) && con->mysctpport && con->peersctpport)
 				{
 					con->sctp = Z_Malloc(sizeof(*con->sctp));
 					con->sctp->myport = htons(con->mysctpport);
@@ -946,18 +2147,61 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 #endif
 		}
 
+		if (oldstate != con->state && con->state == ICE_INACTIVE)
+		{	//forget our peer
+			struct icecandidate_s *c;
+			int i;
+			memset(&con->chosenpeer, 0, sizeof(con->chosenpeer));
+
+#ifdef HAVE_DTLS
+			if (con->sctp)
+			{
+				Z_Free(con->sctp->cookie);
+				Z_Free(con->sctp);
+				con->sctp = NULL;
+			}
+			if (con->dtlsstate)
+			{
+				con->dtlsfuncs->DestroyContext(con->dtlsstate);
+				con->dtlsstate = NULL;
+			}
+#endif
+			while(con->rc)
+			{
+				c = con->rc;
+				con->rc = c->next;
+				Z_Free(c);
+			}
+			while(con->lc)
+			{
+				c = con->lc;
+				con->lc = c->next;
+				Z_Free(c);
+			}
+			for (i = 0; i < con->servers; i++)
+			{
+				struct iceserver_s *s = &con->server[i];
+				if (s->con)
+				{	//make sure we tell the TURN server to release our allocation.
+					s->state = TURN_TERMINATING;
+					ICE_ToStunServer(con, s);
+
+					s->con->Close(s->con);
+					s->con = NULL;
+				}
+				Z_Free(s->nonce);
+				s->nonce = NULL;
+				s->peers = 0;
+			}
+		}
+
 		if (oldstate != con->state && con->state == ICE_CONNECTED)
 		{
-			char msg[256];
 			if (con->chosenpeer.type == NA_INVALID)
 			{
 				con->state = ICE_FAILED;
-				Con_Printf("ICE failed. peer not valid.\n");
+				Con_Printf(CON_WARNING"[%s]: ICE failed. peer not valid.\n", con->friendlyname);
 			}
-#ifndef SERVERONLY
-			else if (con->proto == ICEP_QWCLIENT)
-				CL_Transfer(&con->qadr);	//okay, the client should be using this ice connection now.
-#endif
 #ifndef CLIENTONLY
 			else if (con->proto == ICEP_QWSERVER && con->mode != ICEM_WEBRTC)
 			{
@@ -966,7 +2210,13 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 			}
 #endif
 			if (con->state == ICE_CONNECTED)
-				Con_Printf(S_COLOR_GRAY "%s connection established (peer %s).\n", con->proto == ICEP_VOICE?"voice":"data", NET_AdrToString(msg, sizeof(msg), &con->chosenpeer));
+			{
+				if (con->proto >= ICEP_VOICE || net_ice_debug.ival)
+				{
+					char msg[256];
+					Con_Printf(S_COLOR_GRAY "[%s]: %s connection established (peer %s, via %s).\n", con->friendlyname, con->proto == ICEP_VOICE?"voice":"data", NET_AdrToString(msg, sizeof(msg), &con->chosenpeer), ICE_NetworkToName(con, con->chosenpeer.connum));
+				}
+			}
 		}
 
 #if !defined(SERVERONLY) && defined(VOICECHAT)
@@ -1004,19 +2254,87 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 		Z_Free(con->rpwd);
 		con->rpwd = Z_StrDup(value);
 	}
-	else if (!strcmp(prop, "stunip"))
+	else if (!strcmp(prop, "server"))
 	{
-		Z_Free(con->stunserver);
-		con->stunserver = Z_StrDup(value);
-		if (!NET_StringToAdr(con->stunserver, con->stunport, &con->pubstunserver))
-			return false;
-	}
-	else if (!strcmp(prop, "stunport"))
-	{
-		con->stunport = atoi(value);
-		if (con->stunserver)
-			if (!NET_StringToAdr(con->stunserver, con->stunport, &con->pubstunserver))
-				return false;
+		netadr_t hostadr[1];
+		qboolean okay;
+		qboolean tcp = false;
+		qboolean tls;
+		qboolean stun;
+		char *s, *next;
+		const char *user=NULL, *auth=NULL;
+		const char *host;
+		netadrtype_t family = NA_INVALID;
+		if (!strncmp(value, "stun:", 5))
+			stun=true, tls=false, value+=5;
+		else if (!strncmp(value, "turn:", 5))
+			stun=false, tls=false, value+=5;
+		else if (!strncmp(value, "turns:", 6))
+			stun=false, tls=true, value+=6;
+		else
+			return false;	//nope, uri not known.
+
+		host = Z_StrDup(value);
+
+		s = strchr(host, '?');
+		for (;s;s=next)
+		{
+			*s++ = 0;
+			next = strchr(s, '?');
+			if (next)
+				*next = 0;
+
+			if (!strncmp(s, "transport=", 10))
+			{
+				if (!strcmp(s+10, "udp"))
+					tcp=false;
+				else if (!strcmp(s+10, "tcp"))
+					tcp=true;
+			}
+			else if (!strncmp(s, "user=", 5))
+				user = s+5;
+			else if (!strncmp(s, "auth=", 5))
+				auth = s+5;
+			else if (!strncmp(s, "fam=", 4))
+			{
+				if (!strcmp(s+4, "ipv4") || !strcmp(s+4, "ip4") || !strcmp(s+4, "ip") || !strcmp(s+4, "4"))
+					family=NA_IP;
+				else if (!strcmp(s+4, "ipv6") || !strcmp(s+4, "ip6") || !strcmp(s+4, "6"))
+					family=NA_IPV6;
+			}
+		}
+
+		okay = !strchr(host, '/');
+		if (con->servers == countof(con->server))
+			okay = false;
+		else if (okay)
+		{
+			struct iceserver_s *srv = &con->server[con->servers];
+
+			//handily both stun and turn default to the same port numbers.
+			//FIXME: worker thread...
+			okay = NET_StringToAdr2(host, tls?5349:3478, hostadr, countof(hostadr), NULL);
+			if (okay)
+			{
+				if (tls)
+					hostadr->prot = tcp?NP_TLS:NP_DTLS;
+				else
+					hostadr->prot = tcp?NP_STREAM:NP_DGRAM;
+
+				con->servers++;
+				srv->isstun = stun;
+				srv->family = family;
+				srv->realm = Z_StrDup(host);
+				Sys_RandomBytes((char*)srv->stunrnd, sizeof(srv->stunrnd));
+				srv->stunretry = Sys_Milliseconds();	//'now'...
+				srv->addr = *hostadr;
+				srv->user = user?Z_StrDup(user):NULL;
+				srv->auth = auth?Z_StrDup(auth):NULL;
+			}
+		}
+
+		Z_Free(s);
+		return !!okay;
 	}
 	else if (!strcmp(prop, "sdp") || !strcmp(prop, "sdpoffer") || !strcmp(prop, "sdpanswer"))
 	{
@@ -1047,15 +2365,6 @@ static qboolean QDECL ICE_Set(struct icestate_s *con, const char *prop, const ch
 }
 static char *ICE_CandidateToSDP(struct icecandidate_s *can, char *value, size_t valuelen)
 {
-	char *ctype = "?";
-	switch(can->info.type)
-	{
-	default:
-	case ICE_HOST: ctype = "host"; break;
-	case ICE_SRFLX: ctype = "srflx"; break;
-	case ICE_PRFLX: ctype = "prflx"; break;
-	case ICE_RELAY: ctype = "relay"; break;
-	}
 	Q_snprintfz(value, valuelen, "a=candidate:%i %i %s %i %s %i typ %s",
 			can->info.foundation,
 			can->info.component,
@@ -1063,17 +2372,33 @@ static char *ICE_CandidateToSDP(struct icecandidate_s *can, char *value, size_t 
 			can->info.priority,
 			can->info.addr,
 			can->info.port,
-			ctype
+			ICE_GetCandidateType(&can->info)
 			);
 	Q_strncatz(value, va(" generation %i", can->info.generation), valuelen);
 	if (can->info.type != ICE_HOST)
 	{
-		if (*can->info.reladdr)
-			Q_strncatz(value, va(" raddr %s", can->info.reladdr), valuelen);
-		Q_strncatz(value, va(" rport %i", can->info.relport), valuelen);
+		if (net_ice_relayonly.ival)
+		{	//don't leak srflx info (technically this info is mandatory)
+			Q_strncatz(value, va(" raddr %s", can->info.addr), valuelen);
+			Q_strncatz(value, va(" rport %i", can->info.port), valuelen);
+		}
+		else
+		{
+			if (*can->info.reladdr)
+				Q_strncatz(value, va(" raddr %s", can->info.reladdr), valuelen);
+			Q_strncatz(value, va(" rport %i", can->info.relport), valuelen);
+		}
 	}
 
 	return value;
+}
+static qboolean ICE_LCandidateIsPrivate(struct icecandidate_s *caninfo)
+{	//return true for the local candidates that we're actually allowed to report. they'll stay flagged as 'dirty' otherwise.
+	if (!net_ice_exchangeprivateips.ival && caninfo->info.type == ICE_HOST && !caninfo->ismdns)
+		return true;
+	if (net_ice_relayonly.ival && caninfo->info.type != ICE_RELAY)
+		return true;
+	return false;
 }
 static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *value, size_t valuelen)
 {
@@ -1088,6 +2413,9 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 			break;
 		case ICE_FAILED:
 			Q_strncpyz(value, STRINGIFY(ICE_FAILED), valuelen);
+			break;
+		case ICE_GATHERING:
+			Q_strncpyz(value, STRINGIFY(ICE_GATHERING), valuelen);
 			break;
 		case ICE_CONNECTING:
 			Q_strncpyz(value, STRINGIFY(ICE_CONNECTING), valuelen);
@@ -1118,12 +2446,49 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 		Q_strncpyz(value, "0", valuelen);
 		for (can = con->lc; can; can = can->next)
 		{
-			if (can->dirty)
+			if (can->dirty && !ICE_LCandidateIsPrivate(can))
 			{
 				Q_strncpyz(value, "1", valuelen);
 				break;
 			}
 		}
+	}
+	else if (!strcmp(prop, "peersdp"))
+	{	//for debugging.
+		Q_strncpyz(value, "", valuelen);
+		if ((con->proto == ICEP_QWSERVER || con->proto == ICEP_QWCLIENT) && con->mode == ICEM_WEBRTC)
+		{
+#ifdef HAVE_DTLS
+			if (con->cred.peer.hash)
+			{
+				int b;
+				Q_strncatz(value, "a=fingerprint:", valuelen);
+				if (con->cred.peer.hash == &hash_sha1)
+					Q_strncatz(value, "sha-1", valuelen);
+				else if (con->cred.peer.hash == &hash_sha256)
+					Q_strncatz(value, "sha-256", valuelen);
+				else if (con->cred.peer.hash == &hash_sha512)
+					Q_strncatz(value, "sha-512", valuelen);
+				else
+					Q_strncatz(value, "UNKNOWN", valuelen);
+				for (b = 0; b < con->cred.peer.hash->digestsize; b++)
+					Q_strncatz(value, va(b?":%02X":" %02X", con->cred.peer.digest[b]), valuelen);
+				Q_strncatz(value, "\n", valuelen);
+			}
+#endif
+		}
+		Q_strncatz(value, va("a=ice-pwd:%s\n", con->rpwd), valuelen);
+		Q_strncatz(value, va("a=ice-ufrag:%s\n", con->rufrag), valuelen);
+
+#ifdef HAVE_DTLS
+		if (con->peersctpport)
+			Q_strncatz(value, va("a=sctp-port:%i\n", con->peersctpport), valuelen);	//stupid hardcoded thing.
+		if (con->peersctpoptional)
+			Q_strncatz(value, "a=sctp-optional:1\n", valuelen);
+#endif
+
+
+
 	}
 	else if (!strcmp(prop, "sdp") || !strcmp(prop, "sdpoffer") || !strcmp(prop, "sdpanswer"))
 	{
@@ -1153,9 +2518,16 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 		Q_strncatz(value, "t=0 0\n", valuelen);	//start+end times...
 		Q_strncatz(value, va("a=ice-options:trickle\n"), valuelen);
 
-		if ((con->proto == ICEP_QWSERVER || con->proto == ICEP_QWCLIENT) && con->mode == ICEM_WEBRTC)
+		if (con->proto == ICEP_QWSERVER || con->proto == ICEP_QWCLIENT)
 		{
 #ifdef HAVE_DTLS
+			if (net_enable_dtls.ival >= 3)
+			{	//this is a preliminary check to avoid wasting time
+				if (!con->cred.local.certsize)
+					return false;	//fail if we cannot do dtls when its required.
+				if (!strcmp(prop, "sdpanswer") || !con->cred.peer.hash)
+					return false;	//don't answer if they failed to provide a cert
+			}
 			if (con->cred.local.certsize)
 			{
 				qbyte fingerprint[DIGEST_MAXSIZE];
@@ -1165,8 +2537,20 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 				for (b = 0; b < hash_sha256.digestsize; b++)
 					Q_strncatz(value, va(b?":%02X":" %02X", fingerprint[b]), valuelen);
 				Q_strncatz(value, "\n", valuelen);
+
+				if (con->mode == ICEM_WEBRTC)
+				{
+					Q_strncatz(value, "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\n", valuelen);
+					if (con->mysctpport)
+						Q_strncatz(value, va("a=sctp-port:%i\n", con->mysctpport), valuelen);	//stupid hardcoded thing.
+					if (con->sctpoptional)
+						Q_strncatz(value, "a=sctp-optional:1\n", valuelen);
+				}
+				else
+					Q_strncatz(value, "m=application 9 UDP/DTLS\n", valuelen);
 			}
-			Q_strncatz(value, "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\n", valuelen);
+			else
+				Q_strncatz(value, "m=application 9 UDP\n", valuelen);
 #endif
 		}
 //		Q_strncatz(value, va("c=IN %s %s\n", sender.type==NA_IPV6?"IP6":"IP4", NET_BaseAdrToString(tmpstr, sizeof(tmpstr), &sender)), valuelen);
@@ -1187,9 +2571,6 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 			else if (!strcmp(prop, "sdpoffer"))
 				Q_strncatz(value, va("a=setup:actpass\n"), valuelen);	//don't care if we're active or passive
 		}
-
-		if (con->mysctpport)
-			Q_strncatz(value, va("a=sctp-port:%i\n", con->mysctpport), valuelen);	//stupid hardcoded thing.
 #endif
 
 		/*fixme: merge the codecs into a single media line*/
@@ -1227,51 +2608,97 @@ static qboolean QDECL ICE_Get(struct icestate_s *con, const char *prop, char *va
 	return true;
 }
 
-static void ICE_Debug(struct icestate_s *con, qboolean islisten)
+static void ICE_PrintSummary(struct icestate_s *con, qboolean islisten)
+{
+	char msg[64];
+
+	Con_Printf(S_COLOR_GRAY" ^[[%s]\\ice\\%s^]: ", con->friendlyname, con->friendlyname);
+	switch(con->proto)
+	{
+	case ICEP_VOICE:	Con_Printf(S_COLOR_GRAY"(voice) "); break;
+	case ICEP_VIDEO:	Con_Printf(S_COLOR_GRAY"(video) "); break;
+	default:			break;
+	}
+	switch(con->state)
+	{
+	case ICE_INACTIVE:		Con_Printf(S_COLOR_RED "inactive"); break;
+	case ICE_FAILED:		Con_Printf(S_COLOR_RED "failed"); break;
+	case ICE_GATHERING:		Con_Printf(S_COLOR_YELLOW "gathering"); break;
+	case ICE_CONNECTING:	Con_Printf(S_COLOR_YELLOW "connecting"); break;
+	case ICE_CONNECTED:		Con_Printf(S_COLOR_GRAY"%s via %s", NET_AdrToString(msg,sizeof(msg), &con->chosenpeer), ICE_NetworkToName(con, con->chosenpeer.connum)); break;
+	}
+#ifdef HAVE_DTLS
+	if (con->dtlsstate)
+		Con_Printf(S_COLOR_GREEN " (encrypted%s)", con->sctp?", sctp":"");
+	else if (con->sctp)
+		Con_Printf(S_COLOR_RED " (plain-text, sctp)");	//weeeeeeird and pointless...
+	else
+#endif
+		Con_Printf(S_COLOR_RED " (plain-text)");
+	Con_Printf("\n");
+}
+static void ICE_Debug(struct icestate_s *con)
 {
 	struct icecandidate_s *can;
 	char buf[65536];
 	ICE_Get(con, "state", buf, sizeof(buf));
-	Con_Printf("ICE \"%s\" (%s):\n", con->friendlyname, buf);
-	if (islisten)
-		ICE_Get(con, "sdpanswer", buf, sizeof(buf));
+	Con_Printf("ICE [%s] (%s):\n", con->friendlyname, buf);
+	if (con->brokerless)
+		Con_Printf(" timeout: %g\n", (int)(con->icetimeout-Sys_Milliseconds())/1000.0);
 	else
-		ICE_Get(con, "sdpoffer", buf, sizeof(buf));
-	Con_Printf(S_COLOR_YELLOW "%s\n", buf);
+	{
+		unsigned int idle = (Sys_Milliseconds()+30*1000 - con->icetimeout);
+		if (idle > 500)
+			Con_Printf(" idle: %g\n", idle/1000.0);
+	}
+	if (net_ice_debug.ival >= 2)
+	{	//rather uninteresting really...
+		if (con->initiator)
+			ICE_Get(con, "sdpoffer", buf, sizeof(buf));
+		else
+			ICE_Get(con, "sdpanswer", buf, sizeof(buf));
+		Con_Printf("sdp:\n"S_COLOR_YELLOW "%s\n", buf);
 
-	Con_Printf("local:\n");
+		//incomplete anyway
+		ICE_Get(con, "peersdp", buf, sizeof(buf));
+		Con_Printf("peer:\n"S_COLOR_YELLOW"%s\n", buf);
+	}
+
+	Con_Printf(" local:\n");
 	for (can = con->lc; can; can = can->next)
 	{
 		ICE_CandidateToSDP(can, buf, sizeof(buf));
-		if (can->dirty)
-			Con_Printf(S_COLOR_RED" %s\n", buf);
+		if (con->chosenpeer.type!=NA_INVALID && con->chosenpeer.connum == can->info.network)
+			Con_Printf(S_COLOR_GREEN"  %s\n", buf);
+		else if (can->dirty)
+			Con_Printf(S_COLOR_RED"  %s\n", buf);
 		else
-			Con_Printf(S_COLOR_YELLOW" %s\n", buf);
+			Con_Printf(S_COLOR_YELLOW"  %s\n", buf);
 	}
-	Con_Printf("remote:\n");
+	Con_Printf(" remote:\n");
 	for (can = con->rc; can; can = can->next)
 	{
 		ICE_CandidateToSDP(can, buf, sizeof(buf));
-		if (can->dirty)
-			Con_Printf(S_COLOR_RED" %s\n", buf);
+		if (can->reachable)
+		{
+			if (con->chosenpeer.type!=NA_INVALID && NET_CompareAdr(&can->peer,&con->chosenpeer))
+				Con_Printf(S_COLOR_GREEN"  %s\n", buf);
+			else
+				Con_Printf(S_COLOR_YELLOW"  %s\n", buf);
+		}
 		else
-			Con_Printf(S_COLOR_YELLOW" %s\n", buf);
+			Con_Printf(S_COLOR_RED"  %s\n", buf);
 	}
 }
-static qboolean QDECL ICE_GetLCandidateSDP(struct icestate_s *con, char *out, size_t outsize)
+static void ICE_Show_f(void)
 {
-	struct icecandidate_s *can;
-	for (can = con->lc; can; can = can->next)
+	const char *findname = Cmd_Argv(1);
+	struct icestate_s *ice;
+	for (ice = icelist; ice; ice = ice->next)
 	{
-		if (can->dirty)
-		{
-			can->dirty = false;
-
-			ICE_CandidateToSDP(can, out, outsize);
-			return true;
-		}
+		if (!*findname || !strcmp(findname, ice->friendlyname))
+			ICE_Debug(ice);
 	}
-	return false;
 }
 static struct icecandinfo_s *QDECL ICE_GetLCandidateInfo(struct icestate_s *con)
 {
@@ -1280,12 +2707,50 @@ static struct icecandinfo_s *QDECL ICE_GetLCandidateInfo(struct icestate_s *con)
 	{
 		if (can->dirty)
 		{
+			if (ICE_LCandidateIsPrivate(can))
+				continue;
+
 			can->dirty = false;
 			return &can->info;
 		}
 	}
 	return NULL;
 }
+
+static qboolean QDECL ICE_GetLCandidateSDP(struct icestate_s *con, char *out, size_t outsize)
+{
+	struct icecandinfo_s *info = ICE_GetLCandidateInfo(con);
+	if (info)
+	{
+		struct icecandidate_s *can = (struct icecandidate_s*)info;
+		ICE_CandidateToSDP(can, out, outsize);
+		return true;
+	}
+	return false;
+}
+
+static unsigned int ICE_ComputePriority(netadr_t *adr, struct icecandinfo_s *info)
+{
+	int tpref, lpref;
+	switch(info->type)
+	{
+	case ICE_HOST:	tpref = 126;	break;	//ideal
+	case ICE_PRFLX: tpref = 110;	break;
+	case ICE_SRFLX: tpref = 100;	break;
+	default:
+	case ICE_RELAY:	tpref = 0;	break;	//relays suck
+	}
+	lpref = 0;
+	if (info->transport == 0)
+		lpref += 0x8000;	//favour udp the most (tcp sucks for stalls)
+	lpref += (255-info->network)<<16;	//favour the first network/socket specified
+	lpref += (255-NET_ClassifyAddress(adr, NULL))<<8;
+	if (adr->type == NA_IP)
+		lpref += 0x0001;	//favour ipv4 over ipv6 (less header/mtu overhead...). this is only slight,
+
+	return (tpref<<24) + (lpref<<lpref) + ((256 - info->component)<<0);
+}
+
 //adrno is 0 if the type is anything but host.
 void QDECL ICE_AddLCandidateInfo(struct icestate_s *con, netadr_t *adr, int adrno, int type)
 {
@@ -1297,16 +2762,48 @@ void QDECL ICE_AddLCandidateInfo(struct icestate_s *con, netadr_t *adr, int adrn
 	switch(adr->type)
 	{
 	case NA_IP:
-		if (adr->address.ip[0] == 127)
-			return;	//Addresses from a loopback interface MUST NOT be included in the candidate addresses
-		break;
 	case NA_IPV6:
-		if (!memcmp(adr->address.ip6, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\1", 16))
-			return;	//Addresses from a loopback interface MUST NOT be included in the candidate addresses
-		if (adr->address.ip6[0] == 0xfe && (adr->address.ip6[1]&0xc0)==0x80)
-			return; //fe80::/10 link local addresses should also not be reported.
+		switch(NET_ClassifyAddress(adr, NULL))
+		{
+		case ASCOPE_PROCESS://doesn't make sense.
+		case ASCOPE_HOST:	//don't waste time asking the relay to poke its loopback. if only because it'll report lots of errors.
+			return;
+		case ASCOPE_NET:	//public addresses, just add local candidates as normal
+			break;
+		case ASCOPE_LINK:	//random screwy addresses... hopefully don't need em if we're talking to a broker... no dhcp server is weird.
+			return;
+		case ASCOPE_LAN:	//private addresses. give them random info instead...
+			if (net_ice_allowmdns.ival && MDNS_Setup())
+			{
+				for (cand = con->lc; cand; cand = cand->next)
+				{
+					if (cand->ismdns)
+						return;	//DUPE
+				}
+
+				cand = Z_Malloc(sizeof(*cand));
+				cand->next = con->lc;
+				con->lc = cand;
+				Q_strncpyz(cand->info.addr, mdns_name[con->proto == ICEP_QWSERVER], sizeof(cand->info.addr));
+				cand->info.port = ntohs(adr->port);
+				cand->info.type = type;
+				cand->info.generation = 0;
+				cand->info.foundation = 1;
+				cand->info.component = 1;
+				cand->info.network = adr->connum;
+				cand->dirty = true;
+				cand->ismdns = true;
+
+				Sys_RandomBytes((void*)rnd, sizeof(rnd));
+				Q_strncpyz(cand->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(cand->info.candidateid));
+
+				cand->info.priority = ICE_ComputePriority(adr, &cand->info);
+				return;
+			}
+			break;
+		}
 		break;
-	default:
+	default:	//bad protocols
 		return;	//no, just no.
 	}
 	switch(adr->prot)
@@ -1318,17 +2815,11 @@ void QDECL ICE_AddLCandidateInfo(struct icestate_s *con, netadr_t *adr, int adrn
 		return;	//don't report any tcp/etc connections...
 	}
 
-	//only consider private IP addresses when we're allowed to do so (ignore completely so we don't ignore them if they're srflx).
-	if (!net_ice_exchangeprivateips.ival && type == ICE_HOST)
-		return;
-
 	for (cand = con->lc; cand; cand = cand->next)
 	{
 		if (NET_CompareAdr(adr, &cand->peer))
-			break;
+			return; //DUPE
 	}
-	if (cand)
-		return;	//DUPE
 
 	cand = Z_Malloc(sizeof(*cand));
 	cand->next = con->lc;
@@ -1345,10 +2836,7 @@ void QDECL ICE_AddLCandidateInfo(struct icestate_s *con, netadr_t *adr, int adrn
 	Sys_RandomBytes((void*)rnd, sizeof(rnd));
 	Q_strncpyz(cand->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(cand->info.candidateid));
 
-	cand->info.priority =
-		(1<<24)*(126) +
-		(1<<8)*((adr->type == NA_IP?32768:0)+cand->info.network*256+(255-adrno)) +
-		(1<<0)*(256 - cand->info.component);
+	cand->info.priority = ICE_ComputePriority(adr, &cand->info);
 }
 void QDECL ICE_AddLCandidateConn(ftenet_connections_t *col, netadr_t *addr, int type)
 {
@@ -1364,6 +2852,8 @@ static void ICE_Destroy(struct icestate_s *con)
 {
 	struct icecandidate_s *c;
 
+	ICE_Set(con, "state", STRINGIFY(ICE_INACTIVE));
+
 #ifdef HAVE_DTLS
 	if (con->sctp)
 	{
@@ -1377,8 +2867,6 @@ static void ICE_Destroy(struct icestate_s *con)
 	if (con->cred.local.key)
 		Z_Free(con->cred.local.key);
 #endif
-	if (con->connections)
-		FTENET_CloseCollection(con->connections);
 	while(con->rc)
 	{
 		c = con->rc;
@@ -1391,7 +2879,23 @@ static void ICE_Destroy(struct icestate_s *con)
 		con->lc = c->next;
 		Z_Free(c);
 	}
-	Z_Free(con->stunserver);
+	while (con->servers)
+	{
+		struct iceserver_s *s = &con->server[--con->servers];
+		if (s->con)
+		{	//make sure we tell the TURN server to release our allocation.
+			s->state = TURN_TERMINATING;
+			ICE_ToStunServer(con, s);
+
+			s->con->Close(s->con);
+		}
+		Z_Free(s->user);
+		Z_Free(s->auth);
+		Z_Free(s->realm);
+		Z_Free(s->nonce);
+	}
+	if (con->connections)
+		FTENET_CloseCollection(con->connections);
 	Z_Free(con->lufrag);
 	Z_Free(con->lpwd);
 	Z_Free(con->rufrag);
@@ -1405,10 +2909,29 @@ static void ICE_Destroy(struct icestate_s *con)
 //send pings to establish/keep the connection alive
 void ICE_Tick(void)
 {
-	struct icestate_s *con;
+	struct icestate_s **link, *con;
+	unsigned int curtime;
 
-	for (con = icelist; con; con = con->next)
+	if (!icelist)
+		return;
+	curtime = Sys_Milliseconds();
+
+	MDNS_SendQueries();
+
+	for (link = &icelist; (con=*link);)
 	{
+		if (con->brokerless)
+		{
+			if (con->state <= ICE_GATHERING)
+			{
+				*link = con->next;
+				ICE_Destroy(con);
+				continue;
+			}
+			else if ((signed int)(curtime-con->icetimeout) > 0)
+				ICE_Set(con, "state", STRINGIFY(ICE_FAILED));	//with no broker context, if we're not trying to send anything then kill the link.
+		}
+
 		switch(con->mode)
 		{
 		case ICEM_RAW:
@@ -1425,14 +2948,35 @@ void ICE_Tick(void)
 			break;
 		case ICEM_WEBRTC:
 		case ICEM_ICE:
-			if (con->state == ICE_CONNECTING || con->state == ICE_FAILED)
+			if (con->state == ICE_CONNECTING || con->state == ICE_CONNECTED)
 			{
-				unsigned int curtime = Sys_Milliseconds();
-
-				if (con->stunretry < curtime && con->pubstunserver.type != NA_INVALID)
+				size_t i, j;
+				struct iceserver_s *srv;
+				for (i = 0; i < con->servers; i++)
 				{
-					ICE_ToStunServer(con);
-					con->stunretry = curtime + 2*1000;
+					srv = &con->server[i];
+					if ((signed int)(srv->stunretry-curtime) < 0)
+					{
+						srv->stunretry = curtime + 2*1000;
+						ICE_ToStunServer(con, srv);
+					}
+					for (j = 0; j < srv->peers; j++)
+					{
+						if ((signed int)(srv->peer[j].retry-curtime) < 0)
+						{
+							TURN_AuthorisePeer(con, srv, j);
+							srv->peer[j].retry = curtime + 2*1000;
+						}
+					}
+					if (srv->con)
+					{
+						while (srv->con->GetPacket(srv->con))
+						{
+							net_from.connum = srv->con->connum;
+							net_from_connection = srv->con;
+							srv->con->owner->ReadGamePacket();
+						}
+					}
 				}
 				if (con->keepalive < curtime)
 				{
@@ -1440,32 +2984,59 @@ void ICE_Tick(void)
 					{
 						struct icecandidate_s *rc;
 						struct icecandidate_s *best = NULL;
+
 						for (rc = con->rc; rc; rc = rc->next)
-						{
+						{	//FIXME:
 							if (rc->reachable && (!best || rc->info.priority > best->info.priority))
 								best = rc;
 						}
+
 						if (best)
 						{
-							best->tried = ~best->reachable;
-							con->chosenpeer = best->peer;
-							ICE_SendSpam(con);
+							netadr_t nb = best->peer;
+							for (i = 0; ; i++)
+							{
+								if (best->reachable&(1<<i))
+								{
+									best->tried &= ~(1<<i);	//keep poking it...
+									nb.connum = i+1;
+									break;
+								}
+							}
+							if (memcmp(&con->chosenpeer, &nb, sizeof(nb)) && (con->chosenpeer.type==NA_INVALID || !con->controlled))
+							{	//it actually changed... let them know NOW.
+								best->tried &= ~(1<<(con->chosenpeer.connum-1));	//make sure we resend this one.
+								con->chosenpeer = nb;
+								ICE_SendSpam(con);
+
+								if (net_ice_debug.ival >= 1)
+								{
+									char msg[64];
+									Con_Printf(S_COLOR_GRAY"[%s]: New peer chosen %s (%s), via %s.\n", con->friendlyname, NET_AdrToString(msg, sizeof(msg), &con->chosenpeer), ICE_GetCandidateType(&best->info), ICE_NetworkToName(con, con->chosenpeer.connum));
+								}
+							}
 						}
-						else
+						/*if (con->state == ICE_CONNECTED && best)
+						{	//once established, back off somewhat
+							for (rc = con->rc; rc; rc = rc->next)
+								rc->tried &= ~rc->reachable;
+						}
+						else*/
 						{
 							for (rc = con->rc; rc; rc = rc->next)
 								rc->tried = 0;
 						}
+
 						con->retries++;
 						if (con->retries > 32)
 							con->retries = 32;
-						con->keepalive = curtime + 200*(con->retries);	//RTO
+						con->keepalive = curtime + 200*(con->retries);	//RTO... ish.
 					}
 					else
-						con->keepalive = curtime + 50*(con->retries+1);	//Ta
+						con->keepalive = curtime + 50*(con->retries+1);	//Ta... absmin of 5ms
 				}
 			}
-			else if (con->state == ICE_CONNECTED)
+			if (con->state == ICE_CONNECTED)
 			{
 #ifdef HAVE_DTLS
 				if (con->sctp)
@@ -1478,20 +3049,25 @@ void ICE_Tick(void)
 			}
 			break;
 		}
+
+		link = &con->next;
 	}
 }
-static void QDECL ICE_Close(struct icestate_s *con)
+static void QDECL ICE_Close(struct icestate_s *con, qboolean force)
 {
 	struct icestate_s **link;
-
-	ICE_Set(con, "state", STRINGIFY(ICE_INACTIVE));
 
 	for (link = &icelist; *link; )
 	{
 		if (con == *link)
 		{
-			*link = con->next;
-			ICE_Destroy(con);
+			if (!force)
+				con->brokerless = true;
+			else
+			{
+				*link = con->next;
+				ICE_Destroy(con);
+			}
 			return;
 		}
 		else
@@ -1609,10 +3185,17 @@ struct sctp_chunk_fwdtsn_s
 
 static neterr_t SCTP_PeerSendPacket(struct icestate_s *peer, int length, const void *data)
 {	//sends to the dtls layer (which will send to the generic ice dispatcher that'll send to the dgram stuff... layers on layers.
-	if (length<=12)
-		return NETERR_DISCONNECTED;
 	if (peer)
-		return peer->dtlsfuncs->Transmit(peer->dtlsstate, data, length);
+	{
+		if (peer->dtlsstate)
+			return peer->dtlsfuncs->Transmit(peer->dtlsstate, data, length);
+		else if (peer->chosenpeer.type != NA_INVALID)
+			return ICE_Transmit(peer, data, length);
+		else if (peer->state < ICE_CONNECTING)
+			return NETERR_DISCONNECTED;
+		else
+			return NETERR_CLOGGED;
+	}
 	else
 		return NETERR_NOROUTE;
 }
@@ -1831,7 +3414,8 @@ static void SCTP_DecodeDCEP(sctp_t *sctp, struct icestate_s *peer, qbyte *resp)
 		char *prot = label + strlen(label)+1;
 
 		sctp->qstreamid = sctp->i.r.sid;
-		Con_DPrintf("New SCTP Channel: \"%s\" (%s)\n", label, prot);
+		if (net_ice_debug.ival >= 1)
+			Con_Printf(S_COLOR_GRAY"[%s]: New SCTP Channel: \"%s\" (%s)\n", peer->friendlyname, label, prot);
 
 		h->dstport = sctp->peerport;
 		h->srcport = sctp->myport;
@@ -1860,7 +3444,7 @@ struct sctp_errorcause_s
 	quint16_t cause;
 	quint16_t length;
 };
-static void SCTP_ErrorChunk(const char *errortype, struct sctp_errorcause_s *s, size_t totallen)
+static void SCTP_ErrorChunk(struct icestate_s *peer, const char *errortype, struct sctp_errorcause_s *s, size_t totallen)
 {
 	quint16_t cc, cl;
 	while(totallen > 0)
@@ -1872,22 +3456,22 @@ static void SCTP_ErrorChunk(const char *errortype, struct sctp_errorcause_s *s, 
 		if (totallen < cl)
 			return;	//err..
 
-		switch(cc)
+		if (net_ice_debug.ival >= 1) switch(cc)
 		{
-		case 1:		Con_Printf("%s: Invalid Stream Identifier\n",	errortype);	break;
-        case 2:		Con_Printf("%s: Missing Mandatory Parameter\n", errortype);	break;
-        case 3:		Con_Printf("%s: Stale Cookie Error\n",			errortype);	break;
-        case 4:		Con_Printf("%s: Out of Resource\n",				errortype);	break;
-        case 5:		Con_Printf("%s: Unresolvable Address\n",		errortype);	break;
-        case 6:		Con_Printf("%s: Unrecognized Chunk Type\n",		errortype);	break;
-        case 7:		Con_Printf("%s: Invalid Mandatory Parameter\n", errortype);	break;
-        case 8:		Con_Printf("%s: Unrecognized Parameters\n",		errortype);	break;
-        case 9:		Con_Printf("%s: No User Data\n",				errortype);	break;
-        case 10:	Con_Printf("%s: Cookie Received While Shutting Down\n",				errortype);	break;
-        case 11:	Con_Printf("%s: Restart of an Association with New Addresses\n",	errortype);	break;
-        case 12:	Con_Printf("%s: User Initiated Abort\n",		errortype);	break;
-        case 13:	Con_Printf("%s: Protocol Violation [%s]\n",		errortype, (char*)(s+1));	break;
-        default:	Con_Printf("%s: Unknown Reason\n",				errortype);	break;
+		case 1:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Invalid Stream Identifier\n",	peer->friendlyname, errortype);	break;
+        case 2:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Missing Mandatory Parameter\n",	peer->friendlyname, errortype);	break;
+        case 3:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Stale Cookie Error\n",			peer->friendlyname, errortype);	break;
+        case 4:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Out of Resource\n",				peer->friendlyname, errortype);	break;
+        case 5:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Unresolvable Address\n",			peer->friendlyname, errortype);	break;
+        case 6:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Unrecognized Chunk Type\n",		peer->friendlyname, errortype);	break;
+        case 7:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Invalid Mandatory Parameter\n",	peer->friendlyname, errortype);	break;
+        case 8:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Unrecognized Parameters\n",		peer->friendlyname, errortype);	break;
+        case 9:		Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: No User Data\n",					peer->friendlyname, errortype);	break;
+        case 10:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Cookie Received While Shutting Down\n",			peer->friendlyname, errortype);	break;
+        case 11:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Restart of an Association with New Addresses\n",	peer->friendlyname, errortype);	break;
+        case 12:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: User Initiated Abort\n",			peer->friendlyname, errortype);	break;
+        case 13:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Protocol Violation [%s]\n",		peer->friendlyname, errortype, (char*)(s+1));	break;
+        default:	Con_Printf(S_COLOR_GRAY"[%s]: SCTP %s: Unknown Reason\n",				peer->friendlyname, errortype);	break;
 		}
 
 		totallen -= cl;
@@ -1917,7 +3501,8 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 		return;	//crc wrong. assume corruption.
 	if (net_message.cursize&3)
 	{
-		Con_DPrintf("SCTP: packet not padded\n");
+		if (net_ice_debug.ival >= 2)
+			Con_Printf(S_COLOR_GRAY"[%s]: SCTP: packet not padded\n", peer->friendlyname);
 		return;	//mimic chrome, despite it being pointless.
 	}
 
@@ -1936,11 +3521,20 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 				qint32_t adv = tsn - sctp->i.ctsn;
 				sctp->i.ackneeded++;
 				if (adv >= SCTP_RCVSIZE)
-					Con_DPrintf("SCTP: Future Packet\n");/*too far in the future. we can't track such things*/
+				{
+					if (net_ice_debug.ival >= 1)
+						Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Future Packet\n", peer->friendlyname);/*too far in the future. we can't track such things*/
+				}
 				else if (adv <= 0)
-					Con_DPrintf("SCTP: PreCumulative\n");/*already acked this*/
+				{
+					if (net_ice_debug.ival >= 2)
+						Con_Printf(S_COLOR_GRAY"[%s]: SCTP: PreCumulative\n", peer->friendlyname);/*already acked this*/
+				}
 				else if (sctp->i.received[(tsn>>3)%sizeof(sctp->i.received)] & 1<<(tsn&7))
-					Con_DPrintf("SCTP: Dupe\n");/*already processed it. FIXME: Make a list for the next SACK*/
+				{
+					if (net_ice_debug.ival >= 2)
+						Con_DPrintf(S_COLOR_GRAY"[%s]: SCTP: Dupe\n", peer->friendlyname);/*already processed it. FIXME: Make a list for the next SACK*/
+				}
 				else
 				{
 					qboolean err = false;
@@ -1970,7 +3564,8 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 						sctp->i.r.tsn++;
 						if (sctp->i.r.size + clen-sizeof(*dc) > sizeof(sctp->i.r.buf))
 						{
-							Con_DPrintf("SCTP: Oversized\n");
+							if (net_ice_debug.ival >= 2)
+								Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Oversized\n", peer->friendlyname);
 							sctp->i.r.toobig = true;	//reassembled packet was too large, just corrupt it.
 						}
 						else
@@ -2050,7 +3645,8 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 						sctp->peerhasfwdtsn = true;
 						break;
 					default:
-						Con_DPrintf("SCTP: Found unknown init parameter %i||%#x\n", ptype, ptype);
+						if (net_ice_debug.ival >= 2)
+							Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Found unknown init parameter %i||%#x\n", peer->friendlyname, ptype, ptype);
 						break;
 					}
 					p = (void*)((qbyte*)p + ((plen+3)&~3));
@@ -2141,16 +3737,17 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 //		case SCTP_TYPE_PONG:	//we don't send pings
 		case SCTP_TYPE_ABORT:
 			ICE_Set(peer, "state", STRINGIFY(ICE_FAILED));
-			SCTP_ErrorChunk("Abort", (struct sctp_errorcause_s*)(c+1), clen-sizeof(*c));
+			SCTP_ErrorChunk(peer, "Abort", (struct sctp_errorcause_s*)(c+1), clen-sizeof(*c));
 			break;
 		case SCTP_TYPE_SHUTDOWN:	//FIXME. we should send an ack...
 			ICE_Set(peer, "state", STRINGIFY(ICE_FAILED));
-			Con_DPrintf(CON_ERROR"SCTP: Shutdown\n");
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Shutdown\n", peer->friendlyname);
 			break;
 //		case SCTP_TYPE_SHUTDOWNACK:	//we don't send shutdowns, cos we're lame like that...
 		case SCTP_TYPE_ERROR:
 			//not fatal...
-			SCTP_ErrorChunk("Error", (struct sctp_errorcause_s*)(c+1), clen-sizeof(*c));
+			SCTP_ErrorChunk(peer, "Error", (struct sctp_errorcause_s*)(c+1), clen-sizeof(*c));
 			break;
 		case SCTP_TYPE_COOKIEECHO:
 			if (clen >= sizeof(struct sctp_chunk_s))
@@ -2200,7 +3797,8 @@ static void SCTP_Decode(sctp_t *sctp, struct icestate_s *peer, ftenet_connection
 //		case SCTP_TYPE_SHUTDOWNDONE:
 		safedefault:
 			//no idea what this chunk is, just ignore it...
-			Con_DPrintf("SCTP: Unsupported chunk %i\n", c->type);
+			if (net_ice_debug.ival >= 1)
+				Con_Printf(S_COLOR_GRAY"[%s]: SCTP: Unsupported chunk %i\n", peer->friendlyname, c->type);
 			break;
 		}
 		c = (struct sctp_chunk_s*)((qbyte*)c + ((clen+3)&~3));	//next chunk is 4-byte aligned.
@@ -2223,8 +3821,8 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 	if (net_from.type == NA_ICE)
 		return false;	//this stuff over an ICE connection doesn't make sense.
 #endif
-	if (net_from.prot != NP_DGRAM)
-		return false;
+//	if (net_from.prot != NP_DGRAM)
+//		return false;
 
 #if defined(HAVE_CLIENT) && defined(VOICECHAT)
 	if (col == cls.sockets)
@@ -2247,20 +3845,35 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 			short portxor;
 			stunattr_t *attr = (stunattr_t*)(stun+1);
 			int alen;
+			unsigned short attrval;
+			int err = 0;
+			char errmsg[64];
+			*errmsg = 0;
+
+			adr.type = NA_INVALID;
 			while(stunlen)
 			{
 				stunlen -= sizeof(*attr);
 				alen = (unsigned short)BigShort(attr->attrlen);
 				if (alen > stunlen)
 					return false;
-				stunlen -= alen;
-				switch(BigShort(attr->attrtype))
+				stunlen -= (alen+3)&~3;
+				attrval = BigShort(attr->attrtype);
+				switch(attrval)
 				{
-				default:
+				case STUNATTR_USERNAME:
+				case STUNATTR_MESSAGEINTEGRITIY:
 					break;
-				case 1:
-				case 0x20:
-					if (BigShort(attr->attrtype) == 0x20)
+				default:
+					if (attrval & 0x8000)
+						break;	//okay to ignore
+					return true;
+				case STUNATTR_MAPPED_ADDRESS:
+					if (adr.type != NA_INVALID)
+						break;	//ignore it if we already got an address...
+				//fallthrough
+				case STUNATTR_XOR_MAPPED_ADDRESS:
+					if (attrval == STUNATTR_XOR_MAPPED_ADDRESS)
 					{
 						portxor = *(short*)&stun->magiccookie;
 						memcpy(xor, &stun->magiccookie, sizeof(xor));
@@ -2270,115 +3883,122 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 						portxor = 0;
 						memset(xor, 0, sizeof(xor));
 					}
-					if (alen == 8 && ((qbyte*)attr)[5] == 1)		//ipv4 MAPPED-ADDRESS
+					if (alen == 8 && ((qbyte*)attr)[5] == 1)		//ipv4
 					{
-						char str[256];
 						adr.type = NA_IP;
 						adr.port = (((short*)attr)[3]) ^ portxor;
 						*(int*)adr.address.ip = *(int*)(&((qbyte*)attr)[8]) ^ *(int*)xor;
-						NET_AdrToString(str, sizeof(str), &adr);
 					}
-					else if (alen == 20 && ((qbyte*)attr)[5] == 2)	//ipv6 MAPPED-ADDRESS
+					else if (alen == 20 && ((qbyte*)attr)[5] == 2)	//ipv6
 					{
-						netadr_t adr;
-						char str[256];
 						adr.type = NA_IPV6;
 						adr.port = (((short*)attr)[3]) ^ portxor;
 						((int*)adr.address.ip6)[0] = ((int*)&((qbyte*)attr)[8])[0] ^ ((int*)xor)[0];
 						((int*)adr.address.ip6)[1] = ((int*)&((qbyte*)attr)[8])[1] ^ ((int*)xor)[1];
 						((int*)adr.address.ip6)[2] = ((int*)&((qbyte*)attr)[8])[2] ^ ((int*)xor)[2];
 						((int*)adr.address.ip6)[3] = ((int*)&((qbyte*)attr)[8])[3] ^ ((int*)xor)[3];
-						NET_AdrToString(str, sizeof(str), &adr);
-					}
-
-					{
-						struct icestate_s *con;
-						for (con = icelist; con; con = con->next)
-						{
-							char str[256];
-							struct icecandidate_s *rc;
-							if (con->mode == ICEM_RAW)
-								continue;
-
-							if (NET_CompareAdr(&net_from, &con->pubstunserver))
-							{	//check to see if this is a new server-reflexive address, which happens when the peer is behind a nat.
-								for (rc = con->lc; rc; rc = rc->next)
-								{
-									if (NET_CompareAdr(&adr, &rc->peer))
-										break;
-								}
-								if (!rc)
-								{
-									netadr_t reladdr;
-									int relflags;
-									const char *relpath;
-									int rnd[2];
-									struct icecandidate_s *src;	//server Reflexive Candidate
-									src = Z_Malloc(sizeof(*src));
-									src->next = con->lc;
-									con->lc = src;
-									src->peer = adr;
-									NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), &adr);
-									src->info.port = ntohs(adr.port);
-									col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
-									//FIXME: we don't really know which one... NET_BaseAdrToString(src->info.reladdr, sizeof(src->info.reladdr), &reladdr);
-									src->info.relport = ntohs(reladdr.port);
-									src->info.type = ICE_SRFLX;
-									src->info.component = 1;
-									src->dirty = true;
-									src->info.priority = 1;	//FIXME
-
-									Sys_RandomBytes((void*)rnd, sizeof(rnd));
-									Q_strncpyz(src->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(src->info.candidateid));
-
-									Con_DPrintf("ICE: Public address: %s\n", NET_AdrToString(str, sizeof(str), &adr));
-								}
-								con->stunretry = Sys_Milliseconds() + 60*1000;
-							}
-							else
-							{	//check to see if this is a new peer-reflexive address, which happens when the peer is behind a nat.
-								for (rc = con->rc; rc; rc = rc->next)
-								{
-									if (NET_CompareAdr(&net_from, &rc->peer))
-									{
-										if (!(rc->reachable & (1u<<(net_from.connum-1))))
-											Con_DPrintf("ICE: We can reach %s\n", NET_AdrToString(str, sizeof(str), &net_from));
-										rc->reachable |= 1u<<(net_from.connum-1);
-
-										if (NET_CompareAdr(&net_from, &con->chosenpeer) && (stun->transactid[2] & BigLong(0x80000000)))
-										{
-											if (con->state == ICE_CONNECTING)
-												ICE_Set(con, "state", STRINGIFY(ICE_CONNECTED));
-										}
-									}
-								}
-							}
-						}
 					}
 					break;
-				case 9:
+				case STUNATTR_ERROR_CODE:
 					{
-						char msg[64];
-						char sender[256];
 						unsigned short len = BigShort(attr->attrlen)-4;
-						if (len > sizeof(msg)-1)
-							len = sizeof(msg)-1;
-						memcpy(msg, &((qbyte*)attr)[8], len);
-						msg[len] = 0;
-						Con_DPrintf("%s: Stun error code %u : %s\n", NET_AdrToString(sender, sizeof(sender), &net_from), ((qbyte*)attr)[7], msg);
-						if (((qbyte*)attr)[7] == 1)
-						{
-							//not authorised.
-						}
-						if (((qbyte*)attr)[7] == 87)
-						{
-							//role conflict.
-						}
+						if (len > sizeof(errmsg)-1)
+							len = sizeof(errmsg)-1;
+						memcpy(errmsg, &((qbyte*)attr)[8], len);
+						errmsg[len] = 0;
+						if (err==0)
+							err = (((qbyte*)attr)[6]*100) + (((qbyte*)attr)[7]%100);
 					}
 					break;
 				}
 				alen = (alen+3)&~3;
 				attr = (stunattr_t*)((char*)(attr+1) + alen);
+			}
+
+			if (err)
+			{
+				char sender[256];
+				if (net_ice_debug.ival >= 1)
+					Con_Printf("%s: Stun error code %u : %s\n", NET_AdrToString(sender, sizeof(sender), &net_from), err, errmsg);
+			}
+			else if (adr.type!=NA_INVALID && !err)
+			{
+				struct icestate_s *con;
+				for (con = icelist; con; con = con->next)
+				{
+					struct icecandidate_s *rc;
+					size_t i;
+					struct iceserver_s *s;
+					if (con->mode == ICEM_RAW)
+						continue;
+
+					for (i = 0; i < con->servers; i++)
+					{
+						s = &con->server[i];
+						if (NET_CompareAdr(&net_from, &s->addr))
+						{	//check to see if this is a new server-reflexive address, which happens when the peer is behind a nat.
+							for (rc = con->lc; rc; rc = rc->next)
+							{
+								if (NET_CompareAdr(&adr, &rc->peer))
+									break;
+							}
+							if (!rc)
+							{
+								//netadr_t reladdr;
+								//int relflags;
+								//const char *relpath;
+								int rnd[2];
+								struct icecandidate_s *src;	//server Reflexive Candidate
+								char str[256];
+								src = Z_Malloc(sizeof(*src));
+								src->next = con->lc;
+								con->lc = src;
+								src->peer = adr;
+								NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), &adr);
+								src->info.port = ntohs(adr.port);
+								//if (net_from.connum >= 1 && net_from.connum < 1+MAX_CONNECTIONS && col->conn[net_from.connum-1])
+								//	col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
+								//FIXME: we don't really know which one... NET_BaseAdrToString(src->info.reladdr, sizeof(src->info.reladdr), &reladdr);
+								//src->info.relport = ntohs(reladdr.port);
+								src->info.type = ICE_SRFLX;
+								src->info.component = 1;
+								src->info.network = net_from.connum;
+								src->dirty = true;
+								src->info.priority = ICE_ComputePriority(&src->peer, &src->info);	//FIXME
+
+								Sys_RandomBytes((void*)rnd, sizeof(rnd));
+								Q_strncpyz(src->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(src->info.candidateid));
+
+								if (net_ice_debug.ival >= 1)
+									Con_Printf(S_COLOR_GRAY"[%s]: Public address: %s\n", con->friendlyname, NET_AdrToString(str, sizeof(str), &adr));
+							}
+							s->stunretry = Sys_Milliseconds() + 60*1000;
+							return true;
+						}
+					}
+
+					//check to see if this is a new peer-reflexive address, which happens when the peer is behind a nat.
+					for (rc = con->rc; rc; rc = rc->next)
+					{
+						if (NET_CompareAdr(&net_from, &rc->peer))
+						{
+							if (!(rc->reachable & (1u<<(net_from.connum-1))))
+							{
+								char str[256];
+								if (net_ice_debug.ival >= 1)
+									Con_Printf(S_COLOR_GRAY"[%s]: We can reach %s (%s) via %s\n", con->friendlyname, NET_AdrToString(str, sizeof(str), &net_from), ICE_GetCandidateType(&rc->info), ICE_NetworkToName(con, net_from.connum));
+							}
+							rc->reachable |= 1u<<(net_from.connum-1);
+							rc->reached = Sys_Milliseconds();
+
+							if (NET_CompareAdr(&net_from, &con->chosenpeer) && (stun->transactid[2] & BigLong(0x80000000)))
+							{
+								if (con->state == ICE_CONNECTING)
+									ICE_Set(con, "state", STRINGIFY(ICE_CONNECTED));
+							}
+						}
+					}
+				}
 			}
 			return true;
 		}
@@ -2387,9 +4007,419 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 			//binding indication. used as an rtp keepalive. should have a fingerprint
 			return true;
 		}
-		else
+		else if (stun->msgtype == BigShort(STUN_DATA|STUN_INDICATION)
+				 && net_message.cursize == stunlen + sizeof(*stun) && stun->magiccookie == BigLong(STUN_MAGIC_COOKIE))
+		{
+			//TURN relayed data
+			//these MUST come from a _known_ turn server.
+			netadr_t adr;
+			char xor[16];
+			short portxor;
+			void *data = NULL;
+			unsigned short datasize = 0;
+			unsigned short attrval;
+			stunattr_t *attr = (stunattr_t*)(stun+1);
+			int alen;
+			unsigned int network = net_from.connum-1;	//also net_from_connection->connum
+			struct icestate_s *con;
+
+			if (network < MAX_CONNECTIONS)
+				return true;	//don't handle this if its on the non-turn sockets.
+			network -= MAX_CONNECTIONS;
+			if (network < countof(con->server))
+				return true; //don't double-decapsulate...
+			network -= countof(con->server);
+
+			for (con = icelist; con; con = con->next)
+			{
+				if (network < con->servers && net_from_connection == con->server[network].con)
+					break;
+			}
+			if (!con)
+				return true;	//don't know what it was. just ignore it.
+			if (network >= con->servers || !NET_CompareAdr(&net_from, &con->server[network].addr))
+				return true;	//right socket, but not from the server that we expected...
+
+			adr.type = NA_INVALID;
+			while(stunlen>0)
+			{
+				stunlen -= sizeof(*attr);
+				alen = (unsigned short)BigShort(attr->attrlen);
+				if (alen > stunlen)
+					return false;
+				stunlen -= (alen+3)&~3;
+				attrval = BigShort(attr->attrtype);
+				switch(attrval)
+				{
+				default:
+					if (attrval & 0x8000)
+						break;	//okay to ignore
+					return true;
+				case STUNATTR_DATA:
+					data = attr+1;
+					datasize = alen;
+					break;
+				case STUNATTR_XOR_PEER_ADDRESS:
+					//always xor
+					portxor = *(short*)&stun->magiccookie;
+					memcpy(xor, &stun->magiccookie, sizeof(xor));
+
+					adr.prot = NP_DGRAM;
+					adr.connum = net_from.connum;
+					adr.scopeid = net_from.scopeid;
+					if (alen == 8 && ((qbyte*)attr)[5] == 1)		//ipv4
+					{
+						adr.type = NA_IP;
+						adr.port = (((short*)attr)[3]) ^ portxor;
+						*(int*)adr.address.ip = *(int*)(&((qbyte*)attr)[8]) ^ *(int*)xor;
+					}
+					else if (alen == 20 && ((qbyte*)attr)[5] == 2)	//ipv6
+					{
+						adr.type = NA_IPV6;
+						adr.port = (((short*)attr)[3]) ^ portxor;
+						((int*)adr.address.ip6)[0] = ((int*)&((qbyte*)attr)[8])[0] ^ ((int*)xor)[0];
+						((int*)adr.address.ip6)[1] = ((int*)&((qbyte*)attr)[8])[1] ^ ((int*)xor)[1];
+						((int*)adr.address.ip6)[2] = ((int*)&((qbyte*)attr)[8])[2] ^ ((int*)xor)[2];
+						((int*)adr.address.ip6)[3] = ((int*)&((qbyte*)attr)[8])[3] ^ ((int*)xor)[3];
+					}
+					break;
+				}
+				alen = (alen+3)&~3;
+				attr = (stunattr_t*)((char*)(attr+1) + alen);
+			}
+			if (data)
+			{
+				memmove(net_message.data, data, net_message.cursize = datasize);
+				adr.connum = net_from.connum-countof(con->server);	//came via the relay.
+				net_from = adr;
+				col->ReadGamePacket();
+				return true;
+			}
+		}
+
+		else if ((stun->msgtype == BigShort(STUN_CREATEPERM|STUN_REPLY) || stun->msgtype == BigShort(STUN_CREATEPERM|STUN_ERROR))
+				 && net_message.cursize == stunlen + sizeof(*stun) && stun->magiccookie == BigLong(STUN_MAGIC_COOKIE))
+		{
+			//TURN CreatePermissions reply (or error)
+			unsigned short attrval;
+			stunattr_t *attr = (stunattr_t*)(stun+1), *nonce=NULL, *realm=NULL;
+			int alen;
+			struct iceserver_s *s = NULL;
+			int i, j;
+			struct icestate_s *con;
+			char errmsg[128];
+			int err = 0;
+			*errmsg = 0;
+
+			//make sure it makes sense.
+			while(stunlen>0)
+			{
+				stunlen -= sizeof(*attr);
+				alen = (unsigned short)BigShort(attr->attrlen);
+				if (alen > stunlen)
+					return false;
+				stunlen -= (alen+3)&~3;
+				attrval = BigShort(attr->attrtype);
+				switch(attrval)
+				{
+				default:
+					if (attrval & 0x8000)
+						break;	//okay to ignore
+					return true;
+				case STUNATTR_NONCE:
+					nonce = attr;
+					break;
+				case STUNATTR_REALM:
+					realm = attr;
+					break;
+				case STUNATTR_ERROR_CODE:
+					{
+						unsigned short len = BigShort(attr->attrlen)-4;
+						if (len > sizeof(errmsg)-1)
+							len = sizeof(errmsg)-1;
+						memcpy(errmsg, &((qbyte*)attr)[8], len);
+						errmsg[len] = 0;
+						if (err==0)
+							err = (((qbyte*)attr)[6]*100) + (((qbyte*)attr)[7]%100);
+					}
+					break;
+				case STUNATTR_MESSAGEINTEGRITIY:
+					break;
+				}
+				alen = (alen+3)&~3;
+				attr = (stunattr_t*)((char*)(attr+1) + alen);
+			}
+
+			//now figure out what it acked.
+			for (con = icelist; con; con = con->next)
+			{
+				for (i = 0; i < con->servers; i++)
+				{
+					s = &con->server[i];
+					if (NET_CompareAdr(&net_from, &s->addr))
+						for (j = 0; j < s->peers; j++)
+						{
+							if (s->peer[j].stunrnd[0] == stun->transactid[0] && s->peer[j].stunrnd[1] == stun->transactid[1] && s->peer[j].stunrnd[2] == stun->transactid[2])
+							{	//the lifetime of a permission is a fixed 5 mins (this is separately from the port allocation)
+								unsigned int now = Sys_Milliseconds();
+
+								if (err)
+								{
+									if (err == 438 && realm && nonce)
+									{
+										alen = BigShort(nonce->attrlen);
+										Z_Free(s->nonce);
+										s->nonce = Z_Malloc(alen+1);
+										memcpy(s->nonce, nonce+1, alen);
+										s->nonce[alen] = 0;
+
+										alen = BigShort(realm->attrlen);
+										Z_Free(s->realm);
+										s->realm = Z_Malloc(alen+1);
+										memcpy(s->realm, realm+1, alen);
+										s->realm[alen] = 0;
+
+										s->peer[j].retry = now;	//retry fast.
+									}
+								}
+								else
+								{
+									now -= 25;	//we don't know when it acked, so lets pretend we're a few MS ago.
+									s->peer[j].expires = now + 5*60*1000;
+									s->peer[j].retry = now + 4*60*1000;	//start trying to refresh it a min early (which will do resends).
+								}
+
+								//next attempt will use a different id.
+								Sys_RandomBytes((char*)s->peer[i].stunrnd, sizeof(s->peer[i].stunrnd));
+								return true;
+							}
+						}
+				}
+				if (i < con->servers)
+					break;
+			}
+
+			return true;
+		}
+		else if ((stun->msgtype == BigShort(STUN_ALLOCATE|STUN_REPLY) || stun->msgtype == BigShort(STUN_ALLOCATE|STUN_ERROR)||
+				 (stun->msgtype == BigShort(STUN_REFRESH|STUN_REPLY) || stun->msgtype == BigShort(STUN_REFRESH|STUN_ERROR)))
+				 && net_message.cursize == stunlen + sizeof(*stun) && stun->magiccookie == BigLong(STUN_MAGIC_COOKIE))
+		{
+			//TURN allocate reply (or error)
+			netadr_t adrs[2], ladr, *adr;	//the last should be our own ip.
+			char xor[16];
+			short portxor;
+			unsigned short attrval;
+			stunattr_t *attr = (stunattr_t*)(stun+1);
+			int alen;
+			int err = 0;
+			char errmsg[64];
+			struct iceserver_s *s = NULL;
+			int i;
+			struct icestate_s *con;
+			qboolean noncechanged = false;
+			unsigned int lifetime = 0;
+
+			//gotta have come from our private socket.
+			unsigned int network = net_from.connum-1;	//also net_from_connection->connum
+			if (network < MAX_CONNECTIONS)
+				return true;	//don't handle this if its on the non-turn sockets.
+			network -= MAX_CONNECTIONS;
+			if (network < countof(con->server))
+				return true; //TURN-over-TURN is bad...
+			network -= countof(con->server);
+
+			for (con = icelist; con; con = con->next)
+			{
+				if (network < con->servers && net_from_connection == con->server[network].con)
+				{
+					s = &con->server[network];
+					if (s->stunrnd[0] == stun->transactid[0] && s->stunrnd[1] == stun->transactid[1] && s->stunrnd[2] == stun->transactid[2] && NET_CompareAdr(&net_from, &s->addr))
+						break;
+					Con_Printf("Stale transaction id (got %x, expected %x)\n", stun->transactid[0], s->stunrnd[0]);
+				}
+			}
+			if (!con)
+				return true;	//don't know what it was. just ignore it.
+
+			network += 1 + MAX_CONNECTIONS;	//fix it up to refer to the relay rather than the private socket.
+
+			adrs[0].type = NA_INVALID;
+			adrs[1].type = NA_INVALID;
+			ladr.type = NA_INVALID;
+
+			while(stunlen>0)
+			{
+				stunlen -= sizeof(*attr);
+				alen = (unsigned short)BigShort(attr->attrlen);
+				if (alen > stunlen)
+					return false;
+				stunlen -= (alen+3)&~3;
+				attrval = BigShort(attr->attrtype);
+				switch(attrval)
+				{
+				case STUNATTR_LIFETIME:
+					if (alen >= 4)
+						lifetime = BigLong(*(int*)(attr+1));
+					break;
+//				case STUNATTR_SOFTWARE:
+				case STUNATTR_MESSAGEINTEGRITIY:
+//				case STUNATTR_FINGERPRINT:
+					break;
+				default:
+					if (attrval & 0x8000)
+						break;	//okay to ignore
+					err = -1;	//got an attribute we 'must' handle...
+					return true;
+				case STUNATTR_NONCE:
+					Z_Free(s->nonce);
+					s->nonce = Z_Malloc(alen+1);
+					memcpy(s->nonce, attr+1, alen);
+					s->nonce[alen] = 0;
+					noncechanged = true;
+					break;
+				case STUNATTR_REALM:
+					Z_Free(s->realm);
+					s->realm = Z_Malloc(alen+1);
+					memcpy(s->realm, attr+1, alen);
+					s->realm[alen] = 0;
+					break;
+				case STUNATTR_XOR_RELAYED_ADDRESS:
+				case STUNATTR_XOR_MAPPED_ADDRESS:
+					if (BigShort(attr->attrtype) == STUNATTR_XOR_MAPPED_ADDRESS)
+						adr = &ladr;
+					else
+						adr = adrs[0].type?&adrs[1]:&adrs[0];
+					//always xor
+					portxor = *(short*)&stun->magiccookie;
+					memcpy(xor, &stun->magiccookie, sizeof(xor));
+
+					adr->prot = NP_DGRAM;
+					adr->connum = net_from.connum;
+					adr->scopeid = net_from.scopeid;
+					if (alen == 8 && ((qbyte*)attr)[5] == 1)		//ipv4
+					{
+						adr->type = NA_IP;
+						adr->port = (((short*)attr)[3]) ^ portxor;
+						*(int*)adr->address.ip = *(int*)(&((qbyte*)attr)[8]) ^ *(int*)xor;
+					}
+					else if (alen == 20 && ((qbyte*)attr)[5] == 2)	//ipv6
+					{
+						adr->type = NA_IPV6;
+						adr->port = (((short*)attr)[3]) ^ portxor;
+						((int*)adr->address.ip6)[0] = ((int*)&((qbyte*)attr)[8])[0] ^ ((int*)xor)[0];
+						((int*)adr->address.ip6)[1] = ((int*)&((qbyte*)attr)[8])[1] ^ ((int*)xor)[1];
+						((int*)adr->address.ip6)[2] = ((int*)&((qbyte*)attr)[8])[2] ^ ((int*)xor)[2];
+						((int*)adr->address.ip6)[3] = ((int*)&((qbyte*)attr)[8])[3] ^ ((int*)xor)[3];
+					}
+					break;
+				case STUNATTR_ERROR_CODE:
+					{
+						unsigned short len = BigShort(attr->attrlen)-4;
+						if (len > sizeof(errmsg)-1)
+							len = sizeof(errmsg)-1;
+						memcpy(errmsg, &((qbyte*)attr)[8], len);
+						errmsg[len] = 0;
+						if (err==0)
+							err = (((qbyte*)attr)[6]*100) + (((qbyte*)attr)[7]%100);
+					}
+					break;
+				}
+				alen = (alen+3)&~3;
+				attr = (stunattr_t*)((char*)(attr+1) + alen);
+			}
+
+			if (err)
+			{
+				char sender[256];
+
+				if (err == 438/*stale nonce*/)
+				{	//reset everything.
+					s->state = noncechanged?TURN_HAVE_NONCE:TURN_UNINITED;
+					s->stunretry = Sys_Milliseconds();
+
+					if (net_ice_debug.ival >= 1)
+						Con_Printf("[%s]: %s: TURN error code %u : %s\n", con->friendlyname, NET_AdrToString(sender, sizeof(sender), &net_from), err, errmsg);
+				}
+				else if (err == 403/*forbidden*/)	//something bad...
+				{
+					s->state = TURN_UNINITED, s->stunretry = Sys_Milliseconds() + 60*1000;
+					if (net_ice_debug.ival >= 1)
+						Con_Printf("[%s]: %s: TURN error code %u : %s\n", con->friendlyname, NET_AdrToString(sender, sizeof(sender), &net_from), err, errmsg);
+				}
+				else if (err == 401 && s->state == TURN_UNINITED && s->nonce)	//failure when sending auth... give up for a min
+				{	//this happens from initial auth. we need to reply with the real auth request now.
+					s->state = TURN_HAVE_NONCE, s->stunretry = Sys_Milliseconds();
+				}
+				else
+				{
+					s->stunretry = Sys_Milliseconds() + 60*1000;
+//					if (net_ice_debug.ival >= 1)
+						Con_Printf(CON_ERROR"[%s]: %s: TURN error code %u : %s\n", con->friendlyname, NET_AdrToString(sender, sizeof(sender), &net_from), err, errmsg);
+				}
+			}
+			else
+			{
+				struct icecandidate_s *lc;
+				for (i = 0; i < countof(adrs); i++)
+				{
+					if (adrs[i].type != NA_INVALID && stun->msgtype == BigShort(STUN_ALLOCATE|STUN_REPLY))
+					{
+						s->state = TURN_ALLOCATED;
+
+						if (!i)
+							s->family = adrs[i].type;
+						if (s->family != adrs[i].type)
+							s->family = NA_INVALID;	//send it both types.
+
+						if (ladr.type != NA_INVALID)
+							adr = &ladr;	//can give a proper reflexive address
+						else
+							adr = &adrs[i];	//no info... give something.
+
+						//check to see if this is a new server-reflexive address, which happens when the peer is behind a nat.
+						for (lc = con->lc; lc; lc = lc->next)
+						{
+							if (NET_CompareAdr(&adrs[i], &lc->peer))
+								break;
+						}
+						if (!lc)
+						{
+							int rnd[2];
+							struct icecandidate_s *src;	//server Reflexive Candidate
+							char str[256];
+							src = Z_Malloc(sizeof(*src));
+							src->next = con->lc;
+							con->lc = src;
+							src->peer = adrs[i];
+							NET_BaseAdrToString(src->info.addr, sizeof(src->info.addr), &adrs[i]);
+							src->info.port = ntohs(adrs[i].port);
+							NET_BaseAdrToString(src->info.reladdr, sizeof(src->info.reladdr), adr);
+							src->info.relport = ntohs(adr->port);
+							src->info.type = ICE_RELAY;
+							src->info.component = 1;
+							src->info.network = network;
+							src->dirty = true;
+							src->info.priority = ICE_ComputePriority(&adrs[i], &src->info);
+
+							Sys_RandomBytes((void*)rnd, sizeof(rnd));
+							Q_strncpyz(src->info.candidateid, va("x%08x%08x", rnd[0], rnd[1]), sizeof(src->info.candidateid));
+
+							if (net_ice_debug.ival >= 1)
+								Con_Printf(S_COLOR_GRAY"[%s]: Relayed local candidate: %s\n", con->friendlyname, NET_AdrToString(str, sizeof(str), &adrs[i]));
+						}
+					}
+				}
+				if (lifetime < 60)	//don't spam reauth requests too often...
+					lifetime = 60;
+				s->stunretry = Sys_Milliseconds() + (lifetime-50)*1000;
+				return true;
+			}
+			return true;
+		}
+
 #endif
-			if (stun->msgtype == BigShort(STUN_BINDING|STUN_REQUEST) && net_message.cursize == stunlen + sizeof(*stun) && stun->magiccookie == BigLong(0x2112a442))
+			if (stun->msgtype == BigShort(STUN_BINDING|STUN_REQUEST) && net_message.cursize == stunlen + sizeof(*stun) && stun->magiccookie == BigLong(STUN_MAGIC_COOKIE))
 		{
 			char username[256];
 			char integrity[20];
@@ -2425,8 +4455,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 					if (!((unsigned short)BigShort(attr->attrtype) & 0x8000))
 						return false;
 					break;
-				case 0x6:
-					//username
+				case STUNATTR_USERNAME:
 					if (alen < sizeof(username))
 					{
 						memcpy(username, attr+1, alen);
@@ -2434,31 +4463,26 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 //						Con_Printf("Stun username = \"%s\"\n", username);
 					}
 					break;
-				case 0x8:
-					//message integrity
+				case STUNATTR_MESSAGEINTEGRITIY:
 					memcpy(integrity, attr+1, sizeof(integrity));
 					integritypos = (char*)(attr+1);
 					break;
 #ifdef SUPPORT_ICE
-				case 0x24:
-					//priority
+				case STUNATTR_ICE_PRIORITY:
 //					Con_Printf("priority = \"%i\"\n", priority);
 					priority = BigLong(*(int*)(attr+1));
 					break;
-				case 0x25:
-					//USE-CANDIDATE
+				case STUNATTR_ICE_USE_CANDIDATE:
 					usecandidate = true;
 					break;
 #endif
-				case 0x8028:
-					//fingerprint
+				case STUNATTR_FINGERPRINT:
 //					Con_Printf("fingerprint = \"%08x\"\n", BigLong(*(int*)(attr+1)));
 					break;
 #ifdef SUPPORT_ICE
-				case 0x8029://ice controlled
-				case 0x802A://ice controlling
+				case STUNATTR_ICE_CONTROLLED:
+				case STUNATTR_ICE_CONTROLLING:
 					role = (unsigned short)BigShort(attr->attrtype);
-					//ice controlled
 					tiehigh = BigLong(((int*)(attr+1))[0]);
 					tielow = BigLong(((int*)(attr+1))[1]);
 					break;
@@ -2480,7 +4504,8 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 				}
 				if (!con)
 				{
-					Con_DPrintf("Received STUN request from unknown user \"%s\"\n", username);
+					if (net_ice_debug.ival >= 2)
+						Con_Printf("Received STUN request from unknown user \"%s\"\n", username);
 					return true;
 				}
 				/*else if (con->chosenpeer.type != NA_INVALID)
@@ -2494,6 +4519,9 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 				{
 					struct icecandidate_s *rc;
 
+					if (net_ice_debug.ival >= 2)
+						Con_Printf(S_COLOR_GRAY"[%s]: got binding request on %s from %s\n", con->friendlyname, ICE_NetworkToName(con, net_from.connum), NET_AdrToString(username,sizeof(username), &net_from));
+
 					if (integritypos)
 					{
 						char key[20];
@@ -2502,7 +4530,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 						CalcHMAC(&hash_sha1, key, sizeof(key), (qbyte*)stun, integritypos-4 - (char*)stun, con->lpwd, strlen(con->lpwd));
 						if (memcmp(key, integrity, sizeof(integrity)))
 						{
-							Con_DPrintf("Integrity is bad! needed %x got %x\n", *(int*)key, *(int*)integrity);
+							Con_DPrintf(CON_WARNING"Integrity is bad! needed %x got %x\n", *(int*)key, *(int*)integrity);
 							return true;
 						}
 					}
@@ -2515,9 +4543,9 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 					}
 					if (!rc)
 					{
-						netadr_t reladdr;
-						int relflags;
-						const char *relpath;
+						//netadr_t reladdr;
+						//int relflags;
+						//const char *relpath;
 						struct icecandidate_s *rc;
 						rc = Z_Malloc(sizeof(*rc));
 						rc->next = con->rc;
@@ -2526,23 +4554,33 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 						rc->peer = net_from;
 						NET_BaseAdrToString(rc->info.addr, sizeof(rc->info.addr), &net_from);
 						rc->info.port = ntohs(net_from.port);
-						col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
+						//if (net_from.connum >= 1 && net_from.connum < 1+MAX_CONNECTIONS && col->conn[net_from.connum-1])
+						//	col->conn[net_from.connum-1]->GetLocalAddresses(col->conn[net_from.connum-1], &relflags, &reladdr, &relpath, 1);
 						//FIXME: we don't really know which one... NET_BaseAdrToString(rc->info.reladdr, sizeof(rc->info.reladdr), &reladdr);
-						rc->info.relport = ntohs(reladdr.port);
+						//rc->info.relport = ntohs(reladdr.port);
 						rc->info.type = ICE_PRFLX;
 						rc->dirty = true;
 						rc->info.priority = priority;
 					}
 
 					//flip ice control role, if we're wrong.
-					if (role && role != (con->controlled?0x802A:0x8029))
+					if (role && role != (con->controlled?STUNATTR_ICE_CONTROLLING:STUNATTR_ICE_CONTROLLED))
 					{
 						if (tiehigh == con->tiehigh && tielow == con->tielow)
 						{
 							Con_Printf("ICE: Evil loopback hack enabled\n");
 							if (usecandidate)
 							{
+								if ((con->chosenpeer.connum != net_from.connum || !NET_CompareAdr(&con->chosenpeer, &net_from)) && net_ice_debug.ival >= 1)
+								{
+									char msg[64];
+									if (con->chosenpeer.connum-1 >= MAX_CONNECTIONS)
+										Con_Printf(S_COLOR_GRAY"[%s]: New peer imposed %s, via %s.\n", con->friendlyname, NET_AdrToString(msg, sizeof(msg), &net_from), ICE_NetworkToName(con, con->chosenpeer.connum));
+									else
+										Con_Printf(S_COLOR_GRAY"[%s]: New peer imposed %s.\n", con->friendlyname, NET_AdrToString(msg, sizeof(msg), &net_from));
+								}
 								con->chosenpeer = net_from;
+
 								if (con->state == ICE_CONNECTING)
 									ICE_Set(con, "state", STRINGIFY(ICE_CONNECTED));
 							}
@@ -2550,7 +4588,8 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 						else
 						{
 							con->controlled = (tiehigh > con->tiehigh) || (tiehigh == con->tiehigh && tielow > con->tielow);
-							Con_DPrintf("ICE: role conflict detected. We should be %s\n", con->controlled?"controlled":"controlling");
+							if (net_ice_debug.ival >= 1)
+								Con_Printf(S_COLOR_GRAY"[%s]: role conflict detected. We should be %s\n", con->friendlyname, con->controlled?"controlled":"controlling");
 							error = 87;
 						}
 					}
@@ -2561,10 +4600,12 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 						//so we just pick select the highest.
 						//this is problematic, however, as we don't actually know the real priority that the peer thinks we'll nominate it with.
 
-						if (con->chosenpeer.type != NA_INVALID && !NET_CompareAdr(&net_from, &con->chosenpeer))
-							Con_DPrintf(CON_WARNING"ICE: Alternative use-candidate\n");
+						if ((con->chosenpeer.connum != net_from.connum || !NET_CompareAdr(&con->chosenpeer, &net_from)) && net_ice_debug.ival >= 1)
+						{
+							char msg[64];
+							Con_Printf(S_COLOR_GRAY"[%s]: New peer imposed %s, via %s.\n", con->friendlyname, NET_AdrToString(msg, sizeof(msg), &net_from), ICE_NetworkToName(con, net_from.connum));
+						}
 						con->chosenpeer = net_from;
-						Con_DPrintf("ICE: use-candidate: %s\n", NET_AdrToString(data, sizeof(data), &net_from));
 
 						if (con->state == ICE_CONNECTING)
 							ICE_Set(con, "state", STRINGIFY(ICE_CONNECTED));
@@ -2622,7 +4663,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 			if (error == 87)
 			{
 				char *txt = "Role Conflict";
-				MSG_WriteShort(&buf, BigShort(0x0009));
+				MSG_WriteShort(&buf, BigShort(STUNATTR_ERROR_CODE));
 				MSG_WriteShort(&buf, BigShort(4 + strlen(txt)));
 				MSG_WriteShort(&buf, 0);	//reserved
 				MSG_WriteByte(&buf, 0);		//class
@@ -2638,7 +4679,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 				xored.port ^= *(short*)(data+4);
 				for (i = 0; i < alen; i++)
 					((qbyte*)&xored.address)[aofs+i] ^= ((qbyte*)data+4)[i];
-				MSG_WriteShort(&buf, BigShort(0x0020));
+				MSG_WriteShort(&buf, BigShort(STUNATTR_XOR_MAPPED_ADDRESS));
 				MSG_WriteShort(&buf, BigShort(4+alen));
 				MSG_WriteShort(&buf, BigShort(atype));
 				MSG_WriteShort(&buf, xored.port);
@@ -2646,14 +4687,14 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 			}
 			else
 			{	//non-xor mapped
-				MSG_WriteShort(&buf, BigShort(0x0001));
+				MSG_WriteShort(&buf, BigShort(STUNATTR_MAPPED_ADDRESS));
 				MSG_WriteShort(&buf, BigShort(4+alen));
 				MSG_WriteShort(&buf, BigShort(atype));
 				MSG_WriteShort(&buf, net_from.port);
 				SZ_Write(&buf, (char*)&net_from.address + aofs, alen);
 			}
 
-			MSG_WriteShort(&buf, BigShort(0x6));	//USERNAME
+			MSG_WriteShort(&buf, BigShort(STUNATTR_USERNAME));	//USERNAME
 			MSG_WriteShort(&buf, BigShort(strlen(username)));
 			SZ_Write(&buf, username, strlen(username));
 			while(buf.cursize&3)
@@ -2667,7 +4708,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 				data[3] = ((buf.cursize+4+sizeof(integrity)-20)>>0)&0xff;
 				//but the hash is to the start of the attribute's header
 				CalcHMAC(&hash_sha1, integrity, sizeof(integrity), data, buf.cursize, con->lpwd, strlen(con->lpwd));
-				MSG_WriteShort(&buf, BigShort(0x8));	//MESSAGE-INTEGRITY
+				MSG_WriteShort(&buf, BigShort(STUNATTR_MESSAGEINTEGRITIY));
 				MSG_WriteShort(&buf, BigShort(sizeof(integrity)));	//sha1 key length
 				SZ_Write(&buf, integrity, sizeof(integrity));	//integrity data
 			}
@@ -2676,14 +4717,18 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 			data[2] = ((buf.cursize+8-20)>>8)&0xff;	//dummy length
 			data[3] = ((buf.cursize+8-20)>>0)&0xff;
 			crc = crc32(0, data, buf.cursize)^0x5354554e;
-			MSG_WriteShort(&buf, BigShort(0x8028));	//FINGERPRINT
+			MSG_WriteShort(&buf, BigShort(STUNATTR_FINGERPRINT));	//FINGERPRINT
 			MSG_WriteShort(&buf, BigShort(sizeof(crc)));
 			MSG_WriteLong(&buf, BigLong(crc));
 
 			data[2] = ((buf.cursize-20)>>8)&0xff;
 			data[3] = ((buf.cursize-20)>>0)&0xff;
-			NET_SendPacket(col, buf.cursize, data, &net_from);
 
+#ifdef SUPPORT_ICE
+			TURN_Encapsulate(con, &net_from, data, buf.cursize);
+#else
+			NET_SendPacket(col, buf.cursize, data, &net_from);
+#endif
 			return true;
 		}
 	}
@@ -2701,8 +4746,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 				{
 				//	if (rc->reachable)
 					{	//found it. fix up its source address to our ICE connection (so we don't have path-switching issues) and keep chugging along.
-
-						con->timeout = Sys_Milliseconds() + 32;	//not dead yet...
+						con->icetimeout = Sys_Milliseconds() + 1000*30;	//not dead yet...
 
 #ifdef HAVE_DTLS
 						if (con->dtlsstate)
@@ -2714,7 +4758,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 							case NETERR_NOROUTE:
 								return false;	//not a dtls packet at all. don't de-ICE it when we're meant to be using ICE.
 							case NETERR_DISCONNECTED:	//dtls failure. ICE failed.
-								iceapi.ICE_Set(con, "state", STRINGIFY(ICE_FAILED));
+								iceapi.Set(con, "state", STRINGIFY(ICE_FAILED));
 								return true;
 							default: //some kind of failure decoding the dtls packet. drop it.
 								return true;
@@ -2725,6 +4769,7 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 #ifdef HAVE_DTLS
 						if (con->sctp)
 							SCTP_Decode(con->sctp, con, col);
+						else
 #endif
 						if (net_message.cursize)
 							col->ReadGamePacket();
@@ -2738,13 +4783,46 @@ qboolean ICE_WasStun(ftenet_connections_t *col)
 	return false;
 }
 #ifdef SUPPORT_ICE
-neterr_t ICE_SendPacket(ftenet_connections_t *col, size_t length, const void *data, netadr_t *to)
+qboolean ICE_IsEncrypted(netadr_t *to)
+{
+#ifdef HAVE_DTLS
+	struct icestate_s *con;
+	for (con = icelist; con; con = con->next)
+	{
+		if (NET_CompareAdr(to, &con->qadr))
+		{
+			if (con->dtlsstate)
+				return true;
+		}
+	}
+#endif
+	return false;
+}
+void ICE_Terminate(netadr_t *to)
 {
 	struct icestate_s *con;
 	for (con = icelist; con; con = con->next)
 	{
 		if (NET_CompareAdr(to, &con->qadr))
 		{
+			ICE_Set(con, "state", STRINGIFY(ICE_INACTIVE));
+			return;
+		}
+	}
+}
+neterr_t ICE_SendPacket(size_t length, const void *data, netadr_t *to)
+{
+	struct icestate_s *con;
+	for (con = icelist; con; con = con->next)
+	{
+		if (NET_CompareAdr(to, &con->qadr))
+		{
+			con->icetimeout = Sys_Milliseconds()+30*1000;	//keep it alive a little longer.
+
+			if (con->state == ICE_CONNECTING)
+				return NETERR_CLOGGED;
+			else if (con->state != ICE_CONNECTED)
+				return NETERR_DISCONNECTED;
 #ifdef HAVE_DTLS
 			if (con->sctp)
 				return SCTP_Transmit(con->sctp, con, data, length);
@@ -2753,8 +4831,6 @@ neterr_t ICE_SendPacket(ftenet_connections_t *col, size_t length, const void *da
 #endif
 			if (con->chosenpeer.type != NA_INVALID)
 				return ICE_Transmit(con, data, length);
-			if (con->state < ICE_CONNECTING)
-				return NETERR_DISCONNECTED;
 			return NETERR_CLOGGED;	//still pending
 		}
 	}
@@ -2811,10 +4887,10 @@ static void FTENET_ICE_Close(ftenet_generic_connection_t *gcon)
 
 	for (cl = 0; cl < b->numclients; cl++)
 		if (b->clients[cl].ice)
-			iceapi.ICE_Close(b->clients[cl].ice);
+			iceapi.Close(b->clients[cl].ice, true);
 	Z_Free(b->clients);
 	if (b->ice)
-		iceapi.ICE_Close(b->ice);
+		iceapi.Close(b->ice, true);
 
 	Z_Free(b);
 }
@@ -2900,7 +4976,7 @@ static void FTENET_ICE_Heartbeat(ftenet_ice_connection_t *b)
 		}
 
 		*info = 0;
-		Info_SetValueForKey(info, "protocol", com_protocolversion.string, sizeof(info));
+		Info_SetValueForKey(info, "protocol", SV_GetProtocolVersionString(), sizeof(info));
 		Info_SetValueForKey(info, "maxclients", maxclients.string, sizeof(info));
 		Info_SetValueForKey(info, "clients", va("%i", numclients), sizeof(info));
 		Info_SetValueForKey(info, "hostname", hostname.string, sizeof(info));
@@ -2916,9 +4992,11 @@ static void FTENET_ICE_SendOffer(ftenet_ice_connection_t *b, int cl, struct ices
 {
 	char buf[8192];
 	//okay, now send the sdp to our peer.
-	if (iceapi.ICE_Get(ice, type, buf, sizeof(buf)))
+	if (iceapi.Get(ice, type, buf, sizeof(buf)))
 	{
 		char json[8192+256];
+		if (ice->state == ICE_GATHERING)
+			ice->state = ICE_CONNECTING;
 		if (ice->mode == ICEM_WEBRTC)
 		{
 			Q_strncpyz(json, va("{\"type\":\"%s\",\"sdp\":\"", type+3), sizeof(json));
@@ -2934,27 +5012,28 @@ static void FTENET_ICE_SendOffer(ftenet_ice_connection_t *b, int cl, struct ices
 }
 static void FTENET_ICE_Establish(ftenet_ice_connection_t *b, int cl, struct icestate_s **ret)
 {	//sends offer
-	char buf[256];
 	struct icestate_s *ice;
 	qboolean usewebrtc;
+	char *s;
 	if (*ret)
-		iceapi.ICE_Close(*ret);
+		iceapi.Close(*ret, false);
 #ifndef HAVE_DTLS
 	usewebrtc = false;
 #else
-	if (!*net_ice_usewebrtc.string)
-		usewebrtc = b->generic.islisten;
+	if (!*net_ice_usewebrtc.string && net_enable_dtls.ival)
+		usewebrtc = true;	//let the peer decide. this means we can use dtls, but not sctp.
 	else
 		usewebrtc = net_ice_usewebrtc.ival;
 #endif
-	ice = *ret = iceapi.ICE_Create(b, NULL, b->generic.islisten?NULL:va("/%s", b->gamename), usewebrtc?ICEM_WEBRTC:ICEM_ICE, b->generic.islisten?ICEP_QWSERVER:ICEP_QWCLIENT);
+	ice = *ret = iceapi.Create(b, NULL, b->generic.islisten?NULL:va("/%s", b->gamename), usewebrtc?ICEM_WEBRTC:ICEM_ICE, b->generic.islisten?ICEP_QWSERVER:ICEP_QWCLIENT, !b->generic.islisten);
 	if (!*ret)
 		return;	//some kind of error?!?
-	iceapi.ICE_Set(ice, "controller", b->generic.islisten?"0":"1");
 
-	Q_snprintfz(buf, sizeof(buf), "%i", BigShort(b->brokeradr.port));
-	iceapi.ICE_Set(ice, "stunport", buf);
-	iceapi.ICE_Set(ice, "stunip", b->brokername);
+	iceapi.Set(ice, "server", va("stun:%s:%i", b->brokername, BigShort(b->brokeradr.port)));
+
+	s = net_ice_servers.string;
+	while((s=COM_Parse(s)))
+		iceapi.Set(ice, "server", com_token);
 
 	if (!b->generic.islisten)
 		FTENET_ICE_SendOffer(b, cl, ice, "sdpoffer");
@@ -2964,7 +5043,7 @@ static void FTENET_ICE_Refresh(ftenet_ice_connection_t *b, int cl, struct icesta
 	char buf[8192];
 	if (ice->blockcandidates)
 		return;	//don't send candidates before the offers...
-	while (ice && iceapi.ICE_GetLCandidateSDP(ice, buf, sizeof(buf)))
+	while (ice && iceapi.GetLCandidateSDP(ice, buf, sizeof(buf)))
 	{
 		char json[8192+256];
 		if (ice->mode == ICEM_WEBRTC)
@@ -2989,7 +5068,7 @@ static qboolean FTENET_ICE_GetPacket(ftenet_generic_connection_t *gcon)
 		const char *s;
 		if (b->timeout > realtime)
 			return false;
-		b->generic.thesocket = TCP_OpenStream(&b->brokeradr);	//save this for select.
+		b->generic.thesocket = TCP_OpenStream(&b->brokeradr, b->brokername);	//save this for select.
 		b->broker = FS_WrapTCPSocket(b->generic.thesocket, true, b->brokername);
 
 #ifdef HAVE_SSL
@@ -3033,11 +5112,11 @@ handleerror:
 		for (cl = 0; cl < b->numclients; cl++)
 		{
 			if (b->clients[cl].ice)
-				iceapi.ICE_Close(b->clients[cl].ice);
+				iceapi.Close(b->clients[cl].ice, false);
 			b->clients[cl].ice = NULL;
 		}
 		if (b->ice)
-			iceapi.ICE_Close(b->ice);
+			iceapi.Close(b->ice, false);
 		b->ice = NULL;
 		if (b->error != 1 || !b->generic.islisten)
 			return false;	//permanant error...
@@ -3138,7 +5217,7 @@ handleerror:
 
 			switch(cmd)
 			{
-			case ICEMSG_PEERDROP:	//connection closing...
+			case ICEMSG_PEERLOST:	//the broker lost its connection to our peer...
 				if (cl == -1)
 				{
 					b->error = true;
@@ -3147,7 +5226,7 @@ handleerror:
 				else if (cl >= 0 && cl < b->numclients)
 				{
 					if (b->clients[cl].ice)
-						iceapi.ICE_Close(b->clients[cl].ice);
+						iceapi.Close(b->clients[cl].ice, false);
 					b->clients[cl].ice = NULL;
 //					Con_Printf("Broker closing connection: %s\n", data);
 				}
@@ -3198,8 +5277,8 @@ handleerror:
 				{
 					if (cl >= 0 && cl < b->numclients && b->clients[cl].ice)
 					{
-						iceapi.ICE_Set(b->clients[cl].ice, "sdpoffer", data);
-						iceapi.ICE_Set(b->clients[cl].ice, "state", STRINGIFY(ICE_CONNECTING));
+						iceapi.Set(b->clients[cl].ice, "sdpoffer", data);
+						iceapi.Set(b->clients[cl].ice, "state", STRINGIFY(ICE_CONNECTING));
 
 						FTENET_ICE_SendOffer(b, cl, b->clients[cl].ice, "sdpanswer");
 					}
@@ -3208,8 +5287,8 @@ handleerror:
 				{
 					if (b->ice)
 					{
-						iceapi.ICE_Set(b->ice, "sdpanswer", data);
-						iceapi.ICE_Set(b->ice, "state", STRINGIFY(ICE_CONNECTING));
+						iceapi.Set(b->ice, "sdpanswer", data);
+						iceapi.Set(b->ice, "state", STRINGIFY(ICE_CONNECTING));
 					}
 				}
 				break;
@@ -3226,12 +5305,12 @@ handleerror:
 				if (b->generic.islisten)
 				{
 					if (cl >= 0 && cl < b->numclients && b->clients[cl].ice)
-						iceapi.ICE_Set(b->clients[cl].ice, "sdp", data);
+						iceapi.Set(b->clients[cl].ice, "sdp", data);
 				}
 				else
 				{
 					if (b->ice)
-						iceapi.ICE_Set(b->ice, "sdp", data);
+						iceapi.Set(b->ice, "sdp", data);
 				}
 				break;
 			}
@@ -3258,7 +5337,7 @@ static void FTENET_ICE_PrintStatus(ftenet_generic_connection_t *gcon)
 	size_t c;
 
 	if (b->ice)
-		ICE_Debug(b->ice, b->generic.islisten);
+		ICE_Debug(b->ice);
 	if (b->numclients)
 	{
 		size_t activeice = 0;
@@ -3266,7 +5345,7 @@ static void FTENET_ICE_PrintStatus(ftenet_generic_connection_t *gcon)
 			if (b->clients[c].ice)
 			{
 				activeice++;
-				ICE_Debug(b->clients[c].ice, b->generic.islisten);
+				ICE_PrintSummary(b->clients[c].ice, b->generic.islisten);
 			}
 		Con_Printf("%u ICE connections\n", (unsigned)activeice);
 	}
@@ -3364,5 +5443,18 @@ ftenet_generic_connection_t *FTENET_ICE_EstablishConnection(ftenet_connections_t
 	newcon->generic.islisten = col->islisten;
 
 	return &newcon->generic;
+}
+
+void ICE_Init(void)
+{
+	Cvar_Register(&net_ice_exchangeprivateips, "networking");
+	Cvar_Register(&net_ice_allowstun, "networking");
+	Cvar_Register(&net_ice_allowturn, "networking");
+	Cvar_Register(&net_ice_allowmdns, "networking");
+	Cvar_Register(&net_ice_relayonly, "networking");
+	Cvar_Register(&net_ice_usewebrtc, "networking");
+	Cvar_Register(&net_ice_servers, "networking");
+	Cvar_Register(&net_ice_debug,	"networking");
+	Cmd_AddCommand("net_ice_show", ICE_Show_f);
 }
 #endif

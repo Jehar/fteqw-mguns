@@ -611,6 +611,8 @@ void SV_UnspawnServer (void)	//terminate the running server.
 		Con_TPrintf("Server ended\n");
 		SV_FinalMessage("Server unspawned\n");
 
+		PR_PreShutdown();
+
 #ifdef SUBSERVERS
 		if (sv.state == ss_clustermode && svs.allocated_client_slots == 1)
 			MSV_Shutdown();
@@ -868,9 +870,6 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 
 	Con_DPrintf ("SpawnServer: %s\n",server);
 
-	svs.spawncount++;		// any partially connected client will be restarted
-	sv.world.spawncount = svs.spawncount;
-
 #ifndef SERVERONLY
 	total_loading_size = 100;
 	current_loading_size = 0;
@@ -878,6 +877,11 @@ void SV_SpawnServer (const char *server, const char *startspot, qboolean noents,
 //	SCR_BeginLoadingPlaque();
 	SCR_ImageName(server);
 #endif
+
+	PR_PreShutdown();
+
+	svs.spawncount++;		// any partially connected client will be restarted
+	sv.world.spawncount = svs.spawncount;
 
 	sv.state = ss_dead;
 
@@ -1726,6 +1730,11 @@ MSV_OpenUserDatabase();
 			host_client = &svs.clients[i];
 			if (host_client->state == cs_connected && host_client->protocol == SCP_BAD)
 			{
+				if (svs.gametype == GT_Q1QVM)
+				{	//ktx expects its bots to drop for each map change.
+					SV_DropClient(host_client);
+					continue;
+				}
 				sv_player = host_client->edict;
 				SV_ExtractFromUserinfo(host_client, true);
 				SV_SpawnParmsToQC(host_client);

@@ -507,6 +507,62 @@ static void SV_Map_c(int argn, const char *partial, struct xcommandargcompletion
 	}
 }
 
+#if defined(HAVE_CLIENT) && defined(WEBCLIENT)
+static char *uri_escape(const char *in, char *out, size_t outsize)
+{
+	static const char *hex = "0123456789ABCDEF";
+
+	const unsigned char *s = in;
+	unsigned char *o = out;
+	while (*s && o < (unsigned char*)out+outsize-4)
+	{
+		//unreserved chars according to RFC3986
+		if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9')
+				|| *s == '.' || *s == '-' || *s == '_' || *s == '~')
+			*o++ = *s++;
+		else
+		{
+			*o++ = '%';
+			*o++ = hex[*s>>4];
+			*o++ = hex[*s&0xf];
+			s++;
+		}
+	}
+	*o = 0;
+	return out;
+}
+static void SV_Map_Downloaded(struct dl_download *dl)
+{
+	SCR_SetLoadingStage(LS_NONE);
+	if (dl->status == DL_FINISHED)
+	{
+		char buf[1024];
+		Cbuf_AddText(va("map %s\n", COM_QuotedString(dl->user_ctx, buf, sizeof(buf), false)), RESTRICT_LOCAL);
+	}
+	else
+		Con_Printf("Unable to download\n");
+	Z_Free(dl->user_ctx);
+}
+extern cvar_t cl_download_mapsrc;
+static void SV_Map_DownloadPrompted(void *ctx, promptbutton_t buttn)
+{
+	const char *mapname=ctx;
+	if (buttn == PROMPT_YES)
+	{
+		char buf[512];
+		struct dl_download *dl = HTTP_CL_Get(va("%s%s.bsp", cl_download_mapsrc.string, uri_escape(mapname, buf, sizeof(buf))), va("maps/%s.bsp", mapname), SV_Map_Downloaded);
+		if (dl)
+		{
+			dl->user_ctx = ctx;
+			DL_CreateThread(dl, NULL, NULL);	//allows it to run at its own rate. yay speedups.
+			return;
+		}
+	}
+	SCR_SetLoadingStage(LS_NONE);
+	Z_Free(ctx);
+}
+#endif
+
 //static void gtcallback(struct cvar_s *var, char *oldvalue)
 //{
 //	Con_Printf("g_gametype changed\n");
@@ -810,12 +866,22 @@ void SV_Map_f (void)
 			}
 			if (!exts[i])
 			{
+#ifdef HAVE_CLIENT
+				SCR_SetLoadingStage(LS_NONE);
+#ifdef WEBCLIENT
+				if (*cl_download_mapsrc.string &&
+					!strcmp(cmd, "map") && !startspot &&
+					!isDedicated && Cmd_ExecLevel==RESTRICT_LOCAL && !strchr(level, '.'))
+				{
+					Menu_Prompt(SV_Map_DownloadPrompted, Z_StrDup(level), va("Download map %s from "S_COLOR_BLUE "%s" S_COLOR_WHITE"?", level, cl_download_mapsrc.string), "Download", NULL, "Cancel", true);
+					return;
+				}
+#endif
+#endif
+
 				// FTE is still a Quake engine so report BSP missing
 				snprintf (expanded, sizeof(expanded), exts[1], level);
 				Con_TPrintf ("Can't find %s\n", expanded);
-#ifndef SERVERONLY
-				SCR_SetLoadingStage(LS_NONE);
-#endif
 
 				if (SSV_IsSubServer() && !sv.state)	//subservers don't leave defunct servers with no maps lying around.
 					Cbuf_AddText("\nquit\n", RESTRICT_LOCAL);
@@ -1003,7 +1069,7 @@ void SV_Map_f (void)
 		host_client->sentents.num_entities = 0;
 		host_client->ratetime = 0;
 		if (host_client->pendingdeltabits)
-			host_client->pendingdeltabits[0] = UF_REMOVE;
+			host_client->pendingdeltabits[0] = UF_SV_REMOVE;
 
 		if (flushparms)
 		{
@@ -2090,7 +2156,15 @@ static void SV_Status_f (void)
 	if (NET_GetRates(svs.sockets, &pi, &po, &bi, &bo))
 		Con_TPrintf("packets,bytes/sec: in: %g %g  out: %g %g\n", pi, bi, po, bo);	//not relevent as a limit.
 	Con_TPrintf("server uptime    : %s\n", ShowTime(realtime));
-	Con_TPrintf("public           : %s\n", sv_public.value?"yes":"no");
+	if (sv_public.ival < 0)
+		s = "hidden";
+	else if (sv_public.ival == 2)
+		s = "hole punching";
+	else if (sv_public.ival)
+		s = "direct";
+	else
+		s = "private";
+	Con_TPrintf("public           : %s\n", s);
 	switch(svs.gametype)
 	{
 #ifdef Q3SERVER
@@ -2137,8 +2211,8 @@ static void SV_Status_f (void)
 			Con_Printf(" Qizmo");
 		if (net_enable_qtv.ival)
 			Con_Printf(" QTV");
-#endif
 		Con_Printf("\n");
+#endif
 		break;
 	}
 #ifdef SUBSERVERS
@@ -2280,7 +2354,7 @@ static void SV_Status_f (void)
 				columns |= 1<<5;
 			if (cl->protocol != SCP_BAD && (cl->protocol >= SCP_NETQUAKE || cl->spectator || (cl->protocol == SCP_QUAKEWORLD && !(cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))))
 				columns |= 1<<9;
-			if (cl->netchan.remote_address.type == NA_IPV6||cl->reversedns)
+			if ((cl->netchan.remote_address.type == NA_IPV6 && memcmp(cl->netchan.remote_address.address.ip6, "\0\0\0\0""\0\0\0\0""\0\0\xff\xff", 12))||cl->reversedns)
 				columns |= (1<<10);
 		}
 		if (columns&(1<<10))	//if address2, remove the limited length addresses.

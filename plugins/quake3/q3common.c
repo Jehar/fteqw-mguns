@@ -9,6 +9,7 @@ plugclientfuncs_t	*clientfuncs;
 plugmsgfuncs_t		*msgfuncs;
 plugworldfuncs_t	*worldfuncs;
 plugmasterfuncs_t	*masterfuncs;
+plugthreadfuncs_t	*threadfuncs;
 
 #ifndef STATIC_Q3
 double realtime;
@@ -1654,6 +1655,7 @@ qint64_t Q3VM_GetRealtime(q3time_t *qtime)
 
 static struct q3gamecode_s q3funcs =
 {
+#ifdef HAVE_CLIENT
 	{
 		CLQ3_SendAuthPacket,
 		CLQ3_SendConnectPacket,
@@ -1679,7 +1681,11 @@ static struct q3gamecode_s q3funcs =
 		UI_OpenMenu,
 		UI_Reset,
 	},
+#else
+{NULL},{NULL},{NULL},
+#endif
 
+#ifdef HAVE_SERVER
 	{
 		SVQ3_ShutdownGame,
 		SVQ3_InitGame,
@@ -1694,6 +1700,9 @@ static struct q3gamecode_s q3funcs =
 		SVQ3_RestartGamecode,
 		SVQ3_ServerinfoChanged,
 	},
+#else
+	{NULL},
+#endif
 };
 
 #ifndef STATIC_Q3
@@ -1705,11 +1714,15 @@ void Q3_Frame(double enginetime, double gametime)
 
 void Q3_Shutdown(void)
 {
+#ifdef HAVE_SERVER
 	SVQ3_ShutdownGame(false);
+#endif
+#ifdef HAVE_CLIENT
 	CG_Stop();
 	UI_Stop();
 
 	VMQ3_FlushStringHandles();
+#endif
 }
 
 #ifdef STATIC_Q3
@@ -1722,8 +1735,9 @@ qboolean Plug_Init(void)
 	fsfuncs = plugfuncs->GetEngineInterface(plugfsfuncs_name, sizeof(*fsfuncs));
 	msgfuncs = plugfuncs->GetEngineInterface(plugmsgfuncs_name, sizeof(*msgfuncs));
 	worldfuncs = plugfuncs->GetEngineInterface(plugworldfuncs_name, sizeof(*worldfuncs));
+	threadfuncs = plugfuncs->GetEngineInterface(plugthreadfuncs_name, sizeof(*threadfuncs));
 
-	if (!vmfuncs || !fsfuncs || !msgfuncs || !worldfuncs)
+	if (!vmfuncs || !fsfuncs || !msgfuncs || !worldfuncs/* || !threadfuncs -- checked on use*/)
 	{
 		Con_Printf("Engine functionality missing, cannot enable q3 gamecode support.\n");
 		return false;
@@ -1739,15 +1753,22 @@ qboolean Plug_Init(void)
 	plugfuncs->ExportFunction("Tick", Q3_Frame);
 #endif
 
+#ifdef HAVE_CLIENT
 	drawfuncs = plugfuncs->GetEngineInterface(plug2dfuncs_name, sizeof(*drawfuncs));
 	scenefuncs = plugfuncs->GetEngineInterface(plug3dfuncs_name, sizeof(*scenefuncs));
 	inputfuncs = plugfuncs->GetEngineInterface(pluginputfuncs_name, sizeof(*inputfuncs));
 	clientfuncs = plugfuncs->GetEngineInterface(plugclientfuncs_name, sizeof(*clientfuncs));
 	audiofuncs = plugfuncs->GetEngineInterface(plugaudiofuncs_name, sizeof(*audiofuncs));
 	masterfuncs = plugfuncs->GetEngineInterface(plugmasterfuncs_name, sizeof(*masterfuncs));
-	if (drawfuncs && scenefuncs && inputfuncs && audiofuncs && masterfuncs && clientfuncs)
+	if (drawfuncs && scenefuncs && inputfuncs && clientfuncs && audiofuncs && masterfuncs)
 		UI_Init();
+#endif
 	return true;
 }
-
+#else
+qboolean Plug_Init(void)
+{
+	Con_Printf("Quake3 plugin without any support...\n");
+	return false;
+}
 #endif

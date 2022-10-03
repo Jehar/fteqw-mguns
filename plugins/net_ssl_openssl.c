@@ -770,7 +770,7 @@ static void *OSSL_CreateContext(const dtlscred_t *cred, void *cbctx, neterr_t(*p
 		SSL_CTX_set_session_cache_mode(n->ctx, SSL_SESS_CACHE_OFF);
 
 		SSL_CTX_set_verify(n->ctx, SSL_VERIFY_PEER|(n->cert.hash?SSL_VERIFY_FAIL_IF_NO_PEER_CERT:0), OSSL_Verify_Peer);
-		SSL_CTX_set_verify_depth(n->ctx, 5);
+		SSL_CTX_set_verify_depth(n->ctx, 10);
 		SSL_CTX_set_options(n->ctx, SSL_OP_NO_COMPRESSION|	//compression allows guessing the contents of the stream somehow.
 									SSL_OP_NO_RENEGOTIATION);
 
@@ -930,7 +930,7 @@ static neterr_t OSSL_Transmit(void *ctx, const qbyte *data, size_t datasize)
 			}
 		}
 		if (BIO_should_retry(o->bio))
-			return 0;
+			return NETERR_CLOGGED;
 		return NETERR_DISCONNECTED;	//eof or something
 	}
 	return NETERR_SENT;

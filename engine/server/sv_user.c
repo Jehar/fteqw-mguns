@@ -857,6 +857,8 @@ void SVNQ_New_f (void)
 			MSG_WriteFloat (&host_client->netchan.message, timelimit.value);
 		if (bits & QEX_GV_FRAGLIMIT)
 			MSG_WriteFloat (&host_client->netchan.message, fraglimit.value);
+		if (bits & QEX_GV_TEAMPLAY)
+			MSG_WriteByte (&host_client->netchan.message, teamplay.ival&0xff);
 	}
 
 // set view
@@ -1695,9 +1697,14 @@ void SV_SendClientPrespawnInfo(client_t *client)
 				large = true;
 				if (client->protocol == SCP_BJP3)
 					continue;	//not supported
+				else if (ISQWCLIENT(client) && (client->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS))
+				{
+					MSG_WriteByte(&client->netchan.message, svcfte_spawnstaticsound2);
+					MSG_WriteByte(&client->netchan.message, 1);
+				}
 				else if (ISDPCLIENT(client))
 					MSG_WriteByte(&client->netchan.message, svcdp_spawnstaticsound2);
-				else if (ISNQCLIENT(client))
+				else if (client->protocol == SCP_FITZ666)
 					MSG_WriteByte(&client->netchan.message, svcfitz_spawnstaticsound2);
 				else
 					continue; //not supported
@@ -1708,7 +1715,12 @@ void SV_SendClientPrespawnInfo(client_t *client)
 			for (i=0 ; i<3 ; i++)
 				MSG_WriteCoord(&client->netchan.message, sound->position[i]);
 			if (large)
-				MSG_WriteShort(&client->netchan.message, sound->soundnum);
+			{
+				if (client->fteprotocolextensions2&PEXT2_LERPTIME)
+					MSG_WriteULEB128(&client->netchan.message, sound->soundnum);
+				else
+					MSG_WriteShort(&client->netchan.message, sound->soundnum);
+			}
 			else
 				MSG_WriteByte(&client->netchan.message, sound->soundnum);
 			MSG_WriteByte(&client->netchan.message, sound->volume);
@@ -5487,6 +5499,7 @@ void Cmd_Join_f (void)
 	int		numclients;
 	extern cvar_t	maxclients;
 	int seats;
+	qboolean wasspawned;
 
 	if (host_client->controller)
 	{
@@ -5561,14 +5574,17 @@ void Cmd_Join_f (void)
 		if (!host_client->spectator)
 			continue;
 
+		wasspawned = host_client->spawned;
 		SV_DespawnClient(host_client);
-
-		SV_SetUpClientEdict (host_client, host_client->edict);
 
 		// turn the spectator into a player
 		host_client->spectator = false;
 		host_client->spawned = true;
 		InfoBuf_RemoveKey (&host_client->userinfo, "*spectator");
+		if (!wasspawned)
+			continue;
+		//need to respawn them now.
+		SV_SetUpClientEdict (host_client, host_client->edict);
 
 		// FIXME, bump the client's userid?
 
@@ -5599,6 +5615,7 @@ void Cmd_Join_f (void)
 			pr_global_struct->self = EDICT_TO_PROG(svprogfuncs, sv_player);
 			PR_ExecuteProgram (svprogfuncs, pr_global_struct->PutClientInServer);
 		}
+		host_client->spawned = true;
 		sv.spawned_client_slots++;
 
 		// send notification to all clients
@@ -5624,6 +5641,7 @@ void Cmd_Observe_f (void)
 	int		numspectators;
 	extern cvar_t	maxspectators, spectator_password;
 	int seats;
+	qboolean wasspawned;
 
 	if (host_client->controller)
 	{
@@ -5686,14 +5704,16 @@ void Cmd_Observe_f (void)
 		if (host_client->spectator)
 			continue;
 
+		wasspawned = host_client->spawned;
 		SV_DespawnClient(host_client);
-
-
-		SV_SetUpClientEdict (host_client, host_client->edict);
 
 		// turn the player into a spectator
 		host_client->spectator = true;
 		InfoBuf_SetValueForStarKey (&host_client->userinfo, "*spectator", "1");
+		if (!wasspawned)
+			continue;
+		//need to respawn them now.
+		SV_SetUpClientEdict (host_client, host_client->edict);
 
 		// FIXME, bump the client's userid?
 
@@ -5729,6 +5749,7 @@ void Cmd_Observe_f (void)
 				sv_player->v->modelindex = 0;
 			}
 		}
+		host_client->spawned = true;
 		sv.spawned_observer_slots++;
 
 		// send notification to all clients
@@ -5978,6 +5999,10 @@ static void SVNQ_Begin_f (void)
 	SV_RunCmd (&host_client->lastcmd, false);
 	SV_PostRunCmd();
 	host_client->lastruncmd = sv.time*1000;
+
+#ifdef MVD_RECORDING
+	SV_MVD_AutoRecord();
+#endif
 }
 static void SVNQ_PreSpawn_f (void)
 {
@@ -6188,6 +6213,24 @@ static void SVNQ_Protocols_f(void)
 		}
 	}
 }
+static void SV_PlayerExFlags_f(void)
+{
+	int i = atoi(Cmd_Argv(1));
+	const char *v = "";
+	switch(i&3)
+	{
+	case 0:
+		v = "";
+		break;
+	case 1:
+		v = "0";
+		break;
+	case 2:
+		v = "1";
+		break;
+	}
+	InfoBuf_SetKey(&host_client->userinfo, "w_switch", v);
+}
 
 /*
 void SVNQ_ExecuteUserCommand (char *s)
@@ -6256,10 +6299,10 @@ void SV_Pext_f(void)
 		switch(strtoul(tag, NULL, 0))
 		{
 		case PROTOCOL_VERSION_FTE1:
-			host_client->fteprotocolextensions = strtoul(val, NULL, 0) & Net_PextMask(PROTOCOL_VERSION_FTE1, ISNQCLIENT(host_client));
+			host_client->fteprotocolextensions = strtoul(val, NULL, 0) & Net_PextMask(PROTOCOL_VERSION_FTE1, ISNQCLIENT(host_client)) & PEXT_SERVERADVERTISE;
 			break;
 		case PROTOCOL_VERSION_FTE2:
-			host_client->fteprotocolextensions2 = strtoul(val, NULL, 0) & Net_PextMask(PROTOCOL_VERSION_FTE2, ISNQCLIENT(host_client));
+			host_client->fteprotocolextensions2 = strtoul(val, NULL, 0) & Net_PextMask(PROTOCOL_VERSION_FTE2, ISNQCLIENT(host_client)) & PEXT2_SERVERADVERTISE;
 			break;
 		case PROTOCOL_VERSION_EZQUAKE1:
 			host_client->ezprotocolextensions1 = strtoul(val, NULL, 0) & Net_PextMask(PROTOCOL_VERSION_EZQUAKE1, ISNQCLIENT(host_client)) & EZPEXT1_SERVERADVERTISE;
@@ -6284,8 +6327,8 @@ void SV_Pext_f(void)
 
 
 
-void SV_MVDList_f (void);
-void SV_MVDInfo_f (void);
+void SV_UserMVDList_f (void);
+void SV_UserMVDInfo_f (void);
 typedef struct
 {
 	char	*name;
@@ -6338,7 +6381,7 @@ ucmd_t ucmds[] =
 	{"demolist",	SV_UserCmdMVDList_f},
 	{"dlist",		SV_UserCmdMVDList_f},	//apparently people are too lazy to type.
 									//mvdsv has 4 more variants, for 6 total doing the same thing.
-	{"demoinfo",	SV_MVDInfo_f},
+	{"demoinfo",	SV_UserMVDInfo_f},
 	{"dl",			SV_DemoDownload_f},
 #endif
 	{"stopdownload",SV_StopDownload_f},
@@ -6484,6 +6527,8 @@ ucmd_t nqucmds[] =
 	{"muteall",		SV_Voice_MuteAll_f},	/*disables*/
 	{"unmuteall",	SV_Voice_UnmuteAll_f}, /*reenables*/
 #endif
+
+	{"playerexflags", SV_PlayerExFlags_f},
 
 	{NULL, NULL}
 };
@@ -7455,9 +7500,9 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 			sv.world.physicstime = ptime;
 		}
 
-		if (host_client->state && host_client->protocol == SCP_BAD)
+		if (host_client->state && host_client->protocol == SCP_BAD && svs.gametype != GT_Q1QVM)
 		{
-			//botclients update their movement during prethink. make sure we use that stuff.
+			//botclients update their movement during prethink. make sure we use that stuff. ktx has a builtin.
 			ucmd->angles[0] = (int)(sv_player->v->v_angle[0] * (65535/360.0f));
 			ucmd->angles[1] = (int)(sv_player->v->v_angle[1] * (65535/360.0f));
 			ucmd->angles[2] = (int)(sv_player->v->v_angle[2] * (65535/360.0f));
@@ -7556,6 +7601,7 @@ if (sv_player->v->health > 0 && before && !after )
 #endif
 	pmove.world = NULL;
 
+	if (host_client->state && host_client->protocol != SCP_BAD)
 	{
 		vec3_t delta;
 		delta[0] = pmove.angles[0] - SHORT2ANGLE(pmove.cmd.angles[0]);
@@ -7967,10 +8013,20 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 	unsigned int loss = (flags & VRM_LOSS)?MSG_ReadByte():0;
 	double delay = (flags & VRM_DELAY)?MSG_ReadByte()/10000.0:0;	//networked as 10ths of a millisecond.
 	unsigned int numacks = (flags & VRM_ACKS)?MSG_ReadUInt64():0;
-	usercmd_t old;
+	usercmd_t oldcmd, newcmd;
 
 	unsigned int seat, frame, a;
 	qboolean ran;
+	unsigned int dropsequence;	//sequence<=this will be ignored as stale
+
+#define VRM_UNSUPPORTED (~(VRM_LOSS|VRM_DELAY|VRM_SEATS|VRM_FRAMES|VRM_ACKS))
+	if (flags & VRM_UNSUPPORTED)
+	{
+		if (!msg_badread)
+			Con_Printf("SVFTE_ExecuteClientMove: unknown input flags %#x\n", flags & VRM_UNSUPPORTED);
+		msg_badread = true;
+		return 0;
+	}
 
 	for (a = 0; a < numacks; a++)
 	{
@@ -7979,7 +8035,7 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 		{
 			unsigned int e;
 			if (controller->pendingdeltabits)
-				controller->pendingdeltabits[0] = UF_REMOVE;
+				controller->pendingdeltabits[0] = UF_SV_REMOVE;
 			if (host_client->pendingcsqcbits)
 				for (e = 1; e < host_client->max_net_ents; e++)
 					if (host_client->pendingcsqcbits[e] & SENDFLAGS_PRESENT)
@@ -7993,7 +8049,7 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 		if (!split)
 		{	//err, they sent too many seats... assume we kicked one. swallow the extra data.
 			for (frame = 0; frame < frames; frame++)
-				MSGFTE_ReadDeltaUsercmd(&nullcmd, &old);
+				MSGFTE_ReadDeltaUsercmd(&nullcmd, &newcmd);
 			continue;
 		}
 
@@ -8007,12 +8063,24 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 		split->isindependant = !(sv_nqplayerphysics.ival || split->state < cs_spawned || SV_PlayerPhysicsQC || sv.paused || !sv.world.worldmodel || sv.world.worldmodel->loadstate != MLS_LOADED);
 
 		ran = false;
-		old = nullcmd;
+		oldcmd = nullcmd;
+		dropsequence = split->lastcmd.sequence;
 		for (frame = 0; frame < frames; frame++)
 		{
-			MSGFTE_ReadDeltaUsercmd(&old, &split->lastcmd);
-			split->lastcmd.sequence = controller->netchan.outgoing_sequence - (frames-frame-1);
-			old = split->lastcmd;
+			MSGFTE_ReadDeltaUsercmd(&oldcmd, &newcmd);
+			newcmd.sequence = controller->netchan.outgoing_sequence - (frames-frame-1);
+			oldcmd = newcmd;
+
+			if (newcmd.sequence <= dropsequence)
+				continue;	//this one is a dupe.
+
+			newcmd.msec = newcmd.servertime - split->lastcmd.servertime;
+
+			if (oldcmd.msec && newcmd.msec != oldcmd.msec)
+				if (sv_showpredloss.ival)
+					Con_Printf("%s: %g -> %g\n", split->name, newcmd.msec, oldcmd.msec);
+
+			split->lastcmd = newcmd;
 			split->lastcmd.angles[0] += split->baseangles[0];
 			split->lastcmd.angles[1] += split->baseangles[1];
 			split->lastcmd.angles[2] += split->baseangles[2];
@@ -8026,10 +8094,6 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 
 			if (split->state == cs_spawned)
 			{
-				//handle impulse here, doing it later might mean it got skipped entirely (nq physics often skips frames).
-				if (split->lastcmd.impulse)
-					split->edict->v->impulse = split->lastcmd.impulse;
-
 				if (split->isindependant)
 				{	//this protocol uses bigger timestamps instead of msecs
 					unsigned int curtime = sv.time*1000;
@@ -8054,13 +8118,16 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 							ran=true;
 						}
 
-						split->lastcmd.msec = split->lastcmd.servertime - split->lastruncmd;
 						SV_RunCmd (&split->lastcmd, false);
 						split->lastruncmd = split->lastcmd.servertime;
 					}
 				}
 				else
 				{
+					//handle impulse here, doing it later might mean it got skipped entirely (nq physics often skips frames).
+					if (split->lastcmd.impulse)
+						split->edict->v->impulse = split->lastcmd.impulse;
+
 					SV_SetEntityButtons(split->edict, split->lastcmd.buttons);
 					split->lastcmd.buttons = 0;
 				}
@@ -8423,7 +8490,7 @@ void SV_ExecuteClientMessage (client_t *cl)
 			{
 				unsigned int e;
 				if (cl->pendingdeltabits)
-					cl->pendingdeltabits[0] = UF_REMOVE;
+					cl->pendingdeltabits[0] = UF_SV_REMOVE;
 				if (host_client->pendingcsqcbits)
 					for (e = 1; e < host_client->max_net_ents; e++)
 						if (host_client->pendingcsqcbits[e] & SENDFLAGS_PRESENT)
@@ -9066,7 +9133,7 @@ void SVNQ_ExecuteClientMessage (client_t *cl)
 			{
 				unsigned int e;
 				if (cl->pendingdeltabits)
-					cl->pendingdeltabits[0] = UF_REMOVE;
+					cl->pendingdeltabits[0] = UF_SV_REMOVE;
 				if (host_client->pendingcsqcbits)
 					for (e = 1; e < host_client->max_net_ents; e++)
 						if (host_client->pendingcsqcbits[e] & SENDFLAGS_PRESENT)
