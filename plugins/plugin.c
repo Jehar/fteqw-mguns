@@ -8,7 +8,6 @@
 plugcorefuncs_t *plugfuncs;
 plugcmdfuncs_t *cmdfuncs;
 plugcvarfuncs_t *cvarfuncs;
-plugclientfuncs_t *clientfuncs;
 
 
 

@@ -7621,7 +7621,6 @@ static struct {
 	{"getsoundtime",			PF_getsoundtime,			533},
 	{"getchannellevel",			PF_getchannellevel,			0},
 	{"soundlength",				PF_soundlength,				534},
-	{"getsoundindex",			PF_cs_getsoundindex,		0},
 	{"soundfromindex",			PF_cs_soundfromindex,		0},
 	{"buf_loadfile",			PF_buf_loadfile,			535},
 	{"buf_writefile",			PF_buf_writefile,			536},

@@ -753,12 +753,6 @@ static size_t QDECL Plug_GetUserInfoBlob(int seat, const char *key, void *outptr
 	else
 		return blobsize;
 }
-
-
-static void QDECL Plug_SetUserInfoBlob(int seat, const char *key, const char *value, int size)
-{
-	CL_SetInfoBlob(seat, key, value, size);
-}
 	
 void QDECL Plug_CL_ClearState(void)
 {

@@ -59,7 +59,6 @@ static struct
 plugcorefuncs_t *plugfuncs;
 plugcvarfuncs_t *cvarfuncs;
 plugcmdfuncs_t *cmdfuncs;
-plugclientfuncs_t *clientfuncs;
 
 #ifdef GLQUAKE
 #include "glquake.h"
@@ -1259,7 +1258,6 @@ void Plug_Initialise(qboolean fromgamedir)
 		plugfuncs = PlugBI_GetEngineInterface(plugcorefuncs_name, sizeof(*plugfuncs));
 		cvarfuncs = plugfuncs->GetEngineInterface(plugcvarfuncs_name, sizeof(*cvarfuncs));
 		cmdfuncs = plugfuncs->GetEngineInterface(plugcmdfuncs_name, sizeof(*cmdfuncs));
-		clientfuncs = plugfuncs->GetEngineInterface(plugclientfuncs_name, sizeof(*clientfuncs));
 	}
 
 #ifdef SUBSERVERS

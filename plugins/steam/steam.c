@@ -118,7 +118,7 @@ static char *getEnvVar(const char *key, char *buf, const size_t buflen)
 
 #endif
 
-
+plugclientfuncs_t *clientfuncs;
 static PipeType GPipeRead = NULLPIPE;
 static PipeType GPipeWrite = NULLPIPE;
 
