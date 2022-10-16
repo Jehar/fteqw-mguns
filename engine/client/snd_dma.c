@@ -2870,7 +2870,7 @@ static void SND_Spatialize(soundcardinfo_t *sc, channel_t *ch)
 
 	for (i = 0; i < sc->sn.numchannels; i++)
 	{
-		scale = 1 + DotProduct(listener_vec, sc->speakerdir[i]);
+		scale = 1;// + DotProduct(listener_vec, sc->speakerdir[i]);
 		scale = (1.0 - dist) * scale * sc->dist[i];
 		v = ch->master_vol * scale * volscale;
 		v = bound(0, v, 255);
@@ -2887,12 +2887,15 @@ static void S_UpdateSoundCard(soundcardinfo_t *sc, qboolean updateonly, channel_
 	int		vol;
 	int		ch_idx;
 	int		skip;
-	int		absstartpos = updateonly?sc->GetChannelPos?sc->GetChannelPos(sc, target_chan)<<PITCHSHIFT:target_chan->pos:0;
+	long long int	samp_pos;
+	long long int	absstartpos = updateonly?sc->GetChannelPos?sc->GetChannelPos(sc, target_chan)<<PITCHSHIFT:target_chan->pos:0;
 	extern cvar_t cl_demospeed;
 	chanupdatereason_t chanupdatetype = updateonly?CUR_UPDATE:CUR_EVERYTHING;
 
 	if (!sfx)
 		sfx = target_chan->sfx;
+
+	samp_pos = target_chan->pos;
 
 	if (fvol < 0 || !sfx)
 	{	//stopsound, apparently.
@@ -2982,6 +2985,9 @@ static void S_UpdateSoundCard(soundcardinfo_t *sc, qboolean updateonly, channel_
 			}
 		}
 	}
+
+	if (!(chanupdatetype & CUR_OFFSET))
+		target_chan->pos = samp_pos;
 
 	if (sc->ChannelUpdate)
 		sc->ChannelUpdate(sc, target_chan, chanupdatetype);
