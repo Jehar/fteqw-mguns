@@ -3032,7 +3032,7 @@ qboolean CL_QueryServers(void)
 			case SS_QUAKE3: enabled = sb_enablequake3; break;
 			case SS_QUAKE2: enabled = sb_enablequake2; break;
 			case SS_NETQUAKE: enabled = sb_enablenetquake; break;
-			case SS_QUAKEWORLD: enabled = sb_enablequakeworld; break;
+			case SS_QUAKEWORLD: enabled = true; break;
 			default: enabled = false; break;
 			}
 			if (enabled)
@@ -3060,7 +3060,7 @@ qboolean CL_QueryServers(void)
 				case SS_QUAKE3: enabled = sb_enablequake3; break;
 				case SS_QUAKE2: enabled = sb_enablequake2; break;
 				case SS_NETQUAKE: enabled = sb_enablenetquake; break;
-				case SS_QUAKEWORLD: enabled = sb_enablequakeworld; break;
+				case SS_QUAKEWORLD: enabled = true; break;
 				default: enabled = false; break;
 				}
 				if (enabled)
@@ -3131,7 +3131,6 @@ static int CL_ReadServerInfo(char *msg, enum masterprotocol_e prototype, qboolea
 	int len, j, k;
 	serverinfo_t *info;
 	char adr[MAX_ADR_SIZE];
-
 	info = Master_InfoForServer(&net_from, NULL);
 
 	if (!info)	//not found...

@@ -1321,14 +1321,12 @@ static void SVC_GetInfo (const char *challenge, int fullstatus)
 		Info_SetValueForKey(resp, "clients", va("%d", numclients), sizeof(response) - (resp-response));
 		Info_SetValueForKey(resp, "sv_maxclients", maxclients.string, sizeof(response) - (resp-response));
 		Info_SetValueForKey(resp, "mapname", InfoBuf_ValueForKey(&svs.info, "map"), sizeof(response) - (resp-response));
+		if (*gamestatus)
+			Info_SetValueForKey(resp, "qcstatus", gamestatus, sizeof(response) - (resp - response));
 		resp += strlen(resp);
 		//now include the full/regular serverinfo
 		resp += InfoBuf_ToString(&svs.info, resp, sizeof(response) - (resp-response), prioritykeys, ignorekeys, NULL, NULL, NULL);
 		*resp = 0;
-		//and any possibly-long qc status string
-		if (*gamestatus)
-			Info_SetValueForKey(resp, "qcstatus", gamestatus, sizeof(response) - (resp-response));
-		resp += strlen(resp);
 	}
 	*resp++ = 0;
 
