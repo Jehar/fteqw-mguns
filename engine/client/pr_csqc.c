@@ -2643,6 +2643,8 @@ void QCBUILTIN PF_R_SetViewFlag(pubprogfuncs_t *prinst, struct globalvars_s *pr_
 		r_refdef.grect.width = p[0];
 		r_refdef.grect.height = p[1];
 		r_refdef.dirty |= RDFD_FOV;
+
+		V_ApplyRefdef();
 		break;
 
 	case VF_MIN_X:
