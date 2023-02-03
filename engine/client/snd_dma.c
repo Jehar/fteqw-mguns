@@ -164,6 +164,7 @@ static void QDECL S_Voip_Play_Callback(cvar_t *var, char *oldval);
 cvar_t snd_voip_capturedevice	= CVARF("cl_voip_capturedevice", "", CVAR_ARCHIVE);
 cvar_t snd_voip_capturedevice_opts	= CVARFD("_cl_voip_capturedevice_opts", "", CVAR_NOSET|CVAR_NOSAVE, "The possible audio capture devices, in \"value\" \"description\" pairs, for gamecode to read.");
 int voipbutton;	//+voip, no longer part of cl_voip_send to avoid it getting saved
+double voip_timehelduntil;
 cvar_t snd_voip_send			= CVARFD("cl_voip_send", "0", CVAR_ARCHIVE|CVAR_NOTFROMSERVER, "Sends voice-over-ip data to the server whenever it is set.\n0: only send voice if +voip is pressed.\n1: voice activation.\n2: constantly send.\n+4: Do not send to game, only to rtp sessions.");
 cvar_t snd_voip_test			= CVARD("cl_voip_test", "0", "If 1, enables you to hear your own voice directly, bypassing the server and thus without networking latency, but is fine for checking audio levels. Note that sv_voip_echo can be set if you want to include latency and packetloss considerations, but setting that cvar requires server admin access and is thus much harder to use.");
 cvar_t snd_voip_vad_threshhold	= CVARFD("cl_voip_vad_threshhold", "15", CVAR_ARCHIVE, "This is the threshhold for voice-activation-detection when sending voip data");
@@ -1161,6 +1162,7 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 	int len;
 	float micamp = snd_voip_micamp.value;
 	qboolean voipsendenable = true;
+	qboolean voip_buttonforce = voipbutton || (realtime < voip_timehelduntil);
 	int voipcodec = *snd_voip_codec.string?snd_voip_codec.ival:VOIP_DEFAULT_CODEC;
 	qboolean rtpstream = NET_RTP_Active();
 
@@ -1234,7 +1236,7 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 			return;
 	}
 
-	voipsendenable = voipbutton || (snd_voip_send.ival>0);
+	voipsendenable = voip_buttonforce || (snd_voip_send.ival>0);
 
 	if (!s_voip.cdriver)
 	{
@@ -1570,7 +1572,7 @@ void S_Voip_Transmit(unsigned char clc, sizebuf_t *buf)
 		s_voip.enctimestamp += samps;
 		nl = (3000*level) / (32767.0f*32767*samps);
 		s_voip.voiplevel = (s_voip.voiplevel*7 + nl)/8;
-		if (s_voip.voiplevel < snd_voip_vad_threshhold.ival && !voipbutton && !(snd_voip_send.ival & 6))
+		if (s_voip.voiplevel < snd_voip_vad_threshhold.ival && !voip_buttonforce && !(snd_voip_send.ival & 6))
 		{
 			/*try and dump it, it was too quiet, and they're not pressing +voip*/
 			if (s_voip.keeps > samps)
@@ -1670,13 +1672,14 @@ void S_Voip_Ignore(unsigned int slot, qboolean ignore)
 }
 static void S_Voip_Enable_f(void)
 {
-	if (Cmd_IsInsecure())
-		return;
+	//if (Cmd_IsInsecure())
+	//	return;
 	voipbutton = true;
 }
 static void S_Voip_Disable_f(void)
 {
 	voipbutton = false;
+	voip_timehelduntil = realtime + snd_voip_vad_delay.value;
 }
 static void S_Voip_f(void)
 {
