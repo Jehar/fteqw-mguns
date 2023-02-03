@@ -698,7 +698,7 @@ void SV_Map_f (void)
 		{
 			char *mangled = Cmd_Argv(1);
 			char *sep = strchr(mangled, ':');
-			if (sep)
+			if (sep && strncmp(mangled, "file:", 5) && strncmp(mangled, "http:", 5) && strncmp(mangled, "https:", 5))
 			{
 				*sep++ = 0;
 				if (Cmd_FromGamecode())
@@ -737,7 +737,7 @@ void SV_Map_f (void)
 	else
 	{
 		snprintf (expanded, sizeof(expanded), "maps/%s.bsp", level); // this function and the if statement below, is a quake bugfix which stopped a map called "dm6++.bsp" from loading because of the + sign, quake2 map syntax interprets + character as "intro.cin+base1.bsp", to play a cinematic then load a map after
-		if (!COM_FCheckExists (expanded))
+		if (!COM_FCheckExists (level) && !COM_FCheckExists (expanded))
 		{
 			nextserver = strchr(level, '+');
 			if (nextserver)
@@ -841,7 +841,7 @@ void SV_Map_f (void)
 	else
 #endif
 	{
-		char *exts[] = {"maps/%s", "maps/%s.bsp", "maps/%s.bsp.gz", "maps/%s.bsp.xz", "maps/%s.cm", "maps/%s.hmp", /*"maps/%s.map",*/ /*"maps/%s.ent",*/ NULL};
+		char *exts[] = {"%s", "maps/%s", "maps/%s.bsp", "maps/%s.bsp.gz", "maps/%s.bsp.xz", "maps/%s.cm", "maps/%s.hmp", /*"maps/%s.map",*/ /*"maps/%s.ent",*/ NULL};
 		int i, j;
 
 		for (i = 0; exts[i]; i++)
@@ -1230,6 +1230,7 @@ static netadr_t *NET_IPV4ify(netadr_t *a, netadr_t *tmp)
 		tmp->connum = a->connum;
 		tmp->scopeid = a->scopeid;
 		tmp->port = a->port;
+		tmp->prot = a->prot;
 		tmp->address.ip[0] = a->address.ip6[12];
 		tmp->address.ip[1] = a->address.ip6[13];
 		tmp->address.ip[2] = a->address.ip6[14];
@@ -1310,7 +1311,7 @@ void SV_EvaluatePenalties(client_t *cl)
 	if (((penalties|delta) & (BAN_MUTE|BAN_DEAF)) == (BAN_MUTE|BAN_DEAF))
 		delta &= ~(BAN_MUTE|BAN_DEAF);
 
-	if (penalties & BAN_STEALTH)
+	if ((delta|penalties) & BAN_STEALTH)
 		delta = 0;	//don't announce ANY.
 
 	if (cl->controller)
@@ -1772,10 +1773,11 @@ static void SV_PenaltyToggle (unsigned int banflag, char *penaltyname)
 	char *clname = Cmd_Argv(1);
 	char *duration = Cmd_Argv(2);
 	char *reason = Cmd_Argv(3);
-	bannedips_t proto;
+	bannedips_t proto = {0};
 	client_t *cl;
 	qboolean found = false;
 	int clnum=-1;
+	netadr_t tmp;
 
 	proto.banflags = banflag;
 
@@ -1794,9 +1796,9 @@ static void SV_PenaltyToggle (unsigned int banflag, char *penaltyname)
 	while((cl = SV_GetClientForString(clname, &clnum)))
 	{
 		found = true;
-		proto.adr = cl->netchan.remote_address;
+		proto.adr = *NET_IPV4ify(&cl->netchan.remote_address, &tmp);
 		proto.adr.port = 0;
-		proto.adrmask.type = cl->netchan.remote_address.type;
+		proto.adrmask.type = proto.adr.type;
 
 		if (NET_IsLoopBackAddress(&proto.adr) && (proto.banflags & BAN_NOLOCALHOST))
 		{
@@ -1914,6 +1916,10 @@ static void SV_CripplePlayer_f (void)
 static void SV_Mute_f (void)
 {
 	SV_PenaltyToggle(BAN_MUTE, "muted");
+}
+static void SV_StealthMute_f (void)
+{
+	SV_PenaltyToggle(BAN_MUTE|BAN_STEALTH, "stealth-muted");
 }
 
 static void SV_Cuff_f (void)
@@ -2325,7 +2331,7 @@ static void SV_Status_f (void)
 #define C_USERID	COLUMN(1, "userid", Con_Printf("%6i ", (int)cl->userid))
 #define C_ADDRESS	COLUMN(2, "address        ", Con_Printf("%-16.16s", s))
 #define C_NAME		COLUMN(3, "name           ", Con_Printf("%-16.16s", cl->name))
-#define C_RATE		COLUMN(4, "rate", Con_Printf("%4i ", (cl->frameunion.frames&&cl->netchan.frame_rate>0)?(int)(1/cl->netchan.frame_rate):0))
+#define C_RATE		COLUMN(4, "  hz", Con_Printf("%4i ", (cl->frameunion.frames&&cl->netchan.frame_rate>0)?(int)(0.5f+1/cl->netchan.frame_rate):0))
 #define C_PING		COLUMN(5, "ping", Con_Printf("%4i ", (int)SV_CalcPing (cl, false)))
 #define C_DROP		COLUMN(6, "drop", Con_Printf("%4.1f ", 100.0*cl->netchan.drop_count / cl->netchan.incoming_sequence))
 #define C_DLP		COLUMN(7, "dl ", if (!cl->download||!cl->downloadsize)Con_Printf("    ");else Con_Printf("%3.0f ", (cl->downloadcount*100.0)/cl->downloadsize))
@@ -2395,7 +2401,7 @@ static void SV_Status_f (void)
 
 			safeswitch(cl->protocol)
 			{
-			case SCP_BAD:			p = "none"; break;
+			case SCP_BAD:			p = "-----"; break;
 			case SCP_QUAKEWORLD:	p = (cl->fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)?"fteqw":"qw"; break;
 			case SCP_QUAKE2:		p = "q2"; break;
 			case SCP_QUAKE3:		p = "q3"; break;
@@ -3360,10 +3366,11 @@ void SV_InitOperatorCommands (void)
 	Cmd_AddCommand ("kick", SV_Kick_f);
 	Cmd_AddCommand ("clientkick", SV_KickSlot_f);
 	Cmd_AddCommand ("renameclient", SV_ForceName_f);
-	Cmd_AddCommand ("mute", SV_Mute_f);
-	Cmd_AddCommand ("cuff", SV_Cuff_f);
-	Cmd_AddCommand ("cripple", SV_CripplePlayer_f);
-	Cmd_AddCommand ("ban", SV_BanClientIP_f);
+	Cmd_AddCommandD ("mute", SV_Mute_f, "Mutes the player, shaming them.");
+	Cmd_AddCommandD ("stealthmute", SV_StealthMute_f, "Mutes the player, without telling them, while pretending that their messages are still being broadcast. For use against people that would escalate on expiry or externally.");
+	Cmd_AddCommandD ("cuff", SV_Cuff_f, "Slap handcuffs on the player, preventing them from being able to attack.");
+	Cmd_AddCommandD ("cripple", SV_CripplePlayer_f, "Block the player's ability to move.");
+	Cmd_AddCommandD ("ban", SV_BanClientIP_f, "Block the player's IP, preventing them from connecting. Also kicks them.");
 	Cmd_AddCommand ("banname", SV_BanClientIP_f);	//legacy dupe-name crap
 
 	Cmd_AddCommand ("banlist", SV_BanList_f);	//shows only bans, not other penalties

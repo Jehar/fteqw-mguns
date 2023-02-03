@@ -39,9 +39,12 @@ void QDECL SV_NQPhysicsUpdate(cvar_t *var, char *oldvalue)
 {
 	if (!strcmp(var->string, "auto") || !strcmp(var->string, ""))
 	{	//prediction requires nq physics, so use it by default in multiplayer.
-		if (	progstype <= PROG_QW ||	//none or qw use qw physics by default
-				(!isDedicated &&  sv.allocated_client_slots > 1) ||	//multiplayer dedicated servers use qw physics for nq mods too. server admins are expected to be able to spend a little more time to configure things properly.
-				(svprogfuncs&&PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY)))	//mods that use explicit custom player physics/pred ALWAYS want qw physics (just hope noone forces it off)
+		if ((svprogfuncs&&PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY)))
+			var->ival = 0;	//mods that use explicit custom player physics/pred ALWAYS want qw-like physics (just hope noone forces it off)
+		else if ((svprogfuncs&&PR_FindFunction(svprogfuncs, "SV_PlayerPhysics", PR_ANY)))
+			var->ival = 1;	//DP mods wanting DP's weird physics also suffer NQ behaviours
+		else if (	progstype <= PROG_QW ||	//none or qw use qw physics by default
+				(!isDedicated &&  sv.allocated_client_slots > 1))	//multiplayer dedicated servers use qw physics for nq mods too. server admins are expected to be able to spend a little more time to configure things properly.
 			var->ival = 0;
 		else
 			var->ival = 1;
@@ -1208,8 +1211,8 @@ void SV_SendClientPrespawnInfo(client_t *client)
 	if (client->prespawn_stage == PRESPAWN_CSPROGS)
 	{
 		extern cvar_t sv_demo_write_csqc;
-		if (client == &demo.recorder && sv_demo_write_csqc.ival)	//we only really want to do this for demos. actual clients can make the request themselves.
-		if (client->fteprotocolextensions & PEXT_CHUNKEDDOWNLOADS)	//there's many different download mechanisms...
+		if (client == &demo.recorder && (sv_demo_write_csqc.ival || !*sv_demo_write_csqc.string))	//we only really want to do this for demos(hopefully we're gzipping). actual clients can make the request themselves.
+		if ((client->fteprotocolextensions & PEXT_CHUNKEDDOWNLOADS) && (client->fteprotocolextensions & PEXT_CSQC))	//there's many different download mechanisms...
 		{
 			if (!client->prespawn_idx && !client->download)
 			{
@@ -4070,6 +4073,35 @@ void SV_PushFloodProt(client_t *client)
 	client->lastspoke = realtime;
 }
 
+#ifdef NQPROT
+static void SV_SendQEXChat(client_t *to, int clcolour, int chatcolour, const char *sendername, const char *message)
+{
+	if (to->controller)
+		to = to->controller;
+
+	switch (to->protocol)
+	{
+	case SCP_BAD:	//bot
+		break;
+	case SCP_QUAKE2:
+	case SCP_QUAKE3:
+	case SCP_QUAKEWORLD:
+		break;	//doesn't make sense.
+	case SCP_DARKPLACES6:
+	case SCP_DARKPLACES7:
+	case SCP_NETQUAKE:
+	case SCP_BJP3:
+	case SCP_FITZ666:
+		ClientReliableWrite_Begin (to, svcqex_chat, 3 + strlen(sendername)+strlen(message));
+		ClientReliableWrite_Byte (to, clcolour);
+		ClientReliableWrite_Byte (to, chatcolour);
+		ClientReliableWrite_String (to, sendername);
+		ClientReliableWrite_String (to, message);
+		break;
+	}
+}
+#endif
+
 /*
 ==================
 SV_Say
@@ -4102,7 +4134,7 @@ void SV_Say (qboolean team)
 
 	memset(sent, 0, sizeof(sent));
 
-	if (team)
+	if (1)//team)
 	{
 		Q_strncpyz (t1, InfoBuf_ValueForKey(&host_client->userinfo, "team"), sizeof(t1));
 	}
@@ -4225,7 +4257,25 @@ void SV_Say (qboolean team)
 		else
 			sent[cln] = true;
 
-		SV_ClientPrintf(client, PRINT_CHAT, "%s", text);
+#ifdef NQPROT
+		if (client->qex)
+		{	//white, green, cyan, yellow
+			int c = 0;
+			if (client == host_client)
+				c = 3;	//yellow for yourself.
+			else
+			{
+				t2 = InfoBuf_ValueForKey (&client->userinfo, "team");
+				if (strcmp(t1, t2))
+					c = 1;	//green for other team. should probably be red but that's not an option.
+				else
+					c = 2;	//cyan for same team.
+			}
+			SV_SendQEXChat(client, c, !!team, host_client->name, p);
+		}
+		else
+#endif
+			SV_ClientPrintf(client, PRINT_CHAT, "%s", text);
 	}
 #ifdef MVD_RECORDING
 	sv.mvdrecording = mvdrecording;
@@ -6292,6 +6342,7 @@ void SV_Pext_f(void)
 
 	host_client->fteprotocolextensions = 0;
 	host_client->fteprotocolextensions2 = 0;
+	host_client->ezprotocolextensions1 = 0;
 	for (i = 1; i < Cmd_Argc(); )
 	{
 		tag = Cmd_Argv(i++);
@@ -8118,6 +8169,7 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 							ran=true;
 						}
 
+						SV_Prompt_Input(split, &split->lastcmd);
 						SV_RunCmd (&split->lastcmd, false);
 						split->lastruncmd = split->lastcmd.servertime;
 					}
@@ -8128,6 +8180,7 @@ static double SVFTE_ExecuteClientMove(client_t *controller)
 					if (split->lastcmd.impulse)
 						split->edict->v->impulse = split->lastcmd.impulse;
 
+					SV_Prompt_Input(split, &split->lastcmd);
 					SV_SetEntityButtons(split->edict, split->lastcmd.buttons);
 					split->lastcmd.buttons = 0;
 				}
@@ -8383,6 +8436,7 @@ void SV_ExecuteClientMessage (client_t *cl)
 						if (newcmd.impulse)// && SV_FilterImpulse(newcmd.impulse, host_client->trustlevel))
 							split->edict->v->impulse = newcmd.impulse;
 
+						SV_Prompt_Input(split, &newcmd);
 						SV_SetEntityButtons(split->edict, newcmd.buttons);
 					}
 					else
@@ -8395,18 +8449,26 @@ void SV_ExecuteClientMessage (client_t *cl)
 						{
 							while (net_drop > 2)
 							{
+								SV_Prompt_Input(split, &split->lastcmd);
 								SV_RunCmd (&split->lastcmd, false);
 								net_drop--;
 							}
 							if (net_drop > 1)
+							{
+								SV_Prompt_Input(split, &oldest);
 								SV_RunCmd (&oldest, false);
+							}
 							if (net_drop > 0)
+							{
+								SV_Prompt_Input(split, &oldcmd);
 								SV_RunCmd (&oldcmd, false);
+							}
 						}
+						SV_Prompt_Input(split, &newcmd);
 						SV_RunCmd (&newcmd, false);
-						host_client->lastruncmd = sv.time*1000;
+						split->lastruncmd = sv.time*1000;
 
-						if (!SV_PlayerPhysicsQC || host_client->spectator)
+						if (!SV_PlayerPhysicsQC || split->spectator)
 							SV_PostRunCmd();
 					}
 
@@ -8766,7 +8828,7 @@ void SVNQ_ReadClientMove (qboolean forceangle16, qboolean quakeex)
 	frame = &host_client->frameunion.frames[host_client->netchan.incoming_acknowledged & UPDATE_MASK];
 
 	if (quakeex)
-		;
+		;	//sequence is a separate clc (should have already been sent)
 	else if (host_client->protocol == SCP_DARKPLACES7)
 		host_client->last_sequence = MSG_ReadLong ();
 	else if (host_client->fteprotocolextensions2 & PEXT2_PREDINFO)
@@ -8912,6 +8974,8 @@ void SVNQ_ReadClientMove (qboolean forceangle16, qboolean quakeex)
 				SV_ClientTPrintf (host_client, PRINT_HIGH, "tracking %s\n", svs.clients[i-1].name);
 		}
 	}
+
+	SV_Prompt_Input(host_client, &cmd);
 
 	/*host_client->edict->v->v_angle[0] = SHORT2ANGLE(cmd.angles[0]);
 	host_client->edict->v->v_angle[1] = SHORT2ANGLE(cmd.angles[1]);

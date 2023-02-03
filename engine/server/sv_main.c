@@ -613,6 +613,7 @@ void SV_DropClient (client_t *drop)
 		break;
 	}
 
+	SV_Prompt_Clear(drop);
 	if (drop->centerprintstring)
 		Z_Free(drop->centerprintstring);
 	drop->centerprintstring = NULL;
@@ -1083,6 +1084,19 @@ void SV_FullClientUpdate (client_t *client, client_t *to)
 			MSG_WriteByte(buf, i);
 			MSG_WriteByte(buf, playercolor);
 		ClientReliable_FinishWrite(to);
+
+		if (to->qex)
+		{
+			unsigned int s1, s2;
+			if (client->netchan.remote_address.type == NA_LOOPBACK)
+				s1 = s2 = 0;	//host
+			else
+				s1 = s2 = -1;	//non-playfab connection
+			MSG_WriteByte(buf, svcqex_updatesocial);
+			MSG_WriteByte(buf, i);
+			MSG_WriteLong(buf, s1);
+			MSG_WriteLong(buf, s2);
+		}
 
 		if (to->fteprotocolextensions2 & PEXT2_PREDINFO)
 		{
@@ -1959,11 +1973,18 @@ void SV_AcceptMessage(client_t *newcl)
 			MSG_WriteLong(&sb, 0);
 			MSG_WriteByte(&sb, CCREP_ACCEPT);
 			if (newcl->qex)
-				;	//skip any port info (as well as any proquake ident stuff.
+				;	//skip any port info (as well as any proquake ident stuff).
 			else
 			{
 				NET_LocalAddressForRemote(svs.sockets, &net_from, &localaddr, 0);
-				MSG_WriteLong(&sb, ShortSwap(localaddr.port));
+				if (net_from.prot == NP_DTLS
+				#ifdef SUPPORT_ICE
+						|| net_from.type == NA_ICE
+				#endif
+						)
+					MSG_WriteLong(&sb, 0);	//send a port of 0 if we expect the client to be sane enough and/or otherwise problematic.
+				else
+					MSG_WriteLong(&sb, ShortSwap(localaddr.port));
 				if (newcl->proquake_angles_hack)
 				{
 					MSG_WriteByte(&sb, MOD_PROQUAKE);
@@ -2003,11 +2024,14 @@ void SV_AcceptMessage(client_t *newcl)
 	Netchan_OutOfBand (NS_SERVER, &net_from, len, (qbyte *)string);
 }
 
-#ifndef _WIN32
+#if !defined(_DEBUG) || defined(_WIN32) || defined(FTE_TARGET_WEB)
+static void SV_CheckRecentCrashes(client_t *tellclient)
+{
+}
+#else
 #include <sys/stat.h>
 static void SV_CheckRecentCrashes(client_t *tellclient)
 {
-#ifndef FTE_TARGET_WEB
 	struct stat sb;
 	if (-1 != stat("crash.log", &sb))
 	{
@@ -2015,11 +2039,6 @@ static void SV_CheckRecentCrashes(client_t *tellclient)
 			return;	//after 2 days, we stop advertising that we once crashed.
 		SV_ClientPrintf(tellclient, PRINT_HIGH, "\1WARNING: crash.log exists, dated %s\n", ctime(&sb.st_mtime));
 	}
-#endif
-}
-#else
-static void SV_CheckRecentCrashes(client_t *tellclient)
-{
 }
 #endif
 
@@ -2105,7 +2124,7 @@ void SV_ClientProtocolExtensionsChanged(client_t *client)
 		s = InfoBuf_ValueForKey(&client->userinfo, "*client");
 		if (!strncmp(s, "ezQuake", 7) || !strncmp(s, "FortressOne", 11))
 		{
-			COM_Parse(s);	//skip name-of-fork
+			s = COM_Parse(s);	//skip name-of-fork
 			COM_Parse(s);	//tokenize the version
 			ver = atoi(com_token);
 
@@ -5340,6 +5359,8 @@ float SV_Frame (void)
 		svs.framenum = 0;
 
 	delay = sv_maxtic.value;
+	if (delay < sv_mintic.value)
+		delay = sv_mintic.value;
 	if (isDedicated && sv.allocated_client_slots == 0)
 		delay = max(delay, 1);	//when idle, don't keep waking up for no reason
 
@@ -5358,7 +5379,7 @@ float SV_Frame (void)
 #endif
 
 #ifdef HAVE_CLIENT
-	isidle = !isDedicated && sv.allocated_client_slots == 1 && Key_Dest_Has(~kdm_game) && cls.state == ca_active && !cl.implicitpause;
+	isidle = !isDedicated && sv.allocated_client_slots == 1 && (Key_Dest_Has(~kdm_game) || IN_WeaponWheelIsShown()) && cls.state == ca_active && !cl.implicitpause;
 	/*server is effectively paused in SP/coop if there are no clients/spectators*/
 	if (sv.spawned_client_slots == 0 && sv.spawned_observer_slots == 0 && !deathmatch.ival)
 		isidle = true;

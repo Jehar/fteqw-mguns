@@ -2272,9 +2272,10 @@ static void MP_ConsoleCommand_f(void)
 }
 static void QCBUILTIN PF_menu_registercommand (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
-	const char *str = PF_VarString(prinst, 0, pr_globals);
+	const char *str = PR_GetStringOfs(prinst, OFS_PARM0);
+	const char *desc = (prinst->callargc>1)?PR_GetStringOfs(prinst, OFS_PARM1):NULL;
 	if (!Cmd_Exists(str))
-		Cmd_AddCommand(str, MP_ConsoleCommand_f);
+		Cmd_AddCommandD(str, MP_ConsoleCommand_f, desc);
 }
 
 static void PF_m_clipboard_got(void *ctx, const char *utf8)
@@ -2646,6 +2647,8 @@ static struct {
 															//gap
 	{"uri_escape",				PF_uri_escape,				510},
 	{"uri_unescape",			PF_uri_unescape,			511},
+	{"base64encode",			PF_base64encode,			0},
+	{"base64decode",			PF_base64decode,			0},
 	{"num_for_edict",			PF_etof,					512},
 	{"uri_get",					PF_uri_get,					513},
 	{"uri_post",				PF_uri_get,					513},
@@ -2889,12 +2892,23 @@ static qboolean MP_KeyEvent(menu_t *menu, qboolean isdown, unsigned int devid, i
 		}
 		PR_ExecuteProgram(menu_world.progs, mpfuncs.inputevent);
 		result = G_FLOAT(OFS_RETURN);
+		if (!result && key == K_TOUCH)
+		{	//convert touches to mouse, for compat. gestures are untranslated but expected to be ignored.
+			G_FLOAT(OFS_PARM0) = isdown?CSIE_KEYDOWN:CSIE_KEYUP;
+			G_FLOAT(OFS_PARM1) = MP_TranslateFTEtoQCCodes(K_MOUSE1);
+			G_FLOAT(OFS_PARM2) = unicode;
+			G_FLOAT(OFS_PARM3) = devid;
+			PR_ExecuteProgram(menu_world.progs, mpfuncs.inputevent);
+			result = G_FLOAT(OFS_RETURN);
+		}
 		qcinput_scan = 0;
 		qcinput_unicode = 0;
 	}
 	else if (isdown && mpfuncs.keydown)
 	{
 		void *pr_globals = PR_globals(menu_world.progs, PR_CURRENT);
+		if (key == K_TOUCH)
+			key = K_MOUSE1;	//old api doesn't expect touches nor provides feedback for emulation. make sure stuff works.
 		G_FLOAT(OFS_PARM0) = MP_TranslateFTEtoQCCodes(key);
 		G_FLOAT(OFS_PARM1) = unicode;
 		PR_ExecuteProgram(menu_world.progs, mpfuncs.keydown);
@@ -2903,6 +2917,8 @@ static qboolean MP_KeyEvent(menu_t *menu, qboolean isdown, unsigned int devid, i
 	else if (!isdown && mpfuncs.keyup)
 	{
 		void *pr_globals = PR_globals(menu_world.progs, PR_CURRENT);
+		if (key == K_TOUCH)
+			key = K_MOUSE1;	//old api doesn't expect touches.
 		G_FLOAT(OFS_PARM0) = MP_TranslateFTEtoQCCodes(key);
 		G_FLOAT(OFS_PARM1) = unicode;
 		PR_ExecuteProgram(menu_world.progs, mpfuncs.keyup);
@@ -3126,7 +3142,7 @@ qboolean MP_Init (void)
 	m->scale = 1;
 	m->dirty = true;
 
-	menuqc.cursor = &key_customcursor[kc_menuqc];
+	menuqc.cursor = m;
 	menuqc.drawmenu = NULL;		//menuqc sucks!
 	menuqc.mousemove = MP_MouseMove;
 	menuqc.keyevent = MP_KeyEvent;

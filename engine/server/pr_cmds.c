@@ -2226,8 +2226,8 @@ void Q_InitProgs(enum initprogs_e flags)
 			oldprnum=prnum;
 		}
 
-		//progs depended on by maps.
-		a = as = COM_LoadStackFile(va("maps/%s.inf", svs.name), addons, sizeof(addons), NULL);
+/*		//progs depended on by maps.
+		a = as = COM_LoadStackFile(va("%s.inf", sv.modelname), addons, sizeof(addons), NULL);
 		if (a)
 		{
 			if (progstype == PROG_QW)
@@ -2290,7 +2290,7 @@ void Q_InitProgs(enum initprogs_e flags)
 				a++;
 			}
 		}
-
+*/
 		//add any addons specified
 		for (i2 = 0; i2 < MAXADDONS; i2++)
 		{
@@ -2733,9 +2733,10 @@ static void PR_ConsoleCommand_f(void)
 }
 static void QCBUILTIN PF_sv_registercommand (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
-	const char *str = PF_VarString(prinst, 0, pr_globals);
+	const char *str = PR_GetStringOfs(prinst, OFS_PARM0);
+	const char *desc = (prinst->callargc>1)?PR_GetStringOfs(prinst, OFS_PARM1):NULL;
 	if (!Cmd_Exists(str))
-		Cmd_AddCommand(str, PR_ConsoleCommand_f);
+		Cmd_AddCommandD(str, PR_ConsoleCommand_f, desc);
 }
 
 
@@ -5266,6 +5267,8 @@ client_t *Write_GetClient(void)
 	entnum = NUM_FOR_EDICT(svprogfuncs, ent);
 	if (entnum < 1 || entnum > sv.allocated_client_slots)
 		return NULL;//PR_RunError ("WriteDest: not a client");
+	if (svs.clients[entnum-1].protocol == SCP_BAD)
+		return NULL;	//don't try writing to bots... we don't want the overflows.
 	return &svs.clients[entnum-1];
 }
 
@@ -6355,7 +6358,7 @@ void QCBUILTIN PF_changelevel (pubprogfuncs_t *prinst, struct globalvars_s *pr_g
 	if (progstype == PROG_H2)
 	{
 		COM_QuotedString(PR_GetStringOfs(prinst, OFS_PARM1), startspot, sizeof(startspot), false);
-		//these flags disable the whole levelcache thing. the spawnspot is meant to still and always be specified.
+		//these flags disable the whole levelcache thing. the startspot is meant to still and always be specified.
 		//hexen2 ALWAYS specifies two arguments, and it seems that raven left it blank in some single-player maps too.
 		//if we don't want to be stupid/broken in deathmatch, we might as well do the fully compatible thing
 		if ((int)pr_global_struct->serverflags & (16|32))
@@ -10932,11 +10935,15 @@ static void QCBUILTIN PF_centerprint_qex(pubprogfuncs_t *prinst, struct globalva
 	int args;
 	char s[1024];
 	int			entnum;
+	int lang = com_language;
 
 	entnum = G_EDICTNUM(prinst, OFS_PARM0);
 	for (args = 0; args+1 < prinst->callargc; args++)
 		arg[args] = PR_GetStringOfs(prinst, OFS_PARM1+args*(OFS_PARM1-OFS_PARM0));
-	TL_Reformat(s, sizeof(s), args, arg);
+
+	if (entnum >= 1 && entnum <= sv.allocated_client_slots)
+		lang = svs.clients[entnum-1].language;
+	TL_Reformat(lang, s, sizeof(s), args, arg);
 
 	PF_centerprint_Internal(entnum, false, s);
 }
@@ -10968,7 +10975,6 @@ static void QCBUILTIN PF_sprint_qex(pubprogfuncs_t *prinst, struct globalvars_s 
 		for (args = 0; args+2 < prinst->callargc; args++)
 			arg[args] = PR_GetStringOfs(prinst, OFS_PARM2+args*(OFS_PARM1-OFS_PARM0));
 	}
-	TL_Reformat(s, sizeof(s), args, arg);
 
 	if (entnum < 1 || entnum > sv.allocated_client_slots)
 	{
@@ -10978,6 +10984,7 @@ static void QCBUILTIN PF_sprint_qex(pubprogfuncs_t *prinst, struct globalvars_s 
 
 	client = &svs.clients[entnum-1];
 
+	TL_Reformat(client->language, s, sizeof(s), args, arg);
 	SV_ClientPrintf (client, level, "%s", s);
 
 	if (sv_specprint.ival & SPECPRINT_SPRINT)
@@ -11004,7 +11011,6 @@ static void QCBUILTIN PF_bprint_qex(pubprogfuncs_t *prinst, struct globalvars_s 
 {	//TODO: send the strings to the client for localisation+reordering
 	const char *arg[8];
 	int args;
-	char formatted[1024];
 	int level;
 
 	if (progstype == PROG_QW)
@@ -11020,8 +11026,178 @@ static void QCBUILTIN PF_bprint_qex(pubprogfuncs_t *prinst, struct globalvars_s 
 			arg[args] = PR_GetStringOfs(prinst, OFS_PARM0+args*(OFS_PARM1-OFS_PARM0));
 	}
 
-	TL_Reformat(formatted, sizeof(formatted), args, arg);
-	SV_BroadcastPrintf (level, "%s", formatted);
+	SV_BroadcastPrint_QexLoc (0, level, arg, args);
+}
+
+void SV_Prompt_Input(client_t *cl, usercmd_t *ucmd)
+{
+	if (cl->prompt.active && !cl->qex)
+	{	//with this serverside, we don't get autorepeat etc.
+		//we also can't prevent movement beyond the menu closure.
+		if (ucmd->forwardmove >= 100 && cl->prompt.oldmove[0] < 100)
+		{	//up
+			if (cl->prompt.selected > 0)
+				cl->prompt.selected--;
+			else if (cl->prompt.numopts)
+				cl->prompt.selected = cl->prompt.numopts-1;	//wrap.
+
+			cl->prompt.nextsend = realtime;
+		}
+		else if (ucmd->forwardmove <= -100 && cl->prompt.oldmove[0] > -100)
+		{	//down
+			cl->prompt.selected++;
+			if (cl->prompt.selected >= cl->prompt.numopts)
+				cl->prompt.selected = 0;	//wrap.
+			cl->prompt.nextsend = realtime;
+		}
+		else if (ucmd->sidemove >= 100 && cl->prompt.oldmove[1] < 100)
+		{	//right (use)
+			if (cl->prompt.selected < cl->prompt.numopts)
+				cl->edict->v->impulse = cl->prompt.opt[cl->prompt.selected].impulse;
+		}
+		cl->prompt.oldmove[0] = ucmd->forwardmove;
+		cl->prompt.oldmove[1] = ucmd->sidemove;
+		ucmd->forwardmove = 0;
+		ucmd->sidemove = 0;
+	}
+	else
+	{
+		cl->prompt.oldmove[0] = ucmd->forwardmove;
+		cl->prompt.oldmove[1] = ucmd->sidemove;
+	}
+}
+void SV_Prompt_Resend(client_t *client)
+{
+	Z_Free(client->centerprintstring);
+	client->centerprintstring = NULL;
+
+	if (client->prompt.nextsend > realtime)
+		return;	//still good.
+
+	if (client->qex)
+	{	//can depend on the client doing any translation stuff.
+		size_t sz;
+		sizebuf_t *msg;
+		size_t i;
+
+		sz = 2;
+		if (client->prompt.numopts)
+		{
+			sz += strlen(client->prompt.header)+1;
+			for (i = 0; i < client->prompt.numopts; i++)
+				sz += strlen(client->prompt.opt[i].text)+2;
+		}
+
+		msg = ClientReliable_StartWrite(client, sz);
+
+		MSG_WriteByte(msg, svcqex_prompt);
+		MSG_WriteByte(msg, client->prompt.numopts);
+		if (client->prompt.numopts)
+		{
+			MSG_WriteString(msg, client->prompt.header);
+			for (i = 0; i < client->prompt.numopts; i++)
+			{
+				MSG_WriteString(msg, client->prompt.opt[i].text);
+				MSG_WriteByte(msg, client->prompt.opt[i].impulse);
+			}
+		}
+
+		ClientReliable_FinishWrite(client);
+
+		client->prompt.nextsend = DBL_MAX;	//don't let it time out.
+	}
+	else
+	{	//emulate via centerprints
+		const char *txt[4];
+		size_t i;
+		client->prompt.nextsend = realtime + 1;	//don't let it time out.
+
+		if (client->prompt.numopts)
+		{
+			txt[0] = client->prompt.header?client->prompt.header:"";
+			for (i = 0; i < 3; i++)
+			{
+				if (client->prompt.selected + i - 1u < client->prompt.numopts)
+					txt[1+i] = client->prompt.opt[client->prompt.selected + i - 1u].text;
+				else
+					txt[1+i] = " ";
+			}
+
+			//need to translate it too.
+			for (i = 0; i < countof(txt); i++)
+				txt[i] = TL_Translate(client->language, txt[i]);
+
+			client->centerprintstring = va("%s\n%s\n^a[[ %s ]]^a\n%s", txt[0], txt[1], txt[2], txt[3]);
+		}
+		else
+			client->centerprintstring = client->prompt.header?client->prompt.header:"";
+		client->centerprintstring = Z_StrDup(client->centerprintstring);
+	}
+}
+void SV_Prompt_Clear(client_t *cl)
+{
+	int i;
+	cl->prompt.active = false;
+	Z_Free(cl->prompt.header);
+	cl->prompt.header = NULL;
+	cl->prompt.selected = 0;
+	cl->prompt.nextsend = realtime;
+
+	for (i = 0; i < cl->prompt.numopts; i++)
+		Z_Free(cl->prompt.opt[i].text);
+	cl->prompt.numopts = cl->prompt.maxopts = 0;
+	Z_Free(cl->prompt.opt);
+	cl->prompt.opt = NULL;
+}
+static void QCBUILTIN PF_prompt_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int p = G_EDICT(prinst, OFS_PARM0)->entnum - 1;
+	client_t *cl;
+	const char *text = (prinst->callargc >= 2)?PR_GetStringOfs(prinst, OFS_PARM1):NULL;
+	unsigned int opts = (prinst->callargc >= 3)?G_FLOAT(OFS_PARM2):0;
+	if (p < 0 || p >= sv.allocated_client_slots)
+	{
+		PR_BIError (prinst, "PF_clearprompt_qex: not a player\n");
+		return;
+	}
+	cl = &svs.clients[p];
+
+	SV_Prompt_Clear(cl);
+	if (!text)
+	{
+		SV_Prompt_Resend(cl);
+		return;
+	}
+	cl->prompt.active = true;
+	cl->prompt.maxopts = opts;
+	cl->prompt.numopts = 0;
+	Z_StrDupPtr(&cl->prompt.header, text);
+	cl->prompt.opt = Z_Malloc(sizeof(*cl->prompt.opt) * cl->prompt.maxopts);
+}
+static void QCBUILTIN PF_promptchoice_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int p = G_EDICT(prinst, OFS_PARM0)->entnum - 1;
+	client_t *cl;
+	const char *text = PR_GetStringOfs(prinst, OFS_PARM1);
+	int impulse = G_FLOAT(OFS_PARM2);
+	size_t opt;
+	if (p < 0 || p >= sv.allocated_client_slots)
+	{
+		PR_BIError (prinst, "PF_clearprompt_qex: not a player\n");
+		return;
+	}
+	cl = &svs.clients[p];
+	if (!cl->prompt.active)
+	{
+		PR_BIError (prinst, "PF_clearprompt_qex: too many options\n");
+		return;
+	}
+
+	opt = cl->prompt.numopts++;
+	if (opt >= cl->prompt.maxopts)
+		Z_ReallocElements((void**)&cl->prompt.opt, &cl->prompt.maxopts, opt+1, sizeof(*cl->prompt.opt));
+	Z_StrDupPtr(&cl->prompt.opt[opt].text, text);
+	cl->prompt.opt[opt].impulse = impulse;
 }
 
 #define STUB ,NULL,true
@@ -11226,14 +11402,14 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"WriteEntity",		PF_WriteEntity,		59,		59,		59,		0,	D("void(float to, entity val)", "Writes the index of the specified entity (the network data size is not specified). This can be read clientside using the readentitynum builtin, with caveats.")},	//59
 
 #if defined(HAVE_LEGACY) && defined(NETPREPARSE)
-	{"swritebyte",		PF_qtSingle_WriteByte,			0,		0,		0,		0,	D("void(float val)", "A legacy of qtest - like WriteByte, except writes explicitly to the MSG_ONE target."), true},	//52
-	{"swritechar",		PF_qtSingle_WriteChar,			0,		0,		0,		0,	D("void(float val)", NULL), true},	//53
-	{"swriteshort",		PF_qtSingle_WriteShort,			0,		0,		0,		0,	D("void(float val)", NULL), true},	//54
-	{"swritelong",		PF_qtSingle_WriteLong,			0,		0,		0,		0,	D("void(float val)", NULL), true},	//55
-	{"swritecoord",		PF_qtSingle_WriteCoord,			0,		0,		0,		0,	D("void(float val)", NULL), true},	//56
-	{"swriteangle",		PF_qtSingle_WriteAngle,			0,		0,		0,		0,	D("void(float val)", NULL), true},	//57
-	{"swritestring",	PF_qtSingle_WriteString,		0,		0,		0,		0,	D("void(string val)", NULL), true},	//58
-	{"swriteentity",	PF_qtSingle_WriteEntity,		0,		0,		0,		0,	D("void(entity val)", NULL), true},
+	{"swritebyte",		PF_qtSingle_WriteByte,			0,		0,		0,		0,	D("void(entity to, float val)", "A legacy of qtest - like WriteByte, except writes explicitly to the MSG_ONE target."), true},	//52
+	{"swritechar",		PF_qtSingle_WriteChar,			0,		0,		0,		0,	D("void(entity to, float val)", NULL), true},	//53
+	{"swriteshort",		PF_qtSingle_WriteShort,			0,		0,		0,		0,	D("void(entity to, float val)", NULL), true},	//54
+	{"swritelong",		PF_qtSingle_WriteLong,			0,		0,		0,		0,	D("void(entity to, float val)", NULL), true},	//55
+	{"swritecoord",		PF_qtSingle_WriteCoord,			0,		0,		0,		0,	D("void(entity to, float val)", NULL), true},	//56
+	{"swriteangle",		PF_qtSingle_WriteAngle,			0,		0,		0,		0,	D("void(entity to, float val)", NULL), true},	//57
+	{"swritestring",	PF_qtSingle_WriteString,		0,		0,		0,		0,	D("void(entity to, string val)", NULL), true},	//58
+	{"swriteentity",	PF_qtSingle_WriteEntity,		0,		0,		0,		0,	D("void(entity to, entity val)", NULL), true},
 
 	{"bwritebyte",		PF_qtBroadcast_WriteByte,		0,		0,		0,		0,	D("void(float byte)", "A legacy of qtest - like WriteByte, except writes explicitly to the MSG_ALL target."), true},	//59
 	{"bwritechar",		PF_qtBroadcast_WriteChar,		0,		0,		0,		0,	D("void(float val)", NULL), true},	//60
@@ -11291,9 +11467,9 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"ex_bot_followentity",PF_Fixme,		0,		0,		0,0,	D("float(entity bot, entity goal)", "Behaviour is undocumented.")},
 	{"ex_CheckPlayerEXFlags",PF_CheckPlayerEXFlags_qex,0,0,	0,0,	D("float(entity playerEnt)", "Behaviour is undocumented.")},
 	{"ex_walkpathtogoal",PF_walkpathtogoal_qex,0,	0,		0,0,	D("float(float movedist, vector goal)", "Behaviour is undocumented.")},
-//	{"ex_prompt",		PF_prompt_qex,		0,		0,		0,0,	D("void(entity player, string text, float numchoices)", "Behaviour is undocumented.")},
-//	{"ex_promptchoice",	PF_promptchoice_qex,0,		0,		0,0,	D("void(entity player, string text, float impulse)", "Behaviour is undocumented.")},
-//	{"ex_clearprompt",	PF_clearprompt_qex,	0,		0,		0,0,	D("void(entity player)", "Behaviour is undocumented.")},
+	{"ex_prompt",		PF_prompt_qex,		0,		0,		0,0,	D("void(entity player, string text, float numchoices)", "Initiates a user prompt. You must call ex_promptchoice once per choice.")},
+	{"ex_promptchoice",	PF_promptchoice_qex,0,		0,		0,0,	D("void(entity player, string text, float impulse)", "Follows a call to ex_prompt.")},
+	{"ex_clearprompt",	PF_prompt_qex,		0,		0,		0,0,	D("void(entity player)", "Behaviour is undocumented.")},
 //End QuakeEx, for now. :(
 
 // Tomaz - QuakeC String Manipulation Begin
@@ -11787,7 +11963,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"keynumtostring_csqc",PF_Fixme,0,		0,		0,		340,	D("DEP string(float keynum)", "Returns a hunam-readable name for the given keycode, as a tempstring.")},// (found in menuqc)
 	{"stringtokeynum",	PF_Fixme,	0,		0,		0,		341,	D("float(string keyname)", "Looks up the key name in the same way that the bind command would, returning the keycode for that key.")},// (EXT_CSQC)
 	{"stringtokeynum_csqc",	PF_Fixme,0,		0,		0,		341,	D("DEP float(string keyname)", "Looks up the key name in the same way that the bind command would, returning the keycode for that key.")},// (found in menuqc)
-	{"getkeybind",		PF_Fixme,	0,		0,		0,		342,	D("string(float keynum)", "Returns the current binding for the given key (returning only the command executed when no modifiers are pressed).")},// (EXT_CSQC)
+	{"getkeybind",		PF_Fixme,	0,		0,		0,		342,	D("string(float keynum, optional float bindmap, optional float modifier)", "Returns the current binding for the given key (returning only the command executed when no modifiers are pressed).")},// (EXT_CSQC)
 
 	{"setcursormode",	PF_Fixme,	0,		0,		0,		343,	D("void(float usecursor, optional string cursorimage, optional vector hotspot, optional float scale)", "Pass TRUE if you want the engine to release the mouse cursor (absolute input events + touchscreen mode). Pass FALSE if you want the engine to grab the cursor (relative input events + standard looking). If the image name is specified, the engine will use that image for a cursor (use an empty string to clear it again), in a way that will not conflict with the console. Images specified this way will be hardware accelerated, if supported by the platform/port.")},
 	{"getcursormode",	PF_Fixme,	0,		0,		0,		0,		D("float(float effective)", "Reports the cursor mode this module previously attempted to use. If 'effective' is true, reports the cursor mode currently active (if was overriden by a different module which has precidence, for instance, or if there is only a touchscreen and no mouse).")},
@@ -11813,7 +11989,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"isserver",		PF_Fixme,	0,		0,		0,		350,	D("float()", "Returns non-zero whenever the local console can directly affect the server (ie: listen servers or single-player). Compat note: DP returns 0 for single-player.")},//(EXT_CSQC)
 	{"SetListener",		PF_Fixme, 	0,		0,		0,		351,	D("void(vector origin, vector forward, vector right, vector up, optional float reverbtype)", "Sets the position of the view, as far as the audio subsystem is concerned. This should be called once per CSQC_UpdateView as it will otherwise revert to default. For reverbtype, see setup_reverb or treat as 'underwater'.")},// (EXT_CSQC)
 	{"setup_reverb",	PF_Fixme, 	0,		0,		0,		0,		D("typedef struct {\n\tfloat flDensity;\n\tfloat flDiffusion;\n\tfloat flGain;\n\tfloat flGainHF;\n\tfloat flGainLF;\n\tfloat flDecayTime;\n\tfloat flDecayHFRatio;\n\tfloat flDecayLFRatio;\n\tfloat flReflectionsGain;\n\tfloat flReflectionsDelay;\n\tvector flReflectionsPan;\n\tfloat flLateReverbGain;\n\tfloat flLateReverbDelay;\n\tvector flLateReverbPan;\n\tfloat flEchoTime;\n\tfloat flEchoDepth;\n\tfloat flModulationTime;\n\tfloat flModulationDepth;\n\tfloat flAirAbsorptionGainHF;\n\tfloat flHFReference;\n\tfloat flLFReference;\n\tfloat flRoomRolloffFactor;\n\tint   iDecayHFLimit;\n} reverbinfo_t;\nvoid(float reverbslot, reverbinfo_t *reverbinfo, int sizeofreverinfo_t)", "Reconfigures a reverb slot for weird effects. Slot 0 is reserved for no effects. Slot 1 is reserved for underwater effects. Reserved slots will be reinitialised on snd_restart, but can otherwise be changed. These reverb slots can be activated with SetListener. Note that reverb will currently only work when using OpenAL.")},
-	{"registercommand",	PF_sv_registercommand,0,0,	0,		352,	D("void(string cmdname)", "Register the given console command, for easy console use.\nConsole commands that are later used will invoke CSQC_ConsoleCommand/m_consolecommand/ConsoleCmd according to module.")},//(EXT_CSQC)
+	{"registercommand",	PF_sv_registercommand,0,0,	0,		352,	D("void(string cmdname, optional string desc)", "Register the given console command, for easy console use.\nConsole commands that are later used will invoke CSQC_ConsoleCommand/m_consolecommand/ConsoleCmd according to module.")},//(EXT_CSQC)
 	{"wasfreed",		PF_WasFreed,0,		0,		0,		353,	D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the half-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
 	{"serverkey",		PF_sv_serverkeystring,0,0,	0,		354,	D("string(string key)", "Look up a key in the server's public serverinfo string. If the key contains binary data then it will be truncated at the first null.")},//
 	{"serverkeyfloat",	PF_sv_serverkeyfloat,0,0,	0,		0,		D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
@@ -11865,11 +12041,13 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"memalloc",		PF_memalloc,		0,		0,		0,		384,	D("__variant*(int size)", "Allocate an arbitary block of memory")},
 	{"memfree",			PF_memfree,			0,		0,		0,		385,	D("void(__variant *ptr)", "Frees a block of memory that was allocated with memfree")},
 	{"memcpy",			PF_memcpy,			0,		0,		0,		386,	D("void(__variant *dst, __variant *src, int size)", "Copys memory from one location to another")},
-	{"memfill8",		PF_memfill8,		0,		0,		0,		387,	D("void(__variant *dst, int val, int size)", "Sets an entire block of memory to a specified value. Pretty much always 0.")},
+	{"memfill8",		PF_memfill8,		0,		0,		0,		387,	D("void(__variant *dst, int val, int size, optional int offset)", "Sets an entire block of memory to a specified value. Pretty much always 0.")},
 	{"memgetval",		PF_memgetval,		0,		0,		0,		388,	D("__variant(__variant *dst, float ofs)", "Looks up the 32bit value stored at a pointer-with-offset.")},
 	{"memsetval",		PF_memsetval,		0,		0,		0,		389,	D("void(__variant *dst, float ofs, __variant val)", "Changes the 32bit value stored at the specified pointer-with-offset.")},
 	{"memptradd",		PF_memptradd,		0,		0,		0,		390,	D("__variant*(__variant *base, float ofs)", "Perform some pointer maths. Woo.")},
 	{"memstrsize",		PF_memstrsize,		0,		0,		0,		0,		D("float(string s)", "strlen, except ignores utf-8")},
+	{"base64encode",	PF_base64encode,	0,		0,		0,		0,		D("string(__variant *ptr, int bytes, optional int offset)", "Returns a copy of a binary blob encoded as a base64 temp-string (uses + and /, so be sure to include quotes).")},
+	{"base64decode",	PF_base64decode,	0,		0,		0,		0,		D("__variant*(string base64str, __out int bytes)", "Decodes a base64, returning a new block of memory that can must be freed with memfree.")},
 
 	{"con_getset",		PF_Fixme,			0,		0,		0,		391,	D("string(string conname, string field, optional string newvalue)", "Reads or sets a property from a console object. The old value is returned. Iterrate through consoles with the 'next' field. Valid properties: 	title, name, next, unseen, markup, forceutf8, close, clear, hidden, linecount")},
 	{"con_printf",		PF_Fixme,			0,		0,		0,		392,	D("void(string conname, string messagefmt, ...)", "Prints onto a named console.")},
@@ -11986,7 +12164,14 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"tokenize",		PF_Tokenize,		0,		0,		0,		441,	"float(string s)"},// (KRIMZON_SV_PARSECLIENTCOMMAND)
 	{"argv",			PF_ArgV,			0,		0,		0,		442,	"string(float n)"},// (KRIMZON_SV_PARSECLIENTCOMMAND
 	{"setattachment",	PF_setattachment,	0,		0,		0,		443,	"void(entity e, entity tagentity, string tagname)"},// (DP_GFX_QUAKE3MODELTAGS)
-	{"search_begin",	PF_search_begin,	0,		0,		0,		444,	D("searchhandle(string pattern, enumflags:float{SB_CASEINSENSITIVE=1<<0,SB_FULLPACKAGEPATH=1<<1,SB_ALLOWDUPES=1<<2,SB_FORCESEARCH=1<<3} flags, float quiet, optional string filterpackage)", "initiate a filesystem scan based upon filenames. Be sure to call search_end on the returned handle. SB_FULLPACKAGEPATH interprets the filterpackage arg as a full package path to avoid gamedir ambiguity, equivelent to whichpack's WP_FULLPACKAGEPATH flag. SB_ALLOWDUPES allows returning multiple entries with the same name (but different package, useful with search_fopen). SB_FORCESEARCH requires use of the filterpackage and SB_FULLPACKAGEPATH flag, initiating searches from gamedirs/packages which are not currently active.")},
+	{"search_begin",	PF_search_begin,	0,		0,		0,		444,	D("searchhandle(string pattern, enumflags:float{\n"
+																				"\tSB_CASEINSENSITIVE=1<<0/*deprecated, ignored*/,\n"
+																				"\tSB_FULLPACKAGEPATH=1<<1/*in/out package names use gamedir prefix for extra info/specificity. see also: WP_FULLPACKAGEPATH*/,\n"
+																				"\tSB_ALLOWDUPES=1<<2/*don't filter out dupes, useful with search_getpackagename or search_fopen*/,\n"
+																				"\tSB_FORCESEARCH=1<<3/*open the named package if needed (possibly in other gamedirs)*/,\n"
+																				"\tSB_MULTISEARCH=1<<4/*use colons as a delimiter for multiple search patterns (instead of needing to somehow sort/combine multiple searches after, eg for ui displays)*/,\n"
+																				"\tSB_NAMESORT=1<<5/*sort results by filename, instead of by filesystem priority/randomness*/\n"
+																				"} flags, float quiet, optional string filterpackage)", "initiate a filesystem scan based upon filenames. Be sure to call search_end on the returned handle. Returns a negative value on error.")},
 	{"search_end",		PF_search_end,		0,		0,		0,		445,	"void(searchhandle handle)"},
 	{"search_getsize",	PF_search_getsize,	0,		0,		0,		446,	D("float(searchhandle handle)", "Retrieves the number of files that were found.")},
 	{"search_getfilename", PF_search_getfilename,0,	0,		0,		447,	D("string(searchhandle handle, float num)", "Retrieves name of one of the files that was found by the initial search.")},
@@ -13508,6 +13693,7 @@ void PR_DumpPlatform_f(void)
 		{"SOUNDFLAG_NOREPLACE",		"const float",	QW|NQ|CS,	D("Sounds started with this flag will be ignored when there's already a sound playing on that same ent-channel."), CF_NOREPLACE},
 		{"SOUNDFLAG_UNICAST",		"const float",	QW|NQ,		D("The sound will be sent only by the player specified by msg_entity. Spectators and related splitscreen players will also hear the sound."), CF_SV_UNICAST},
 		{"SOUNDFLAG_SENDVELOCITY",	"const float",	QW|NQ,		D("The entity's current velocity will be sent to the client, only useful if doppler is enabled."), CF_SV_SENDVELOCITY},
+		{"SOUNDFLAG_INACTIVE",		"const float",	CS,			D("The sound will ignore the value of the snd_inactive cvar."), CF_CLI_INACTIVE},
 
 		{"ATTN_NONE",		"const float", QW|NQ|CS, D("Sounds with this attenuation can be heard throughout the map"), ATTN_NONE},
 		{"ATTN_NORM",		"const float", QW|NQ|CS, D("Standard attenuation"), ATTN_NORM},

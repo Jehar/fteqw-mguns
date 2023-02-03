@@ -1992,7 +1992,7 @@ float csqc_proj_matrix[16];
 float csqc_proj_matrix_inverse[16];
 float csqc_proj_frustum[2];
 void V_ApplyAFov(playerview_t *pv);
-void buildmatricies(void)
+static void cs_buildmatricies(void)
 {
 	float modelview[16];
 	float proj[16];
@@ -2035,7 +2035,7 @@ void buildmatricies(void)
 static void QCBUILTIN PF_cs_project (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	if (csqc_rebuildmatricies)
-		buildmatricies();
+		cs_buildmatricies();
 
 
 	{
@@ -2081,7 +2081,7 @@ static void QCBUILTIN PF_cs_project (pubprogfuncs_t *prinst, struct globalvars_s
 static void QCBUILTIN PF_cs_unproject (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	if (csqc_rebuildmatricies)
-		buildmatricies();
+		cs_buildmatricies();
 
 	{
 		float *in = G_VECTOR(OFS_PARM0);
@@ -4290,16 +4290,24 @@ static void QCBUILTIN PF_cs_runplayerphysics (pubprogfuncs_t *prinst, struct glo
 	pmove.cmd.sidemove = csqcg.input_movevalues[1];
 	pmove.cmd.upmove = csqcg.input_movevalues[2];
 	pmove.cmd.buttons = *csqcg.input_buttons;
+	pmove.onladder = false;
 	pmove.safeorigin_known = false;
 	pmove.capsule = false;	//FIXME
 
+	movevars.bunnyspeedcap = cl.bunnyspeedcap;
 	movevars.coordtype = cls.netchan.message.prim.coordtype;
+	if (csqc_playerseat >= 0 && cl.playerview[csqc_playerseat].playernum+1 == ent->xv->entnum)
+	{
+		movevars.entgravity = cl.playerview[csqc_playerseat].entgravity;
+		movevars.maxspeed = cl.playerview[csqc_playerseat].maxspeed;
+	}
+	else
+	{
+		movevars.entgravity = 1;
+		movevars.maxspeed = cl.playerview[0].maxspeed;
+	}
 	if (ent->xv->gravity)
 		movevars.entgravity = ent->xv->gravity;
-	else if (csqc_playerseat >= 0 && cl.playerview[csqc_playerseat].playernum+1 == ent->xv->entnum)
-		movevars.entgravity = cl.playerview[csqc_playerseat].entgravity;
-	else
-		movevars.entgravity = 1;
 
 	if (ent->xv->entnum)
 		pmove.skipent = ent->xv->entnum;
@@ -4322,11 +4330,12 @@ static void QCBUILTIN PF_cs_runplayerphysics (pubprogfuncs_t *prinst, struct glo
 	}
 	pmove.jump_held = (int)ent->xv->pmove_flags & PMF_JUMP_HELD;
 	pmove.waterjumptime = 0;
-	pmove.onground = (int)ent->v->flags & FL_ONGROUND;
+	pmove.onground = !!((int)ent->v->flags & FL_ONGROUND);
 	VectorCopy(ent->v->origin, pmove.origin);
 	VectorCopy(ent->v->velocity, pmove.velocity);
 	VectorCopy(ent->v->maxs, pmove.player_maxs);
 	VectorCopy(ent->v->mins, pmove.player_mins);
+	VectorCopy(ent->xv->gravitydir, pmove.gravitydir);
 
 	CL_SetSolidEntities();
 
@@ -4568,17 +4577,17 @@ static const char *PF_cs_getplayerkey_internal (unsigned int pnum, const char *k
 		ret = buffer;
 		sprintf(ret, "%i", cl.players[pnum].pl);
 	}
-	else if (!strcmp(keyname, "activetime"))	//packet loss
+	else if (!strcmp(keyname, "activetime"))
 	{
 		ret = buffer;
 		sprintf(ret, "%f", realtime - cl.players[pnum].realentertime);
 	}
-//	else if (!strcmp(keyname, "entertime"))	//packet loss
+//	else if (!strcmp(keyname, "entertime"))
 //	{
 //		ret = buffer;
 //		sprintf(ret, "%i", (int)cl.players[pnum].entertime);
 //	}
-	else if (!strcmp(keyname, "topcolor_rgb"))	//packet loss
+	else if (!strcmp(keyname, "topcolor_rgb"))
 	{
 		unsigned int col = cl.players[pnum].dtopcolor;
 		ret = buffer;
@@ -4590,7 +4599,7 @@ static const char *PF_cs_getplayerkey_internal (unsigned int pnum, const char *k
 		else
 			sprintf(ret, "'%g %g %g'", ((col&0xff0000)>>16)/255.0, ((col&0x00ff00)>>8)/255.0, ((col&0x0000ff)>>0)/255.0);
 	}
-	else if (!strcmp(keyname, "bottomcolor_rgb"))	//packet loss
+	else if (!strcmp(keyname, "bottomcolor_rgb"))
 	{
 		unsigned int col = cl.players[pnum].dbottomcolor;
 		ret = buffer;
@@ -5699,9 +5708,10 @@ static void CS_ConsoleCommand_f(void)
 }
 static void QCBUILTIN PF_cs_registercommand (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
-	const char *str = PF_VarString(prinst, 0, pr_globals);
+	const char *str = PR_GetStringOfs(prinst, OFS_PARM0);
+	const char *desc = (prinst->callargc>1)?PR_GetStringOfs(prinst, OFS_PARM1):NULL;
 	if (!Cmd_Exists(str))
-		Cmd_AddCommand(str, CS_ConsoleCommand_f);
+		Cmd_AddCommandD(str, CS_ConsoleCommand_f, desc);
 }
 
 static void QCBUILTIN PF_cs_setlistener (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -7402,6 +7412,8 @@ static struct {
 	{"memsetval",				PF_memsetval,				389},
 	{"memptradd",				PF_memptradd,				390},
 	{"memstrsize",				PF_memstrsize,				0},
+	{"base64encode",			PF_base64encode,			0},
+	{"base64decode",			PF_base64decode,			0},
 
 	{"con_getset",				PF_SubConGetSet,			391},
 	{"con_printf",				PF_SubConPrintf,			392},
@@ -9024,18 +9036,7 @@ qboolean CSQC_DrawView(void)
 	host_frametime = clframetime;
 
 	if (csqcg.frametime)
-	{
-		if (1)//csqc_isdarkplaces)
-		{
-			if (cl.paused)
-				*csqcg.frametime = 0;	//apparently people can't cope with microstutter when they're using this as a test to see if the game is paused.
-			else
-				*csqcg.frametime = bound(0, cl.time - cl.lasttime, 0.1);
-		}
-		else
-			*csqcg.frametime = host_frametime;
-	}
-
+		*csqcg.frametime = cl.paused?0:bound(0, cl.time - cl.lasttime, 0.1);
 	if (csqcg.clframetime)
 		*csqcg.clframetime = host_frametime;
 

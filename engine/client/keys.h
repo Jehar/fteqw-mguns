@@ -172,9 +172,13 @@ typedef enum {
 	K_GP_DIAMOND_RIGHT,
 	K_GP_DIAMOND_LEFT,
 	K_GP_DIAMOND_UP,
-	K_GP_BACK,
+//for their behaviours in the menus... we may want to put a conditional in here for japanese-style right-for-confirm, but for now I'm lazy and am sticking with western/xbox/steam mappings.
+#define K_GP_DIAMOND_CONFIRM	K_GP_DIAMOND_DOWN	//roughly equivelent to k_return for menu behaviours
+#define K_GP_DIAMOND_CANCEL		K_GP_DIAMOND_RIGHT	//roughly like escape, at least in menus
+#define K_GP_DIAMOND_ALTCONFIRM	K_GP_DIAMOND_UP		//for more negative confirmations.
+	K_GP_VIEW,
 	K_GP_GUIDE,
-	K_GP_START,
+	K_GP_MENU,
 	K_GP_LEFT_STICK,
 	K_GP_RIGHT_STICK,
 	K_GP_LEFT_SHOULDER,
@@ -244,6 +248,14 @@ typedef enum {
 	K_MM_TRACK_PREV,
 	K_MM_TRACK_STOP,
 	K_MM_TRACK_PLAYPAUSE,
+
+	//touchscreen stuff.
+	K_TOUCH,		//initial touch
+	//will be paired with one of...
+	K_TOUCHSLIDE,	//existing touch became a slide
+	K_TOUCHTAP,		//touched briefly without sliding (treat like a left-click, though fired on final release)
+	K_TOUCHLONG,	//touch lasted a while and without moving (treat like a right-click)
+
 	K_MAX,
 
 	//360 buttons
@@ -251,6 +263,8 @@ typedef enum {
 	K_GP_B = K_GP_DIAMOND_RIGHT,
 	K_GP_X = K_GP_DIAMOND_LEFT,
 	K_GP_Y = K_GP_DIAMOND_UP,
+	K_GP_BACK = K_GP_VIEW,
+	K_GP_START = K_GP_MENU,
 
 	//ps buttons
 	K_GP_PS_CROSS		= K_GP_DIAMOND_DOWN,
@@ -329,6 +343,7 @@ qboolean Key_Centerprint(int key, int unicode, unsigned int devid);
 void Key_Unbindall_f (void);	//aka: Key_Shutdown
 void Key_ConsoleReplace(const char *instext);
 void Key_DefaultLinkClicked(console_t *con, char *text, char *info);
+void Key_HandleConsoleLink(console_t *con, char *buffer);
 
 qboolean Key_Console (console_t *con, int key, unsigned int unicode);
 void Key_ConsoleRelease(console_t *con, int key, unsigned int unicode);

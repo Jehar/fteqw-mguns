@@ -8383,8 +8383,9 @@ void NET_PrintAddresses(ftenet_connections_t *collection)
 	int i;
 	char adrbuf[MAX_ADR_SIZE];
 	int m;
+	qboolean shown = false;
 	netadr_t	addr[64];
-	struct ftenet_generic_connection_s			*con[sizeof(addr)/sizeof(addr[0])];
+	struct ftenet_generic_connection_s			*con[sizeof(addr)/sizeof(addr[0])], *nc;
 	int			flags[sizeof(addr)/sizeof(addr[0])];
 	const char *params[sizeof(addr)/sizeof(addr[0])];
 	qboolean	warn = true;
@@ -8401,8 +8402,19 @@ void NET_PrintAddresses(ftenet_connections_t *collection)
 		if (addr[i].type != NA_INVALID)
 		{
 			enum addressscope_e scope = NET_ClassifyAddress(&addr[i], &desc);
+			if (i+1 < m)
+				nc = con[i+1];
+			else
+				nc = NULL;
+			if (nc != con[i])
+			{	//next is a different family.
+				if (!shown && (scope == ASCOPE_LINK || scope == ASCOPE_HOST))
+					scope = ASCOPE_LAN;	//force it visible.
+				shown = false;
+			}
 			if (developer.ival || scope >= ASCOPE_LAN)
 			{
+				shown = true;
 				warn = false;
 				if ((addr[i].prot == NP_RTC_TCP || addr[i].prot == NP_RTC_TLS) && params[i])
 				{
@@ -9403,7 +9415,7 @@ void	NET_Shutdown (void)
 #ifdef HAVE_EPOLL
 #include <poll.h>
 #endif
-static qboolean VFSTCP_IsStillConnecting(SOCKET sock)
+static int VFSTCP_IsStillConnecting(SOCKET sock)
 {
 #ifdef HAVE_EPOLL
 	//poll has no arbitrary fd limit. use it instead of select where possible.
@@ -9412,7 +9424,13 @@ static qboolean VFSTCP_IsStillConnecting(SOCKET sock)
 	ourfd[0].events = POLLOUT;
 	ourfd[0].revents = 0;
 	if (!poll(ourfd, countof(ourfd), 0))
+	{
+		if (ourfd[0].revents & POLLERR)
+			return VFS_ERROR_UNSPECIFIED;
+		if (ourfd[0].revents & POLLHUP)
+			return VFS_ERROR_REFUSED;
 		return true;	//no events yet.
+	}
 #else
 	//okay on windows where sock+1 is ignored, has issues when lots of other fds are already open (for any reason).
 	fd_set fdw, fdx;
@@ -9456,7 +9474,10 @@ int QDECL VFSTCP_ReadBytes (struct vfsfile_s *file, void *buffer, int bytestorea
 
 	if (tf->conpending)
 	{
-		if (VFSTCP_IsStillConnecting(tf->sock))
+		trying = VFSTCP_IsStillConnecting(tf->sock);
+		if (trying < 0)
+			tf->readaborted = trying;
+		else if (trying)
 			return 0;
 		tf->conpending = false;
 	}
@@ -9544,7 +9565,14 @@ int QDECL VFSTCP_WriteBytes (struct vfsfile_s *file, const void *buffer, int byt
 
 	if (tf->conpending)
 	{
-		if (VFSTCP_IsStillConnecting(tf->sock))
+		len = VFSTCP_IsStillConnecting(tf->sock);
+		if (len < 0)
+		{
+			tf->writeaborted = true;
+			tf->conpending = false;
+			return len;
+		}
+		if (len)
 			return 0;
 		tf->conpending = false;
 	}

@@ -63,14 +63,15 @@ cvar_t	cl_pure		= CVARD("cl_pure", "0", "0=standard quake rules.\n1=clients shou
 cvar_t	cl_sbar		= CVARFC("cl_sbar", "0", CVAR_ARCHIVE, CL_Sbar_Callback);
 cvar_t	cl_hudswap	= CVARF("cl_hudswap", "0", CVAR_ARCHIVE);
 cvar_t	cl_maxfps	= CVARFD("cl_maxfps", "250", CVAR_ARCHIVE, "Sets the maximum allowed framerate. If you're using vsync or want to uncap framerates entirely then you should probably set this to 0. Set cl_yieldcpu 0 if you're trying to benchmark.");
-cvar_t	cl_idlefps	= CVARAFD("cl_idlefps", "60", "cl_maxidlefps"/*dp*/, CVAR_ARCHIVE, "This is the maximum framerate to attain while idle/paused/unfocused.");
+static cvar_t	cl_maxfps_slop	= CVARFD("cl_maxfps_slop", "3", CVAR_ARCHIVE, "If a frame is delayed (eg because of poor system timer precision), this is how much sooner to pretend the frame happened (in milliseconds). If it is set too low then the average framerate will drop below the target, while too high may result in excessively fast frames.");
+static cvar_t	cl_idlefps	= CVARAFD("cl_idlefps", "60", "cl_maxidlefps"/*dp*/, CVAR_ARCHIVE, "This is the maximum framerate to attain while idle/paused/unfocused.");
 cvar_t	cl_yieldcpu = CVARFD("cl_yieldcpu", "1", CVAR_ARCHIVE, "Attempt to yield between frames. This can resolve issues with certain drivers and background software, but can mean less consistant frame times. Will reduce power consumption/heat generation so should be set on laptops or similar (over-hot/battery powered) devices.");
 cvar_t	cl_nopext	= CVARF("cl_nopext", "0", CVAR_ARCHIVE);
-cvar_t	cl_pext_mask = CVAR("cl_pext_mask", "0xffffffff");
+static cvar_t	cl_pext_mask = CVAR("cl_pext_mask", "0xffffffff");
 cvar_t	cl_nolerp	= CVARD("cl_nolerp", "0", "Disables interpolation. If set, missiles/monsters will be show exactly what was last received, which will be jerky. Does not affect players. A value of 2 means 'interpolate only in single-player/coop'.");
 #ifdef NQPROT
 cvar_t	cl_nolerp_netquake = CVARD("cl_nolerp_netquake", "0", "Disables interpolation when connected to an NQ server. Does affect players, even the local player. You probably don't want to set this.");
-cvar_t	cl_fullpitch_nq = CVARAFD("cl_fullpitch", "0", "pq_fullpitch", CVAR_SEMICHEAT, "When set, attempts to unlimit the default view pitch. Note that some servers will screw over your angles if you use this, resulting in terrible gameplay, while some may merely clamp your angle serverside. This is also considered a cheat in quakeworld, ^1so this will not function there^7. For the equivelent in quakeworld, use serverinfo minpitch+maxpitch instead, which applies to all players fairly.");
+static cvar_t	cl_fullpitch_nq = CVARAFD("cl_fullpitch", "0", "pq_fullpitch", CVAR_SEMICHEAT, "When set, attempts to unlimit the default view pitch. Note that some servers will screw over your angles if you use this, resulting in terrible gameplay, while some may merely clamp your angle serverside. This is also considered a cheat in quakeworld, ^1so this will not function there^7. For the equivelent in quakeworld, use serverinfo minpitch+maxpitch instead, which applies to all players fairly.");
 #endif
 static cvar_t	cl_forcevrui = CVARD("cl_forcevrui", "0", "Force the use of VR UIs, even with no VR headset active.");
 cvar_t	*hud_tracking_show;
@@ -95,8 +96,8 @@ cvar_t	cfg_save_name = CVARFD("cfg_save_name", "fte", CVAR_ARCHIVE|CVAR_NOTFROMS
 
 cvar_t	cl_splitscreen = CVARD("cl_splitscreen", "0", "Enables splitscreen support. See also: allow_splitscreen, in_rawinput*, the \"p\" command.");
 
-cvar_t	lookspring = CVARF("lookspring","0", CVAR_ARCHIVE);
-cvar_t	lookstrafe = CVARF("lookstrafe","0", CVAR_ARCHIVE);
+cvar_t	lookspring = CVARFD("lookspring","0", CVAR_ARCHIVE, "Recentre the camera when the mouse-look is released.");
+cvar_t	lookstrafe = CVARFD("lookstrafe","0", CVAR_ARCHIVE, "Mouselook enables mouse strafing.");
 cvar_t	sensitivity = CVARF("sensitivity","10", CVAR_ARCHIVE);
 
 cvar_t cl_staticsounds = CVARF("cl_staticsounds", "1", CVAR_ARCHIVE);
@@ -2568,6 +2569,7 @@ void CL_CheckServerInfo(void)
 		// movement vars for prediction
 		cl.bunnyspeedcap = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_bunnyspeedcap"));
 		movevars.slidefix = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_slidefix")) != 0);
+		movevars.slidyslopes = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_slidyslopes")) != 0);
 		movevars.airstep = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_airstep")) != 0);
 		movevars.pground = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_pground")) != 0);
 		movevars.stepdown = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_stepdown")) != 0);
@@ -2617,6 +2619,7 @@ void CL_CheckServerInfo(void)
 	//FIXME: we should probably tweak our movement code instead.
 	cl.maxpitch = bound(-89.9, cl.maxpitch, 89.9);
 	cl.minpitch = bound(-89.9, cl.minpitch, 89.9);
+	cl.disablemouse = atoi(InfoBuf_ValueForKey(&cl.serverinfo, "nomouse"));
 
 	cl.hexen2pickups = atoi(InfoBuf_ValueForKey(&cl.serverinfo, "sv_pupglow"));
 
@@ -4047,8 +4050,8 @@ void CLNQ_ConnectionlessPacket(void)
 			return;
 		}
 
-		if (length == 5 && net_from.prot == NP_DTLS)
-		{
+		if (length == 5)
+		{	//QE strips the port entirely.
 			cls.proquake_angles_hack = false;
 			cls.protocol_nq = CPNQ_ID;
 			Con_DPrintf("QuakeEx server...\n");
@@ -4855,80 +4858,80 @@ void CL_Status_f(void)
 
 	if (cls.state)
 	{
-		Con_Printf("Server address: %s\n", NET_AdrToString(adr, sizeof(adr), &cls.netchan.remote_address));	//not relevent as a limit.
-
+		Con_Printf("Server address   : %s\n", NET_AdrToString(adr, sizeof(adr), &cls.netchan.remote_address));	//not relevent as a limit.
 		switch(cls.protocol)
 		{
 		default:
 		case CP_UNKNOWN:
-			Con_Printf("Unknown protocol\n");
+			Con_Printf("Network Protocol : Unknown\n");
 			break;
 		case CP_QUAKEWORLD:
-			Con_Printf("QuakeWorld-based protocol\n");
+			Con_Printf("Network Protocol : QuakeWorld\n");
 			break;
 	#ifdef NQPROT
 		case CP_NETQUAKE:
 			switch(cls.protocol_nq)
 			{
 			case CPNQ_ID:
-				Con_Printf("NetQuake-based protocol\n");
 				if (cls.proquake_angles_hack)
-					Con_Printf("With ProQuake's extended angles\n");
+					Con_Printf("Network Protocol : ProQuake\n");
+				else
+					Con_Printf("Network Protocol : NetQuake\n");
 				break;
 			case CPNQ_NEHAHRA:
-				Con_Printf("Nehahra protocol\n");
+				Con_Printf("Network Protocol : Nehahra\n");
 				break;
 			case CPNQ_BJP1:
-				Con_Printf("BJP1 protocol\n");
+				Con_Printf("Network Protocol : BJP1\n");
 				break;
 			case CPNQ_BJP2:
-				Con_Printf("BJP2 protocol\n");
+				Con_Printf("Network Protocol : BJP2\n");
 				break;
 			case CPNQ_BJP3:
-				Con_Printf("BJP3 protocol\n");
+				Con_Printf("Network Protocol : BJP3\n");
 				break;
 			case CPNQ_FITZ666:
-				Con_Printf("FitzQuake-based protocol\n");
+				Con_Printf("Network Protocol : FitzQuake\n");
 				break;
 			case CPNQ_DP5:
-				Con_Printf("DPP5 protocol\n");
+				Con_Printf("Network Protocol : DPP5\n");
 				break;
 			case CPNQ_DP6:
-				Con_Printf("DPP6 protocol\n");
+				Con_Printf("Network Protocol : DPP6\n");
 				break;
 			case CPNQ_DP7:
-				Con_Printf("DPP7 protocol\n");
+				Con_Printf("Network Protocol : DPP7\n");
 				break;
 			}
 			break;
 	#endif
 	#ifdef Q2CLIENT
 		case CP_QUAKE2:
-			Con_Printf("Quake2-based protocol\n");
-			if (cls.protocol_q2 && cls.protocol_q2 < PROTOCOL_VERSION_Q2)
-				Con_Printf("\toutdated protocol version\n");
-			else switch (cls.protocol_q2)
+			switch (cls.protocol_q2)
 			{
 			case PROTOCOL_VERSION_Q2:
-				Con_Printf("\tStandard Quake2\n");
+				Con_Printf("Network Protocol : Quake2\n");
 				break;
 			case PROTOCOL_VERSION_R1Q2:
-				Con_Printf("\tR1Q2\n");
+				Con_Printf("Network Protocol : R1Q2\n");
 				break;
 			case PROTOCOL_VERSION_Q2PRO:
-				Con_Printf("\tQ2Pro\n");
+				Con_Printf("Network Protocol : Q2Pro\n");
+				break;
+			default:
+				Con_Printf("Network Protocol : Quake2 (OLD)\n");
 				break;
 			}
 			break;
 	#endif
 	#ifdef Q3CLIENT
 		case CP_QUAKE3:
-			Con_Printf("Quake3-based protocol\n");
+			Con_Printf("Network Protocol : Quake3\n");
 			break;
 	#endif
 	#ifdef PLUGINS
 		case CP_PLUGIN:
-			Con_Printf("external protocol\n");
+			Con_Printf("Network Protocol : (unknown, provided by plugin)\n");
 			break;
 	#endif
 		}
@@ -4944,6 +4947,10 @@ void CL_Status_f(void)
 			Con_Printf("\tvoice chat\n");
 		if (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)
 			Con_Printf("\treplacement deltas\n");
+		if (cls.fteprotocolextensions2 & PEXT2_VRINPUTS)
+			Con_Printf("\tvrinputs\n");
+		if (cls.fteprotocolextensions2 & PEXT2_INFOBLOBS)
+			Con_Printf("\tinfoblobs\n");
 	}
 
 	if (cl.worldmodel)
@@ -4959,6 +4966,7 @@ void CL_Status_f(void)
 		extern int num_sfx;
 		int count = 0, i;
 		edict_t *e;
+		Con_Printf ("csqc             : loaded\n");
 		for (i = 0; i < csqc_world.num_edicts; i++)
 		{
 			e = EDICT_NUM_PB(csqc_world.progs, i);
@@ -4966,21 +4974,23 @@ void CL_Status_f(void)
 				continue;	//free, and older than the zombie time
 			count++;
 		}
-		Con_Printf("entities         : %i/%i/%i (mem: %.1f%%)\n", count, csqc_world.num_edicts, csqc_world.max_edicts, 100*(float)(csqc_world.progs->stringtablesize/(double)csqc_world.progs->stringtablemaxsize));
+		Con_Printf("csqc entities    : %i/%i/%i (mem: %.1f%%)\n", count, csqc_world.num_edicts, csqc_world.max_edicts, 100*(float)(csqc_world.progs->stringtablesize/(double)csqc_world.progs->stringtablemaxsize));
 		for (count = 1; count < MAX_PRECACHE_MODELS; count++)
 			if (!*cl.model_csqcname[count])
 				break;
-		Con_Printf("models           : %i/%i\n", count, MAX_PRECACHE_MODELS);
-		Con_Printf("sounds           : %i/\n", num_sfx);	//there is a limit, its just private. :(
+		Con_Printf("csqc models      : %i/%i\n", count, MAX_PRECACHE_MODELS);
+		Con_Printf("client sounds    : %i\n", num_sfx);	//there is a limit, its just private. :(
 
 		for (count = 1; count < MAX_SSPARTICLESPRE; count++)
 			if (!cl.particle_csname[count])
 				break;
 		if (count!=1)
-			Con_Printf("particles        : %i/%i\n", count, MAX_SSPARTICLESPRE);
+			Con_Printf("csqc particles   : %i/%i\n", count, MAX_CSPARTICLESPRE);
 		if (cl.csqcdebug)
 			Con_Printf("csqc debug       : true\n");
 	}
+	else
+		Con_Printf ("csqc             : not loaded\n");
 #endif
 	Con_Printf("gamedir          : %s\n", FS_GetGamedir(true));
 }
@@ -5082,6 +5092,7 @@ void CL_Init (void)
 	Cvar_Register (&cl_pure,	cl_screengroup);
 	Cvar_Register (&cl_hudswap,	cl_screengroup);
 	Cvar_Register (&cl_maxfps,	cl_screengroup);
+	Cvar_Register (&cl_maxfps_slop,	cl_screengroup);
 	Cvar_Register (&cl_idlefps, cl_screengroup);
 	Cvar_Register (&cl_yieldcpu, cl_screengroup);
 	Cvar_Register (&cl_timeout, cl_controlgroup);
@@ -6171,12 +6182,15 @@ done:
 qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 {
 	hrf_t *f;
-#if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT) && !defined(_XBOX)
-	//win32 file urls are basically fucked, so defer to the windows api.
+#if defined(FTE_TARGET_WEB)
+	if (nlen >= 8 && !strncmp(fname, "file:///", 8))
+	{	//just here so we don't get confused by the arbitrary scheme check below.
+	}
+#else
+	//file urls need special handling, if only for percent-encoding.
 	char utf8[MAX_OSPATH*3];
-	if (nlen >= 7 && !strncmp(fname, "file://", 7))
+	if (nlen >= 5 && !strncmp(fname, "file:", 5))
 	{
-		qboolean Sys_ResolveFileURL(const char *inurl, int inlen, char *out, int outlen);
 		if (!Sys_ResolveFileURL(fname, nlen, utf8, sizeof(utf8)))
 		{
 			Con_Printf("Cannot resolve file url\n");
@@ -6184,17 +6198,6 @@ qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 		}
 		fname = utf8;
 		nlen = strlen(fname);
-	}
-#elif defined(FTE_TARGET_WEB)
-	if (nlen >= 8 && !strncmp(fname, "file:///", 8))
-	{	//just here so we don't get confused by the arbitrary scheme check below.
-	}
-#else
-	//unix file urls are fairly consistant - must be an absolute path.
-	if (nlen >= 8 && !strncmp(fname, "file:///", 8))
-	{
-		fname += 7;
-		nlen -= 7;
 	}
 #endif
 	else if((nlen >= 7 && !strncmp(fname, "http://", 7)) ||
@@ -6309,7 +6312,6 @@ Runs all active servers
 ==================
 */
 extern cvar_t cl_netfps;
-extern cvar_t cl_sparemsec;
 
 void CL_StartCinematicOrMenu(void);
 int		nopacketcount;
@@ -6322,14 +6324,14 @@ double Host_Frame (double time)
 	static double		time3 = 0;
 	int			pass0, pass1, pass2, pass3, i;
 //	float fps;
-	double newrealtime;
-	static double spare;
+	double newrealtime, spare;
 	float maxfps;
 	qboolean maxfpsignoreserver;
 	qboolean idle;
 	extern int r_blockvidrestart;
 	static qboolean hadwork;
 	qboolean vrsync;
+	qboolean mustrenderbeforeread;
 
 	RSpeedLocals();
 
@@ -6453,33 +6455,34 @@ double Host_Frame (double time)
 	if (vid.isminimized && (maxfps <= 0 || maxfps > 10))
 		maxfps = 10;
 
-	if (maxfps > 0 
+	if (maxfps > 0
 #ifdef HAVE_MEDIA_ENCODER
 		&& Media_Capturing() != 2
 #endif
 		&& !vrsync)
 	{
-//		realtime += spare/1000;	//don't use it all!
-		double newspare = CL_FilterTime((spare/1000 + realtime - oldrealtime)*1000, maxfps, 1.5, maxfpsignoreserver);
-		if (!newspare)
+		spare = CL_FilterTime((realtime - oldrealtime)*1000, maxfps, 1.5, maxfpsignoreserver);
+		if (!spare)
 		{
 			while(COM_DoWork(0, false))
 				;
 			return (cl_yieldcpu.ival || vid.isminimized || idle)? (1.0 / maxfps - (realtime - oldrealtime)) : 0;
 		}
+		if (spare > cl_maxfps_slop.ival)
+			spare = cl_maxfps_slop.ival;
+		spare /= 1000;
+		if (spare > 0.5/maxfps)	//don't delay the next by
+			spare = 0.5/maxfps;
 		if (spare < 0 || cls.state < ca_onserver)
-			spare = 0;	//uncapped.
-		if (spare > cl_sparemsec.ival)
-			spare = cl_sparemsec.ival;
-		spare = newspare;
-
-//		realtime -= spare/1000;	//don't use it all!
+			spare = 0;
 	}
 	else
 		spare = 0;
-
 	host_frametime = (realtime - oldrealtime)*cl.gamespeed;
-	oldrealtime = realtime;
+	oldrealtime = realtime-spare;
+
+	if (host_speeds.ival)
+		time0 = Sys_DoubleTime ();	//end-of-idle
 
 	if (cls.demoplayback && !cl.stillloading)
 	{
@@ -6541,8 +6544,9 @@ double Host_Frame (double time)
 	cl.do_lerp_players = cl_lerp_players.ival || (cls.demoplayback==DPB_MVD || cls.demoplayback == DPB_EZTV) || (cls.demoplayback && !cl_nolerp.ival && !cls.timedemo);
 	CL_AllowIndependantSendCmd(false);
 
-	// fetch results from server
-	CL_ReadPackets ();
+	mustrenderbeforeread = cls.protocol == CP_QUAKE2;	//FIXME: quake2 MUST render a frame (or a later one) before it can read any acks from the server, otherwise its prediction screws up. I'm too lazy to rewrite that right now.
+//	if (mustrenderbeforeread)
+	CL_ReadPackets();	//this should be redundant.
 
 	CL_RequestNextDownload();
 
@@ -6585,9 +6589,6 @@ double Host_Frame (double time)
 
 	RSpeedEnd(RSPEED_PROTOCOL);
 
-	if (host_speeds.ival)
-		time0 = Sys_DoubleTime ();
-
 #ifdef HAVE_SERVER
 	if (sv.state)
 	{
@@ -6602,6 +6603,15 @@ double Host_Frame (double time)
 	else
 		MSV_PollSlaves();
 #endif
+
+	// fetch results from server... now that we've run it.
+	if (!mustrenderbeforeread)
+	{
+		CL_AllowIndependantSendCmd(false);
+		CL_ReadPackets ();
+		CL_AllowIndependantSendCmd(true);
+	}
+
 	CL_CalcClientTime();
 
 	// update video

@@ -201,7 +201,9 @@ IF(CMAKE_C_COMPILER_ID MATCHES "GNU")
 	ELSE()
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
 	ENDIF()
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--warn-common")
+	IF (NOT FTE_USE_SDL)
+		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--warn-common")
+	ENDIF()
 	#SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wc++-compat")	#lul, thousands of errors!
 ENDIF()
 IF(CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -242,7 +244,7 @@ IF(${ANDROID})
 		engine/client/cd_null.c
 		engine/gl/gl_viddroid.c
 	)
-ELSEIF(${WIN32})
+ELSEIF(WIN32 AND NOT FTE_USE_SDL)
 	INCLUDE_DIRECTORIES(engine/libs engine/libs/freetype2/include)
 #	LINK_DIRECTORIES(engine/libs/mingw64-libs)
 	
@@ -287,7 +289,7 @@ ELSEIF(${WIN32})
 		engine/common/fs_win32.c
 		engine/server/sv_sys_win.c
 	)
-ELSEIF(${UNIX} AND NOT FTE_USE_SDL)	#linux(ish)
+ELSEIF(UNIX AND NOT FTE_USE_SDL)	#linux(ish)
 				#openbsd will have issues with snd_linux.c
 
 	FIND_PACKAGE(GnuTLS)

@@ -327,6 +327,8 @@ typedef struct {
 	float			time_off;
 	int				erase_lines;
 	int				erase_center;
+
+	int				oldmousex, oldmousey;	//so the cursorchar can be changed by keyboard without constantly getting stomped on.
 } cprint_t;
 
 cprint_t scr_centerprint[MAX_SPLITS];
@@ -682,7 +684,7 @@ int SCR_DrawCenterString (vrect_t *playerrect, cprint_t *p, struct font_s *font)
 	int				remaining;
 	shader_t		*pic;
 	int				ch;
-	int mousex,mousey;
+	int mousex,mousey, mousemoved;
 
 	conchar_t *line_start[MAX_CPRINT_LINES];
 	conchar_t *line_end[MAX_CPRINT_LINES];
@@ -741,6 +743,10 @@ int SCR_DrawCenterString (vrect_t *playerrect, cprint_t *p, struct font_s *font)
 	Font_BeginString(font, rect.x+rect.width, rect.y+rect.height, &right, &bottom);
 	linecount = Font_LineBreaks(p->string, p->string + p->charcount, (p->flags & CPRINT_NOWRAP)?0x7fffffff:(right - left), MAX_CPRINT_LINES, line_start, line_end);
 
+	mousemoved = mousex != p->oldmousex || mousey != p->oldmousey;
+	p->oldmousex = mousex;
+	p->oldmousey = mousey;
+
 	ch = Font_CharHeight();
 
 	if (p->flags & CPRINT_TALIGN)
@@ -791,9 +797,27 @@ int SCR_DrawCenterString (vrect_t *playerrect, cprint_t *p, struct font_s *font)
 		else
 			x = left + (right - left - Font_LineWidth(line_start[l], line_end[l]))/2;
 
-		if (mousey >= y && mousey < y+ch)
+		if (mousemoved && mousey >= y && mousey < y+ch)
 		{
-			p->cursorchar = Font_CharAt(mousex - x, line_start[l], line_end[l]);
+			conchar_t *linkstart;
+			linkstart = Font_CharAt(mousex - x, line_start[l], line_end[l]);
+
+			//scan backwards to find any link enclosure
+			if (linkstart)
+				for(linkstart = linkstart-1; linkstart >= line_start[l]; linkstart--)
+				{
+					if (*linkstart == CON_LINKSTART)
+					{
+						//found one
+						p->cursorchar = linkstart;
+						break;
+					}
+					if (*linkstart == CON_LINKEND)
+					{
+						//some other link ended here. don't use its start.
+						break;
+					}
+				}
 		}
 
 		remaining -= line_end[l]-line_start[l];
@@ -803,6 +827,25 @@ int SCR_DrawCenterString (vrect_t *playerrect, cprint_t *p, struct font_s *font)
 			if (line_end[l] <= line_start[l])
 				break;
 		}
+
+		if (p->cursorchar && p->cursorchar >= line_start[l] && p->cursorchar < line_end[l] && *p->cursorchar == CON_LINKSTART)
+		{
+			conchar_t *linkend;
+			int s, e;
+			for (linkend = p->cursorchar; linkend < line_end[l]; linkend++)
+				if (*linkend == CON_LINKEND)
+					break;
+
+			s = x+Font_LineWidth(line_start[l], p->cursorchar);
+			e = x+Font_LineWidth(line_start[l], linkend);
+
+			//draw a 2-pixel underscore (behind the text).
+			R2D_ImageColours(SRGBA(0.3,0.3,0.3, 1));	//mouseover.
+			R2D_FillBlock((s*vid.width)/(float)vid.rotpixelwidth, ((y+Font_CharHeight()-2)*vid.height)/(float)vid.rotpixelheight, ((e - s)*vid.width)/(float)vid.rotpixelwidth, (2*vid.height)/(float)vid.rotpixelheight);
+			R2D_Flush();
+			R2D_ImageColours(SRGBA(1, 1, 1, 1));
+		}
+
 		Font_LineDraw(x, y, line_start[l], line_end[l]);
 	}
 
@@ -811,11 +854,59 @@ int SCR_DrawCenterString (vrect_t *playerrect, cprint_t *p, struct font_s *font)
 	return linecount;
 }
 
+static void Key_CenterPrintActivate(int pnum)
+{
+	char *link;
+	cprint_t *p = &scr_centerprint[pnum];
+	link = SCR_CopyCenterPrint(p);
+	if (link)
+	{
+
+		if (link[0] == '^' && link[1] == '[')
+		{
+			//looks like it might be a link!
+			char *end = NULL;
+			char *info;
+			for (info = link + 2; *info; )
+			{
+				if (info[0] == '^' && info[1] == ']')
+					break; //end of tag, with no actual info, apparently
+				if (*info == '\\')
+					break;
+				else if (info[0] == '^' && info[1] == '^')
+					info+=2;
+				else
+					info++;
+			}
+			for(end = info; *end; )
+			{
+				if (end[0] == '^' && end[1] == ']')
+				{
+					//okay, its a valid link that they clicked
+					*end = 0;
+
+#ifdef PLUGINS
+					if (!Plug_ConsoleLink(link+2, info, ""))
+#endif
+#ifdef CSQC_DAT
+					if (!CSQC_ConsoleLink(link+2, info))
+#endif
+						Key_DefaultLinkClicked(NULL, link+2, info);
+
+					break;
+				}
+				if (end[0] == '^' && end[1] == '^')
+					end+=2;
+				else
+					end++;
+			}
+		}
+	}
+}
 qboolean Key_Centerprint(int key, int unicode, unsigned int devid)
 {
 	int pnum;
 	cprint_t *p;
-	char *link;
 
 	if (key == K_MOUSE1)
 	{
@@ -824,52 +915,7 @@ qboolean Key_Centerprint(int key, int unicode, unsigned int devid)
 		{
 			p = &scr_centerprint[pnum];
 			if (cl.playerview[pnum].gamerectknown == cls.framecount)
-			{
-				link = SCR_CopyCenterPrint(p);
-				if (link)
-				{
-
-					if (link[0] == '^' && link[1] == '[')
-					{
-						//looks like it might be a link!
-						char *end = NULL;
-						char *info;
-						for (info = link + 2; *info; )
-						{
-							if (info[0] == '^' && info[1] == ']')
-								break; //end of tag, with no actual info, apparently
-							if (*info == '\\')
-								break;
-							else if (info[0] == '^' && info[1] == '^')
-								info+=2;
-							else
-								info++;
-						}
-						for(end = info; *end; )
-						{
-							if (end[0] == '^' && end[1] == ']')
-							{
-								//okay, its a valid link that they clicked
-								*end = 0;
-
-#ifdef PLUGINS
-								if (!Plug_ConsoleLink(link+2, info, ""))
-#endif
-#ifdef CSQC_DAT
-								if (!CSQC_ConsoleLink(link+2, info))
-#endif
-									Key_DefaultLinkClicked(NULL, link+2, info);
-
-								break;
-							}
-							if (end[0] == '^' && end[1] == '^')
-								end+=2;
-							else
-								end++;
-						}
-					}
-				}
-			}
+				Key_CenterPrintActivate(pnum);
 		}
 		return true;	//handled
 	}
@@ -882,6 +928,52 @@ qboolean Key_Centerprint(int key, int unicode, unsigned int devid)
 		}
 		return true;
 	}
+	else if ((key == K_ENTER ||
+			  key == K_KP_ENTER ||
+			  key == K_GP_DIAMOND_RIGHT) && devid < countof(scr_centerprint))
+	{
+		p = &scr_centerprint[devid];
+		if (p->cursorchar)
+			Key_CenterPrintActivate(devid);
+		return true;
+	}
+	else if ((key == K_UPARROW ||
+			  key == K_LEFTARROW ||
+			  key == K_KP_UPARROW ||
+			  key == K_KP_LEFTARROW ||
+			  key == K_GP_DPAD_UP ||
+			  key == K_GP_DPAD_LEFT) && devid < countof(scr_centerprint))
+	{
+		p = &scr_centerprint[devid];
+		if (!p->cursorchar)
+			p->cursorchar = p->string + p->charcount;
+		while (--p->cursorchar >= p->string)
+		{
+			if (*p->cursorchar == CON_LINKSTART)
+				return true;	//found one
+		}
+		p->cursorchar = NULL;
+		return true;
+	}
+	else if ((key == K_DOWNARROW ||
+			  key == K_RIGHTARROW ||
+			  key == K_KP_DOWNARROW ||
+			  key == K_KP_RIGHTARROW ||
+			  key == K_GP_DPAD_DOWN ||
+			  key == K_GP_DPAD_RIGHT) && devid < countof(scr_centerprint))
+	{
+		p = &scr_centerprint[devid];
+		if (!p->cursorchar)
+			p->cursorchar = p->string-1;
+		while (++p->cursorchar < p->string + p->charcount)
+		{
+			if (*p->cursorchar == CON_LINKSTART)
+				return true;	//found one
+		}
+		p->cursorchar = NULL;	//hit the end
+		return true;
+	}
+
 	return false;
 }
 
@@ -895,7 +987,6 @@ void SCR_CheckDrawCenterString (void)
 	for (pnum = 0; pnum < cl.splitclients; pnum++)
 	{
 		p = &scr_centerprint[pnum];
-		p->cursorchar = NULL;
 
 #ifdef QUAKESTATS
 		if (IN_DrawWeaponWheel(pnum))
@@ -1162,12 +1253,14 @@ typedef struct showpic_s {
 	struct showpic_s *next;
 	qbyte zone;
 	qboolean persist;
+	float fadedelay;
 	short x, y, w, h;
 	char *name;
 	char *picname;
 	char *tcommand;
 } showpic_t;
 showpic_t *showpics;
+double showpics_touchtime;
 
 static void SP_RecalcXY ( float *xx, float *yy, int origin )
 {
@@ -1256,7 +1349,7 @@ static void SP_RecalcXY ( float *xx, float *yy, int origin )
 void SCR_ShowPics_Draw(void)
 {
 	downloadlist_t *failed;
-	float x, y;
+	float x, y, a = 1;
 	showpic_t *sp;
 	mpic_t *p;
 	for (sp = showpics; sp; sp = sp->next)
@@ -1275,22 +1368,47 @@ void SCR_ShowPics_Draw(void)
 		if (failed)
 			continue;
 
+		if (sp->fadedelay && showpics_touchtime+sp->fadedelay < realtime)
+		{
+			a = 1+(showpics_touchtime+sp->fadedelay-realtime);
+			if (a > 1)
+				a = 1;	//shouldn't really happen, w/e.
+			else if (a <= 0)
+				continue;
+			R2D_ImageColours(1,1,1,a);
+		}
+		else if (a != 1)
+			R2D_ImageColours(1,1,1,a=1);
+
 		p = R2D_SafeCachePic(sp->picname);
-		if (!p)
-			continue;
-		R2D_ScalePic(x, y, sp->w?sp->w:p->width, sp->h?sp->h:p->height, p);
+		if (!p || !R_GetShaderSizes(p, NULL, NULL, false))
+		{
+			if (sp->h > 8)
+				Draw_FunStringWidth(x-2, y + (sp->h-8)/2, sp->name, sp->w+4, 2, false);	//slightly wider, to try to somewhat deal with 16:10 resolutions...
+		}
+		else
+			R2D_ScalePic(x, y, sp->w?sp->w:p->width, sp->h?sp->h:p->height, p);
 	}
+
+	if (a != 1)
+		R2D_ImageColours(1,1,1,1);
 }
-char *SCR_ShowPics_ClickCommand(int cx, int cy)
+const char *SCR_ShowPics_ClickCommand(float cx, float cy, qboolean istouch)
 {
 	downloadlist_t *failed;
 	float x, y, w, h;
 	showpic_t *sp;
 	mpic_t *p;
+	qboolean tryload = !showpics_touchtime;
+	float bestdist = istouch?16:1;
+	const char *best = NULL;
+	showpics_touchtime = realtime;
 	for (sp = showpics; sp; sp = sp->next)
 	{
 		if (!sp->tcommand || !*sp->tcommand)
 			continue;
+
+		tryload = false;
 
 		x = sp->x;
 		y = sp->y;
@@ -1305,7 +1423,7 @@ char *SCR_ShowPics_ClickCommand(int cx, int cy)
 			for (failed = cl.faileddownloads; failed; failed = failed->next)
 			{	//don't try displaying ones that we know to have failed.
 				if (!strcmp(failed->rname, sp->picname))
-				break;
+					break;
 			}
 			if (failed)
 				continue;
@@ -1315,11 +1433,22 @@ char *SCR_ShowPics_ClickCommand(int cx, int cy)
 			w = w?w:sp->w;
 			h = h?h:sp->h;
 		}
-		if (cx >= x && cx < x+w)
-			if (cy >= y && cy < y+h)
-				return sp->tcommand;	//if they overlap, that's your own damn fault.
+
+		x = bound(x, cx, x+w)-cx;
+		y = bound(y, cy, y+h)-cy;
+		x = max(fabs(x),fabs(y));
+		if (bestdist > x)
+		{	//looks like this one is closer to the cursor
+			bestdist = x;
+			best = sp->tcommand;
+			if (bestdist <= 0)	//use the first that's inside.
+				break;
+		}
 	}
-	return NULL;
+
+	if (tryload)
+		Cbuf_AddText("exec touch.cfg\n", RESTRICT_LOCAL);
+	return best;
 }
 
 //all=false clears only server pics, not ones from configs.
@@ -1334,6 +1463,8 @@ void SCR_ShowPic_ClearAll(qboolean persistflag)
 		scr_centerprint[pnum].charcount = 0;
 	}
 
+	if (!persistflag)
+		showpics_touchtime = 0;	//map change. gamedir may have changed too.
 	for (link = &showpics; (sp=*link); )
 	{
 		if (sp->persist != persistflag)
@@ -1508,6 +1639,7 @@ void SCR_ShowPic_Script_f(void)
 	int x, y, w, h;
 	int zone;
 	showpic_t *sp;
+	float fadedelay;
 
 	imgname = Cmd_Argv(1);
 	name = Cmd_Argv(2);
@@ -1518,6 +1650,7 @@ void SCR_ShowPic_Script_f(void)
 	w = atoi(Cmd_Argv(6));
 	h = atoi(Cmd_Argv(7));
 	tcommand = Cmd_Argv(8);
+	fadedelay = atof(Cmd_Argv(9));
 
 
 	sp = SCR_ShowPic_Find(name);
@@ -1532,6 +1665,7 @@ void SCR_ShowPic_Script_f(void)
 	sp->y = y;
 	sp->w = w;
 	sp->h = h;
+	sp->fadedelay = fadedelay;
 
 	if (!sp->persist)
 		sp->persist = !Cmd_FromGamecode();

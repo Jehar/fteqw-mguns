@@ -1313,7 +1313,7 @@ void VARGS Con_ThrottlePrintf (float *timer, int developerlevel, const char *fmt
 
 	if (*timer > now)
 		;	//in the future? zomg
-	else if (*timer > now-1)
+	else if (*timer >= now-1)
 		return;	//within the last second
 	*timer = now;	//in the future? zomg
 
@@ -1930,10 +1930,10 @@ static int Con_DrawProgress(int left, int right, int y)
 		if (progresspercent < 0)
 		{
 			if ((int)(realtime/2)&1 || total == 0)
-				sprintf(progresspercenttext, " (%ukbps)", CL_DownloadRate()/1000);
+				sprintf(progresspercenttext, " (%ukB/s)", CL_DownloadRate()/1000);
 			else
 			{
-				sprintf(progresspercenttext, " (%u%skb)", (int)(total/1024), extra?"+":"");
+				sprintf(progresspercenttext, " (%u%sKiB)", (int)(total/1024), extra?"+":"");
 			}
 
 			//do some marquee thing, so the user gets the impression that SOMETHING is happening.
@@ -1945,10 +1945,10 @@ static int Con_DrawProgress(int left, int right, int y)
 		else
 		{
 			if ((int)(realtime/2)&1 || total == 0)
-				sprintf(progresspercenttext, " %5.1f%% (%ukbps)", progresspercent, CL_DownloadRate()/1000);
+				sprintf(progresspercenttext, " %5.1f%% (%ukB/s)", progresspercent, CL_DownloadRate()/1000);
 			else
 			{
-				sprintf(progresspercenttext, " %5.1f%% (%u%skb)", progresspercent, (int)(total/1024), extra?"+":"");
+				sprintf(progresspercenttext, " %5.1f%% (%u%sKiB)", progresspercent, (int)(total/1024), extra?"+":"");
 			}
 		}
 	}
@@ -3294,7 +3294,7 @@ void Con_DrawConsole (int lines, qboolean noback)
 		}
 		selactive = Key_GetConsoleSelectionBox(con_current, &selsx, &selsy, &selex, &seley);
 
-		if ((con_current->flags & CONF_KEEPSELECTION) && con_current->selstartline && con_current->selendline)
+		if ((con_current->flags & CONF_KEEPSELECTION) && con_current->selstartline && con_current->selendline && con_current->buttonsdown != CB_SELECTED)
 			selactive = -1;
 
 		Font_BeginString(font_console, x, y, &x, &y);
@@ -3327,6 +3327,54 @@ void Con_DrawConsole (int lines, qboolean noback)
 
 		Font_EndString(font_console);
 		mouseconsole = con_mouseover?con_mouseover:con_current;
+
+
+		if (con_current->buttonsdown == CB_SELECTED)
+		{	//select was released...
+			console_t *con = con_current;
+			char *buffer;
+			con->buttonsdown = CB_NONE;
+			if (con->selstartline)
+			{
+				con->flags |= CONF_KEEPSELECTION;
+				if (con->userline)
+				{
+					if (con->flags & CONF_BACKSELECTION)
+					{
+						con->userline = con->selendline;
+						con->useroffset = con->selendoffset;
+					}
+					else
+					{
+						con->userline = con->selstartline;
+						con->useroffset = con->selstartoffset;
+					}
+				}
+				if (con->selstartline == con->selendline && con->selendoffset <= con->selstartoffset+1)
+				{
+					if (keydown[K_LSHIFT] || keydown[K_RSHIFT])
+						;
+					else
+					{
+						buffer = Con_CopyConsole(con, false, true, false);
+						if (buffer)
+						{
+							Key_HandleConsoleLink(con, buffer);
+							Z_Free(buffer);
+						}
+					}
+				}
+				else
+				{
+					buffer = Con_CopyConsole(con, true, false, true);	//don't keep markup if we're copying to the clipboard
+					if (buffer)
+					{
+						Sys_SaveClipboard(CBT_SELECTION,  buffer);
+						Z_Free(buffer);
+					}
+				}
+			}
+		}
 	}
 	else
 		mouseconsole = con_mouseover?con_mouseover:NULL;
