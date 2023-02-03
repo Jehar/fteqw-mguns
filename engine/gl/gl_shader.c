@@ -791,11 +791,13 @@ static int Shader_SetImageFlags(parsestate_t *parsestate, shaderpass_t *pass, ch
 		{
 			*name+=6;
 			flags = (flags&~IF_TEXTYPEMASK) | IF_TEXTYPE_CUBE;
+			flags |= IF_LINEAR;
 		}
 		else if (!Q_strnicmp(*name, "$cubearray:", 11))
 		{
 			*name+=11;
 			flags = (flags&~IF_TEXTYPEMASK) | IF_TEXTYPE_CUBE_ARRAY;
+			flags |= IF_LINEAR;
 		}
 		else if (!Q_strnicmp(*name, "$srgb:", 6))
 		{
