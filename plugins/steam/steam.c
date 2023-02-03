@@ -1019,21 +1019,29 @@ void Steam_Init(void)
 
 
 
-
+int next_readcheck;
 void Steam_Tick(int *args)
 {
-	unsigned char index = PIPE_ReadByte();
-	while (index != 255)
+	// turns out this shit is expensive...
+	// so we need to do it sporadically. hopefully this won't cause chugging!
+	if (corefuncs->GetMilliseconds() > next_readcheck)
 	{
-		if (index < SV_MAX)
+		next_readcheck = corefuncs->GetMilliseconds() + 100;
+
+		unsigned char index = PIPE_ReadByte();
+		while (index != 255)
 		{
-			func_readarray[index]();
+			if (index < SV_MAX)
+			{
+				func_readarray[index]();
+			}
+
+			index = PIPE_ReadByte();
 		}
-
-		index = PIPE_ReadByte();
 	}
+	
 
-
+	// this we can just do as needed, shouldn't be too bad.
 	if (pipeSendBuffer.cursize)
 	{
 		PIPE_SendData();
