@@ -437,6 +437,7 @@ void R_NetGraph (void);
 #define qglClearDepthf glClearDepthf
 #define qglClearStencil glClearStencil
 #define qglColorMask glColorMask
+#define qglColorMaski glColorMaski
 #define qglCompileShader glCompileShader
 #define qglCompressedTexImage2D glCompressedTexImage2D
 #define qglCompressedTexSubImage2D glCompressedTexSubImage2D
@@ -602,11 +603,14 @@ void R_NetGraph (void);
 #else
 extern void (APIENTRY *qglBindTexture) (GLenum target, GLuint texture);
 extern void (APIENTRY *qglBlendFunc) (GLenum sfactor, GLenum dfactor);
+extern void (APIENTRY *qglBlendFunci) (GLuint buf, GLenum sfactor, GLenum dfactor);
+extern void (APIENTRY *qglBlendEquationi) (GLuint buf, GLenum mode);
 extern void (APIENTRY *qglClear) (GLbitfield mask);
 extern void (APIENTRY *qglClearColor) (GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 extern void (APIENTRY *qglClearDepthf) (GLclampf depth);
 extern void (APIENTRY *qglClearStencil) (GLint s);
 extern void (APIENTRY *qglColorMask) (GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+extern void (APIENTRY *qglColorMaski) (GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 extern void (APIENTRY *qglCopyTexImage2D) (GLenum target, GLint level, GLenum internalFormat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
 extern void (APIENTRY *qglCopyTexSubImage2D) (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height);
 extern void (APIENTRY *qglCullFace) (GLenum mode);

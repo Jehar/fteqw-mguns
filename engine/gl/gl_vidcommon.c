@@ -35,10 +35,13 @@ extern cvar_t	gl_immutable_buffers;
 #ifndef GL_STATIC
 //standard gles2 opengl calls.
 void (APIENTRY *qglBlendFunc) (GLenum sfactor, GLenum dfactor);
+void (APIENTRY *qglBlendFunci) (GLuint buf, GLenum sfactor, GLenum dfactor);
+void (APIENTRY *qglBlendEquationi) (GLuint buf, GLenum mode);
 void (APIENTRY *qglClear) (GLbitfield mask);
 void (APIENTRY *qglClearColor) (GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 void (APIENTRY *qglClearStencil) (GLint s);
 void (APIENTRY *qglColorMask) (GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+void (APIENTRY *qglColorMaski) (GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 void (APIENTRY *qglCopyTexImage2D) (GLenum target, GLint level, GLenum internalFormat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
 void (APIENTRY *qglCopyTexSubImage2D) (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height);
 void (APIENTRY *qglCullFace) (GLenum mode);
@@ -3031,10 +3034,13 @@ void GL_ForgetPointers(void)
 #ifndef GL_STATIC
 	qglBindTexture		= NULL;
 	qglBlendFunc		= NULL;
+	qglBlendFunci		= NULL;
+	qglBlendEquationi	= NULL;
 	qglClear			= NULL;
 	qglClearColor		= NULL;
 	qglClearStencil		= NULL;
 	qglColorMask		= NULL;
+	qglColorMaski		= NULL;
 	qglCopyTexImage2D	= NULL;
 	qglCopyTexSubImage2D= NULL;
 	qglCullFace			= NULL;
@@ -3314,10 +3320,13 @@ qboolean GL_Init(rendererstate_t *info, void *(*getglfunction) (char *name))
 #ifndef GL_STATIC
 	qglBindTexture		= (void *)getglcore("glBindTexture");	//for compleateness. core in 1.1. needed by fte.
 	qglBlendFunc		= (void *)getglcore("glBlendFunc");
+	qglBlendFunci		= (void *)getglcore("glBlendFunci");
+	qglBlendEquationi	= (void *)getglcore("glBlendEquationi");
 	qglClear			= (void *)getglcore("glClear");
 	qglClearColor		= (void *)getglcore("glClearColor");
 	qglClearStencil		= (void *)getglcore("glClearStencil");
 	qglColorMask		= (void *)getglcore("glColorMask");
+	qglColorMaski		= (void *)getglcore("glColorMaski");
 	qglCopyTexImage2D	= (void *)getglcore("glCopyTexImage2D");
 	qglCopyTexSubImage2D= (void *)getglcore("glCopyTexSubImage2D");
 	qglCullFace			= (void *)getglcore("glCullFace");

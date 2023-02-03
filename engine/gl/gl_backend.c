@@ -2952,8 +2952,11 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 	}
 	sbits |= r_refdef.colourmask;
 
-
 	delta = sbits^shaderstate.shaderbits;
+	if ((shaderstate.shaderbits & ~sbits) & SBITS_RT_FIRSTONLY) // this fucks up blendfunc, so we gotta tell it to resort itself. probably slow and shit.
+		delta |= SBITS_MASK_BITS;//SBITS_BLEND_BITS | SBITS_MASK_BITS;
+	if ((delta & SBITS_MASK_BITS) && (sbits & SBITS_RT_FIRSTONLY))
+		delta |= SBITS_RT_FIRSTONLY;
 
 #ifdef FORCESTATE
 	delta |= ~0;
@@ -2993,7 +2996,16 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 			case SBITS_DSTBLEND_ONE_MINUS_DST_ALPHA>>4:	dst = GL_ONE_MINUS_DST_ALPHA;	break;
 			}
 			qglEnable(GL_BLEND);
-			qglBlendFunc(src, dst);
+
+			if (sbits & SBITS_RT_FIRSTONLY)
+			{
+				qglBlendFunci(0, src, dst);
+				qglBlendFunci(2, src, dst);
+			}
+			else
+			{
+				qglBlendFunc(src, dst);
+			}
 		}
 		else
 			qglDisable(GL_BLEND);
@@ -3091,6 +3103,45 @@ static void BE_SendPassBlendDepthMask(unsigned int sbits)
 			qglHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
 	}
 #endif
+
+	if (delta & SBITS_RT_FIRSTONLY)
+	{
+		/*
+		if (sbits & SBITS_RT_FIRSTONLY)
+		{
+			qglBlendFunci(1, GL_ZERO, GL_ZERO);
+			qglBlendFunci(2, GL_ZERO, GL_ZERO);
+			qglBlendFunci(3, GL_ZERO, GL_ZERO);
+		}
+		*/
+
+		///*
+		if (sbits & SBITS_RT_FIRSTONLY)
+		{
+			qglColorMaski(
+				0,
+				(sbits&SBITS_MASK_RED) ? GL_FALSE : GL_TRUE,
+				(sbits&SBITS_MASK_GREEN) ? GL_FALSE : GL_TRUE,
+				(sbits&SBITS_MASK_BLUE) ? GL_FALSE : GL_TRUE,
+				(sbits&SBITS_MASK_ALPHA) ? GL_FALSE : GL_TRUE
+				);
+
+			//if (!(sbits & SBITS_BLEND_BITS))
+			//	qglBlendFunci(0, GL_ONE, GL_ZERO);
+
+			for (int j = 1; j < 4; j++)
+			{
+				//qglBlendEquationi(j, GL_MAX);
+				qglColorMaski(j, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+			}
+
+			//qglBlendFunci(1, GL_ZERO, GL_ZERO);
+			//qglDepthMask(GL_TRUE);
+
+			//qglDisable(GL_BLEND);
+		}
+		//*/
+	}
 }
 
 static void BE_SubmitMeshChain(qboolean usetesselation)
@@ -3319,7 +3370,7 @@ static void DrawPass(const shaderpass_t *pass)
 	}
 	if (i == lastpass)
 		return;
-	BE_SendPassBlendDepthMask(pass[i].shaderbits);
+	BE_SendPassBlendDepthMask(pass[i].shaderbits | SBITS_RT_FIRSTONLY);
 	GenerateColourMods(pass+i);
 	tmu = 0;
 	for (; i < lastpass; i++)
@@ -3382,7 +3433,7 @@ static void DrawPass(const shaderpass_t *pass)
 				shaderstate.pendingtexcoordpointer[tmu] = shaderstate.sourcevbo->lmcoord[j].gl.addr;
 
 				BE_SetPassBlendMode(tmu, PBM_ADD);
-				BE_SendPassBlendDepthMask((pass[0].shaderbits & ~SBITS_BLEND_BITS) | SBITS_SRCBLEND_ONE | SBITS_DSTBLEND_ONE);
+				BE_SendPassBlendDepthMask(((pass[0].shaderbits | SBITS_RT_FIRSTONLY) & ~SBITS_BLEND_BITS) | SBITS_SRCBLEND_ONE | SBITS_DSTBLEND_ONE);
 
 				attr = (1u<<VATTR_LEG_VERTEX) | (1u<<VATTR_LEG_COLOUR);
 				attr |= (1u<<(VATTR_LEG_TMU0+tmu));
@@ -3403,7 +3454,7 @@ static void DrawPass(const shaderpass_t *pass)
 				BE_SubmitMeshChain(false);
 				tmu = 0;
 
-				BE_SendPassBlendDepthMask(pass[i+1].shaderbits);
+				BE_SendPassBlendDepthMask(pass[i+1].shaderbits | SBITS_RT_FIRSTONLY);
 				GenerateColourMods(&pass[i+1]);
 			}
 #endif

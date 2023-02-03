@@ -4471,7 +4471,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "sky.rgb = mix(sky.rgb, w_fogcolour, float(r_skyfog)*w_fogalpha); //flat fog ignoring actual geometry\n"
 //sky = fog3(sky);													//fog according to actual geometry
 "#endif\n"
-"gl_FragColor = vec4(sky, 1.0);\n"
+"fte_fragdata0 = vec4(sky, 1.0);\n"
+"fte_fragdata1 = vec4(0.0);\n"
+"fte_fragdata2 = vec4(0.0);\n"
+"fte_fragdata3 = vec4(0.0);\n"
 "}\n"
 "#endif\n"
 },
@@ -4936,7 +4939,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "skybox.rgb = mix(skybox.rgb, fog3(skybox.rgb), float(r_skyfog));  //fog in terms of actual geometry distance\n"
 "#endif\n"
 "#endif\n"
-"gl_FragColor = skybox;\n"
+"fte_fragdata0 = skybox;\n"
+"fte_fragdata1 = vec4(0.0);\n"
+"fte_fragdata2 = vec4(0.0);\n"
+"fte_fragdata3 = vec4(0.0);\n"
 "}\n"
 "#endif\n"
 },
@@ -5308,7 +5314,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "varying vec4 vc;\n"
 "void main ()\n"
 "{\n"
-"gl_FragColor = vc;\n"
+"fte_fragdata0 = vc;\n"
+"fte_fragdata1 = vec4(0.0);\n"
+"fte_fragdata2 = vec4(0.0);\n"
+"fte_fragdata3 = vec4(0.0);\n"
 "}\n"
 "#endif\n"
 },
@@ -6351,7 +6360,10 @@ YOU SHOULD NOT EDIT THIS FILE BY HAND
 "#endif\n"
 
 //and finally hide it all if we're fogged.
-"gl_FragColor = fog4(col);\n"
+"fte_fragdata0 = fog4(col);\n"
+"fte_fragdata1 = vec4(0.0);\n"
+"fte_fragdata2 = vec4(0.0);\n"
+"fte_fragdata3 = vec4(0.0);\n"
 "}\n"
 "#endif\n"
 

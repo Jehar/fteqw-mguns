@@ -170,6 +170,8 @@ enum
 	SBITS_TESSELLATION					= 0x00100000,
 	SBITS_AFFINE						= 0x00200000,
 
+	SBITS_RT_FIRSTONLY					= 0x01000000,
+
 	//provided for the backend to hack about with
 	SBITS_LINES							= 0x80000000
 };
