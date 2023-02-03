@@ -6312,6 +6312,26 @@ void QCBUILTIN PF_setspawnparms (pubprogfuncs_t *prinst, struct globalvars_s *pr
 	SV_SpawnParmsToQC(client);
 }
 
+void QCBUILTIN PF_writespawnparms(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	edict_t	*ent;
+	int		i;
+	client_t	*client;
+
+	ent = G_EDICT(prinst, OFS_PARM0);
+	i = NUM_FOR_EDICT(prinst, ent);
+	if (i < 1 || i > sv.allocated_client_slots)
+	{
+		PR_BIError(prinst, "Entity is not a client");
+		return;
+	}
+
+	// copy spawn parms out of the client_t
+	client = svs.clients + (i - 1);
+
+	SV_SpawnParmsToClient(client);
+}
+
 /*
 ==============
 PF_changelevel
@@ -11250,6 +11270,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"precache_file2",	PF_precache_file,	77,		77,		0,		0,	"string(string str)"},	//77
 
 	{"setspawnparms",	PF_setspawnparms,	78,		78,		78,		0,	"void(entity player)"},	//78
+	{"writespawnparms", PF_writespawnparms, 0,		0,		0,		0,	"void(entity player)"}, //0
 
 //QuakeEx (aka: quake rerelease). These conflict with core extensions so we don't register them by default (Update: they now link by name rather than number.
 	{"ex_finaleFinished",PF_finaleFinished_qex,0,	0,		0,0/*79*/,	D("float()", "Behaviour is undocumented.")},
