@@ -8273,12 +8273,29 @@ void R_RemapShader(const char *sourcename, const char *destname, float timeoffse
 			{
 				n = R_LoadShader (o->model, va("%s%s", destname, o->name+l), o->usageflags, NULL, NULL);
 				if (!n)
-				{	//if it isn't actually available on disk then don't care about usageflags, just find ANY that's already loaded.
+				{
 					// check the hash first
 					char cleandstname[MAX_QPATH];
 					Q_strncpyz(cleandstname, destname, sizeof(cleandstname));
 					COM_CleanUpPath(cleandstname);
 					n = Hash_Get(&shader_active_hash, cleandstname);
+
+					// if one of our shaders is made for lightmaps, check through the rest until we find one more suitable
+					if ((n->usageflags ^ o->usageflags) & SUF_LIGHTMAP)
+					{
+						shader_t *n_f = n;
+						while (n)
+						{
+							if (!((n->usageflags ^ o->usageflags) & SUF_LIGHTMAP))
+								break;
+
+							n = Hash_GetNext(&shader_active_hash, cleandstname, n);
+						}
+
+						if (!n)
+							n = n_f;
+					}
+
 					if (!n || !n->uses)
 						n = o;
 				}

@@ -941,13 +941,14 @@ void QCBUILTIN PF_cl_addwantedhostcachekey(pubprogfuncs_t *prinst, struct global
 
 void QCBUILTIN PF_shaderforname (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
-	const char *str = PR_GetStringOfs(prinst, OFS_PARM0);
-	const char *defaultbody = PF_VarString(prinst, 1, pr_globals);
+	int shader_usageflags = G_INT(OFS_PARM0);
+	const char *str = PR_GetStringOfs(prinst, OFS_PARM1);
+	const char *defaultbody = PF_VarString(prinst, 2, pr_globals);
 
 	shader_t *shad;
 
 	if (*defaultbody)
-		shad = R_RegisterShader(str, SUF_NONE, defaultbody);
+		shad = R_RegisterShader(str, shader_usageflags, defaultbody);
 	else
 		shad = R_RegisterSkin(NULL, str);
 	if (shad)
