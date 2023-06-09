@@ -2228,6 +2228,7 @@ void WPhys_RunEntity (world_t *w, wedict_t *ent)
 	{
 		*w->g.time = w->physicstime;
 		*w->g.self = EDICT_TO_PROG(w->progs, ent);
+		*w->g.frametime = host_frametime;
 		PR_ExecuteProgram (w->progs, ent->xv->customphysics);
 	}
 	else switch ( (int)ent->v->movetype)
