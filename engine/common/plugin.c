@@ -178,6 +178,7 @@ static plugin_t *Plug_Load(const char *file)
 	static enum fs_relative prefixes[] =
 	{
 		FS_BINARYPATH,
+		FS_LIBRARYPATH,
 #ifndef ANDROID
 		FS_ROOT,
 #endif
@@ -532,7 +533,11 @@ static int QDECL Plug_Cmd_Argc(void)
 //void Cvar_SetString (char *name, char *value);
 static void QDECL Plug_Cvar_SetString(const char *name, const char *value)
 {
-	cvar_t *var = Cvar_Get(name, value, 0, "Plugin vars");
+	cvar_t *var;
+	if (!value)
+		var = Cvar_FindVar(name);
+	else
+		var = Cvar_Get(name, value, 0, "Plugin vars");
 	if (var)
 		Cvar_Set(var, value);
 }
@@ -985,6 +990,7 @@ static qhandle_t QDECL Plug_FS_Open(const char *fname, qhandle_t *outhandle, int
 #ifndef WEBCLIENT
 		f = NULL;
 #else
+		Con_Printf("Plugin %s requesting %s\n", currentplug->name, fname);
 		handle = Plug_NewStreamHandle(STREAM_WEB);
 		pluginstreamarray[handle].dl = HTTP_CL_Get(fname, NULL, Plug_DownloadComplete);
 		pluginstreamarray[handle].dl->user_num = handle;
@@ -1205,6 +1211,11 @@ void QDECL Plug_FS_EnumerateFiles(enum fs_relative fsroot, const char *match, in
 	}
 }
 
+unsigned int Plug_BlockChecksum(const void *data, size_t datasize)
+{	//convienience function. we use md4 for legacy reasons (every qw engine must have an implementation)
+	return CalcHashInt(&hash_md4, data, datasize);
+}
+
 #if defined(HAVE_SERVER) && defined(HAVE_CLIENT)
 static qboolean QDECL Plug_MapLog_Query(const char *packagename, const char *mapname, float *vals)
 {
@@ -1267,9 +1278,16 @@ void Plug_Initialise(qboolean fromgamedir)
 	{
 		if (!fromgamedir)
 		{
-			FS_NativePath("", FS_BINARYPATH, nat, sizeof(nat));
-			Con_DPrintf("Loading plugins from \"%s\"\n", nat);
-			Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX, Plug_EnumeratedRoot, NULL, NULL);
+			if (FS_NativePath("", FS_BINARYPATH, nat, sizeof(nat)))
+			{
+				Con_DPrintf("Loading plugins from \"%s\"\n", nat);
+				Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX, Plug_EnumeratedRoot, NULL, NULL);
+			}
+			if (FS_NativePath("", FS_LIBRARYPATH, nat, sizeof(nat)))
+			{
+				Con_DPrintf("Loading plugins from \"%s\"\n", nat);
+				Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_CPU_POSTFIX ARCH_DL_POSTFIX, Plug_EnumeratedRoot, NULL, NULL);
+			}
 		}
 	}
 	if (plug_loaddefault.ival & 1)
@@ -1848,6 +1866,7 @@ int QDECL Plug_List_Print(const char *fname, qofs_t fsize, time_t modtime, void 
 void Plug_List_f(void)
 {
 	char binarypath[MAX_OSPATH];
+	char librarypath[MAX_OSPATH];
 	char rootpath[MAX_OSPATH];
 	unsigned int u;
 	plugin_t *plug;
@@ -1870,8 +1889,21 @@ void Plug_List_f(void)
 		while ((mssuck=strchr(binarypath, '\\')))
 			*mssuck = '/';
 #endif
-		Con_DPrintf("Scanning for plugins at %s:\n", binarypath);
+		Con_Printf("Scanning for plugins at %s:\n", binarypath);
 		Sys_EnumerateFiles(binarypath, PLUGINPREFIX"*" ARCH_DL_POSTFIX, Plug_List_Print, binarypath, NULL);
+	}
+	if (FS_NativePath("", FS_LIBRARYPATH, librarypath, sizeof(librarypath)))
+	{
+#ifdef _WIN32
+		char *mssuck;
+		while ((mssuck=strchr(librarypath, '\\')))
+			*mssuck = '/';
+#endif
+		if (strcmp(librarypath, rootpath))
+		{
+			Con_Printf("Scanning for plugins at %s:\n", librarypath);
+			Sys_EnumerateFiles(librarypath, PLUGINPREFIX"*" ARCH_DL_POSTFIX, Plug_List_Print, librarypath, NULL);
+		}
 	}
 	if (FS_NativePath("", FS_ROOT, rootpath, sizeof(rootpath)))
 	{
@@ -2033,7 +2065,7 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			COM_GetFileExtension,
 			COM_FileBase,
 			COM_CleanUpPath,
-			Com_BlockChecksum,
+			Plug_BlockChecksum,
 			FS_LoadMallocFile,
 
 			FS_GetPackHashes,
@@ -2137,11 +2169,17 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			Info_SetValueForKey,
 			Info_SetValueForStarKey,
 
+#ifdef HAVE_SERVER
 			SV_DropClient,
 			Plug_SV_GetClient,
 			Plug_SV_GetSlot,
 			SV_ExtractFromUserinfo,
 			SV_ChallengePasses,
+#else
+			NULL,
+			NULL,
+			NULL,
+#endif
 		};
 
 		Con_Printf("size %i vs %i\n", structsize, sizeof(funcs));

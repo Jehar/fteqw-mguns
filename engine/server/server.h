@@ -697,6 +697,7 @@ typedef struct client_s
 	qboolean qex;	//qex sends strange clc inputs and needs workarounds for its prediction. it also favours fitzquake's protocol but violates parts of it.
 
 	unsigned int lastruncmd;	//for non-qw physics. timestamp they were last run, so switching between physics modes isn't a (significant) cheat
+	unsigned int hoverms;	//purely for sv_showpredloss to avoid excessive spam
 //speed cheat testing
 #define NEWSPEEDCHEATPROT
 	float msecs;
@@ -1128,6 +1129,7 @@ const char *SV_CheckRejectConnection(netadr_t *adr, const char *uinfo, unsigned 
 char *SV_BannedReason (netadr_t *a);
 void SV_EvaluatePenalties(client_t *cl);
 void SV_AutoAddPenalty (client_t *cl, unsigned int banflag, int duration, char *reason);
+void SV_AutoBanSender (int duration, char *reason);	//bans net_from
 
 //note: not all penalties are actually penalties, but they can still expire.
 #define BAN_BAN			(1u<<0)	//user is banned from the server
@@ -1389,10 +1391,12 @@ void SV_SendClientPrespawnInfo(client_t *client);
 void SV_ClientProtocolExtensionsChanged(client_t *client);
 
 //sv_master.c
-float SVM_Think(int port);
+float SVM_Think(void);
 vfsfile_t *SVM_GenerateIndex(const char *requesthost, const char *fname, const char **mimetype, const char *query);
 void SVM_AddBrokerGame(const char *brokerid, const char *info);
 void SVM_RemoveBrokerGame(const char *brokerid);
+qboolean SVM_FixupServerAddress(netadr_t *adr, struct dtlspeercred_s *cred);
+void FTENET_TCP_ICEResponse(struct ftenet_connections_s *col, int type, const char *cid, const char *sdp);
 
 
 //
@@ -1653,7 +1657,7 @@ typedef struct
 {
 	qboolean hasauthed;
 	qboolean isreverse;
-	char challenge[64];
+	char challenge[64];	//aka nonce
 } qtvpendingstate_t;
 int SV_MVD_GotQTVRequest(vfsfile_t *clientstream, char *headerstart, char *headerend, qtvpendingstate_t *p);
 #endif

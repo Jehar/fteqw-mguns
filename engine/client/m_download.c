@@ -74,7 +74,7 @@ cvar_t	pkg_autoupdate = CVARFD("pkg_autoupdate", "-1", CVAR_NOTFROMSERVER|CVAR_N
 #define DPF_ENGINE					(1u<<14)	//engine update. replaces old autoupdate mechanism
 #define DPF_PLUGIN					(1u<<15)	//this is a plugin package, with a dll
 
-//#define DPF_TRUSTED					(1u<<16)	//flag used when parsing package lists. if not set then packages will be ignored if they are anything but paks/pk3s
+#define DPF_TRUSTED					(1u<<16)	//package was trusted when installed. any pk3s can be flagged appropriately.
 #define DPF_SIGNATUREREJECTED		(1u<<17)	//signature is bad
 #define DPF_SIGNATUREACCEPTED		(1u<<18)	//signature is good (required for dll/so/exe files)
 #define DPF_SIGNATUREUNKNOWN		(1u<<19)	//signature is unknown
@@ -137,9 +137,9 @@ typedef struct package_s {
 	char *packprefix;	//extra weirdness to skip embedded gamedirs or force extra maps/ nesting
 
 	quint64_t filesize;	//in bytes, as part of verifying the hash.
-	char *filesha1;
-	char *filesha512;
-	char *signature;
+	char *filesha1;		//this is the hash of the _download_, not the individual files
+	char *filesha512;	//this is the hash of the _download_, not the individual files
+	char *signature;	//signature of the [prefix:]sha512
 
 	char *title;
 	char *description;
@@ -194,13 +194,7 @@ typedef struct package_s {
 static qboolean loadedinstalled;
 static package_t *availablepackages;
 static int numpackages;
-static char *manifestpackages;	//metapackage named by the manicfest.
 static char *declinedpackages;	//metapackage named by the manicfest.
-static int domanifestinstall;	//SECURITY_MANIFEST_*
-
-#ifdef PLUGINS
-static int pluginsadded;	//so we only show prompts for new externally-installed plugins once, instead of every time the file is reloaded.
-#endif
 
 #ifdef WEBCLIENT
 static struct
@@ -210,7 +204,8 @@ static struct
 } pm_onload;
 
 static int allowphonehome = -1;	//if autoupdates are disabled, make sure we get (temporary) permission before phoning home for available updates. (-1=unknown, 0=no, 1=yes)
-static qboolean doautoupdate;	//updates will be marked (but not applied without the user's actions)
+static int doautoupdate;	//updates will be marked (but not applied without the user's actions)
+static int pm_pendingprompts; //number of prompts that are pending. don't show apply prompts until these are all cleared.
 static qboolean pkg_updating;	//when flagged, further changes are blocked until completion.
 #else
 static const qboolean pkg_updating = false;
@@ -252,10 +247,16 @@ static struct pm_source_s
 	void *module;	//plugins
 	plugupdatesourcefuncs_t *funcs;
 } *pm_source/*[pm_maxsources]*/;
-static int downloadablessequence;	//bumped any time any package is purged
+static int pm_sequence;	//bumped any time any package is purged
 
 static void PM_WriteInstalledPackages(void);
 static void PM_PreparePackageList(void);
+static void PM_UpdatePackageList(qboolean autoupdate);
+static void PM_PromptApplyChanges(void);
+qboolean PM_AreSourcesNew(qboolean doprompt); //prompts to enable sources, or just queries(to do the flashing thing)
+#ifdef DOWNLOADMENU
+static qboolean PM_DeclinedPackages(char *out, size_t outsize);
+#endif
 #ifdef WEBCLIENT
 static qboolean PM_SignatureOkay(package_t *p);
 #endif
@@ -266,6 +267,8 @@ static void PM_FreePackage(package_t *p)
 #ifdef WEBCLIENT
 	int i;
 #endif
+
+	COM_AssertMainThread("PM_FreePackage");
 
 	if (p->link)
 	{
@@ -388,7 +391,7 @@ static qboolean PM_PurgeOnDisable(package_t *p)
 
 static void PM_ValidateAuthenticity(package_t *p, enum hashvalidation_e validated)
 {
-	qbyte hashdata[512];
+	qbyte hashdata[512+MAX_QPATH];
 	size_t hashsize = 0;
 	qbyte signdata[1024];
 	size_t signsize = 0;
@@ -450,7 +453,23 @@ static void PM_ValidateAuthenticity(package_t *p, enum hashvalidation_e validate
 			strcpy(authority, "Spike");	//legacy bollocks
 			sig = p->signature;
 		}
+
+		//to validate it, we need a single blob that composits all the parts that might need to be validated. mostly just prefix and file hash.
 		hashsize = Base16_DecodeBlock(p->filesha512, hashdata, sizeof(hashdata));
+
+		if (p->packprefix && *p->packprefix)
+		{	//need to a bit of extra hashing when we have extra data, to get it to fit.
+			hashfunc_t *h = &hash_sha2_512;
+			void *ctx = alloca(h->contextsize);
+			h->init(ctx);
+			h->process(ctx, p->packprefix, strlen(p->packprefix));
+			h->process(ctx, "\0", 1);
+			h->process(ctx, hashdata, hashsize);
+			h->terminate(hashdata, ctx);
+			hashsize = h->digestsize;
+		}
+
+		//and the proof...
 		signsize = Base64_DecodeBlock(sig, NULL, signdata, sizeof(signdata));
 		r = VH_UNSUPPORTED;//preliminary
 	}
@@ -470,7 +489,10 @@ static void PM_ValidateAuthenticity(package_t *p, enum hashvalidation_e validate
 	if (r == VH_CORRECT)
 		p->flags |= DPF_SIGNATUREACCEPTED;
 	else if (r == VH_INCORRECT)
+	{
+		Con_Printf("Signature verification failed\n");
 		p->flags |= DPF_SIGNATUREREJECTED;
+	}
 	else if (validated == VH_CORRECT && p->filesize && (p->filesha1||p->filesha512))
 		p->flags |= DPF_SIGNATUREACCEPTED;	//parent validation was okay, expand that to individual packages too.
 	else if (p->signature)
@@ -609,7 +631,7 @@ static void PM_ValidatePackage(package_t *p)
 					}
 					else if (p->qhash)
 					{
-						searchpathfuncs_t *archive = FS_OpenPackByExtension(pf, NULL, n, n);
+						searchpathfuncs_t *archive = FS_OpenPackByExtension(pf, NULL, n, n, p->packprefix);
 
 						if (archive)
 						{
@@ -744,7 +766,7 @@ static qboolean PM_MergePackage(package_t *oldp, package_t *newp)
 			}
 		}
 		//these flags should only remain set if set in both.
-		oldp->flags &= ~(DPF_FORGETONUNINSTALL|DPF_TESTING|DPF_MANIFEST) | (newp->flags & (DPF_FORGETONUNINSTALL|DPF_TESTING|DPF_MANIFEST));
+		oldp->flags &= ~(DPF_FORGETONUNINSTALL|DPF_TESTING|DPF_MANIFEST|DPF_GUESSED) | (newp->flags & (DPF_FORGETONUNINSTALL|DPF_TESTING|DPF_MANIFEST|DPF_GUESSED));
 
 		for (nd = newp->deps; nd ; nd = nd->next)
 		{
@@ -963,6 +985,7 @@ static qboolean PM_CheckFile(const char *filename, enum fs_relative base)
 	return false;
 }
 
+static void PM_Plugin_Source_CacheFinished(void *ctx, vfsfile_t *f);
 static void PM_AddSubListModule(void *module, plugupdatesourcefuncs_t *funcs, const char *url, const char *prefix, unsigned int flags)
 {
 	size_t i;
@@ -1013,8 +1036,11 @@ static void PM_AddSubListModule(void *module, plugupdatesourcefuncs_t *funcs, co
 		pm_source[i].prefix = BZ_Malloc(strlen(prefix)+1);
 		strcpy(pm_source[i].prefix, prefix);
 
-		downloadablessequence++;
+		pm_sequence++;
 	}
+
+	if (pm_source[i].funcs && (pm_source[i].status == SRCSTAT_UNTRIED) && (pm_source[i].flags&SRCFL_ENABLED))	//cache only!
+		pm_source[i].funcs->Update(pm_source[i].url, VFS_OpenPipeCallback(PM_Plugin_Source_CacheFinished, &pm_source[i]), true);
 }
 static void PM_AddSubList(const char *url, const char *prefix, unsigned int flags)
 {
@@ -1035,7 +1061,7 @@ static void PM_RemSubList(const char *url)
 			}
 			//don't actually remove it, that'd mess up the indexes which could break stuff like PM_ListDownloaded callbacks. :(
 			pm_source[i].flags = SRCFL_HISTORIC;	//forget enablement state etc. we won't bother writing it.
-			downloadablessequence++;	//make sure any menus hide it.
+			pm_sequence++;	//make sure any menus hide it.
 			break;
 		}
 		else
@@ -1232,6 +1258,8 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 				flags |= DPF_TESTING;
 			else if (!strcmp(key, "guessed"))
 				flags |= DPF_GUESSED;
+			else if (!strcmp(key, "trusted") && (source->parseflags&DPF_ENABLED))
+				flags |= DPF_TRUSTED;
 			else if (!strcmp(key, "stale") && source->version==2)
 				flags &= ~DPF_ENABLED;	//known about, (probably) cached, but not actually enabled.
 			else if (!strcmp(key, "enabled") && source->version>2)
@@ -1242,6 +1270,8 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 			{
 				if (!Q_strcasecmp(val, "bin"))
 					p->fsroot = FS_BINARYPATH;
+				else if (!Q_strcasecmp(val, "lib"))
+					p->fsroot = FS_LIBRARYPATH;
 				else
 					p->fsroot = FS_ROOT;
 			}
@@ -1344,7 +1374,7 @@ static const char *PM_ParsePackage(struct packagesourceinfo_s *source, const cha
 		}
 		else if (!Q_strcasecmp(p->arch, THISARCH))
 		{
-			if ((p->fsroot == FS_ROOT || p->fsroot == FS_BINARYPATH) && !*p->gamedir && p->priority == PM_DEFAULTPRIORITY)
+			if ((p->fsroot == FS_ROOT || p->fsroot == FS_BINARYPATH || p->fsroot == FS_LIBRARYPATH) && !*p->gamedir && p->priority == PM_DEFAULTPRIORITY)
 				p->flags |= DPF_PLUGIN;
 		}
 		else
@@ -1456,7 +1486,7 @@ static qboolean PM_ParsePackageList(const char *f, unsigned int parseflags, cons
 		return forcewrite;	//it's not the right version.
 	}
 
-	downloadablessequence++;
+	pm_sequence++;
 
 	while(*f)
 	{
@@ -1498,7 +1528,7 @@ static qboolean PM_ParsePackageList(const char *f, unsigned int parseflags, cons
 					size_t signsize;
 					enum hashvalidation_e r;
 					int i;
-					hashfunc_t *hf = &hash_sha512;
+					hashfunc_t *hf = &hash_sha2_512;
 					void *hashdata = Z_Malloc(hf->digestsize);
 					void *hashctx = Z_Malloc(hf->contextsize);
 					tokstart = COM_StringParse (tokstart, authority, sizeof(authority), false, false);
@@ -1514,7 +1544,10 @@ static qboolean PM_ParsePackageList(const char *f, unsigned int parseflags, cons
 
 					pubkey = Auth_GetKnownCertificate(authority, &pubkeysize);
 					if (!pubkey)
+					{
 						r = VH_AUTHORITY_UNKNOWN;
+						Con_Printf(CON_ERROR"%s: Unknown signature authority %s\n", url, authority);
+					}
 
 					//try and get one of our providers to verify it...
 					for (i = 0; r==VH_UNSUPPORTED && i < cryptolib_count; i++)
@@ -1671,7 +1704,7 @@ void PM_EnumeratePlugins(void (*callback)(const char *name, qboolean blocked))
 				{
 					if (!Q_strncasecmp(d->name, PLUGINPREFIX, strlen(PLUGINPREFIX)))
 					{
-						qboolean blocked = PM_NameIsInStrings(manifestpackages, va("!%s", p->name));
+						qboolean blocked = PM_NameIsInStrings(fs_manifest?fs_manifest->installupd:NULL, va("!%s", p->name));
 						callback(d->name, blocked);
 					}
 				}
@@ -1709,7 +1742,7 @@ void PM_EnumerateMaps(const char *partial, struct xcommandargcompletioncb_s *ctx
 					{
 						Q_snprintfz(mname, sizeof(mname), "%s:%s", p->name, d->name);
 						if (!Q_strncasecmp(mname, partial, partiallen))
-							ctx->cb(mname, NULL, NULL, ctx);
+							ctx->cb(mname, p->description, NULL, ctx);
 					}
 				}
 			}
@@ -1729,7 +1762,7 @@ static char *PM_GetMetaTextFromFile(vfsfile_t *file, const char *filename, char 
 	*qhash = 0;
 
 	file->Close = Host_StubClose;	//so it doesn't go away without our say
-	archive = FS_OpenPackByExtension(file, NULL, filename, filename);
+	archive = FS_OpenPackByExtension(file, NULL, filename, filename, "");
 	if (archive)
 	{
 		flocation_t loc;
@@ -1765,6 +1798,8 @@ static char *PM_GetMetaTextFromFile(vfsfile_t *file, const char *filename, char 
 
 		archive->ClosePath(archive);
 	}
+	else
+		Con_Printf("No archive in %s\n", filename);
 	file->Close = OriginalClose;
 	return ret;
 }
@@ -1917,6 +1952,7 @@ static package_t *PM_FindExactPackage(const char *packagename, const char *arch,
 static package_t *PM_FindPackage(const char *packagename);
 static int QDECL PM_EnumeratedPlugin (const char *name, qofs_t size, time_t mtime, void *param, searchpathfuncs_t *spath)
 {
+	enum fs_relative fsroot = (qintptr_t)param;
 	static const char *knownarch[] =
 	{
 		"x32", "x64", "amd64", "x86",	//various x86 ABIs
@@ -1966,6 +2002,8 @@ static int QDECL PM_EnumeratedPlugin (const char *name, qofs_t size, time_t mtim
 	{
 		if (!(p->flags & DPF_PLUGIN))
 			continue;
+		if (p->fsroot != fsroot)
+			continue;
 		for (dep = p->deps; dep; dep = dep->next)
 		{
 			if (dep->dtype != DEP_FILE)
@@ -1984,7 +2022,7 @@ static int QDECL PM_EnumeratedPlugin (const char *name, qofs_t size, time_t mtim
 	//FIXME: should be checking whether there's a package that provides the file...
 
 
-	f = FS_OpenVFS(name, "rb", FS_BINARYPATH);
+	f = FS_OpenVFS(name, "rb", fsroot);
 	if (f)
 	{
 		char qhash[16];
@@ -1992,7 +2030,7 @@ static int QDECL PM_EnumeratedPlugin (const char *name, qofs_t size, time_t mtim
 		VFS_CLOSE(f);
 	}
 
-	return PM_FileInstalled_Internal(pkgname, "Plugins/", vmname, name, FS_BINARYPATH, DPF_PLUGIN|DPF_SIGNATUREACCEPTED, metainfo,
+	return PM_FileInstalled_Internal(pkgname, "Plugins/", vmname, name, fsroot, DPF_PLUGIN|DPF_TRUSTED, metainfo,
 #ifdef ENABLEPLUGINSBYDEFAULT
 			true
 #else
@@ -2059,6 +2097,7 @@ static void PM_PreparePackageList(void)
 		{
 			unsigned int fl = SRCFL_MANIFEST;
 			char *s = fs_manifest->downloadsurl;
+
 			if (fs_manifest->security==MANIFEST_SECURITY_NOT)
 				fl |= SRCFL_DISABLED;	//don't trust it, don't even prompt.
 
@@ -2069,12 +2108,30 @@ static void PM_PreparePackageList(void)
 #ifdef PLUGINS
 		{
 			char nat[MAX_OSPATH];
-			FS_NativePath("", FS_BINARYPATH, nat, sizeof(nat));
-			Con_DPrintf("Loading plugins from \"%s\"\n", nat);
-			Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_DL_POSTFIX, PM_EnumeratedPlugin, &pluginsadded, NULL);
+			if (FS_NativePath("", FS_BINARYPATH, nat, sizeof(nat)))
+			{
+				Con_DPrintf("Loading plugins from \"%s\"\n", nat);
+				Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_DL_POSTFIX, PM_EnumeratedPlugin, (void*)FS_BINARYPATH, NULL);
+			}
+			if (FS_NativePath("", FS_LIBRARYPATH, nat, sizeof(nat)))
+			{
+				Con_DPrintf("Loading plugins from \"%s\"\n", nat);
+				Sys_EnumerateFiles(nat, PLUGINPREFIX"*" ARCH_DL_POSTFIX, PM_EnumeratedPlugin, (void*)FS_LIBRARYPATH, NULL);
+			}
 		}
 #endif
 	}
+}
+
+void PM_ManifestChanged(ftemanifest_t *man)
+{	//gamedir or something changed. reset the package manager stuff.
+	if (!man)
+	{	//shutting down... don't reload anything.
+		PM_Shutdown(false);
+		return;
+	}
+	PM_Shutdown(true);
+	PM_UpdatePackageList(false);
 }
 
 void PM_LoadPackages(searchpath_t **oldpaths, const char *parent_pure, const char *parent_logical, searchpath_t *search, unsigned int loadstuff, int minpri, int maxpri)
@@ -2084,35 +2141,39 @@ void PM_LoadPackages(searchpath_t **oldpaths, const char *parent_pure, const cha
 	char temp[MAX_OSPATH];
 	int pri;
 
-	//figure out what we've previously installed.
-	PM_PreparePackageList();
-
 	do
 	{
 		//find the lowest used priority above the previous
 		pri = maxpri;
 		for (p = availablepackages; p; p = p->next)
 		{
-			if ((p->flags & DPF_ENABLED) && p->qhash && p->priority>=minpri&&p->priority<pri && !Q_strcasecmp(parent_pure, p->gamedir))
+			if ((p->flags & (DPF_ENABLED|DPF_MANIMARKED)) && p->priority>=minpri&&p->priority<pri && !Q_strcasecmp(parent_pure, p->gamedir))
 				pri = p->priority;
 		}
 		minpri = pri+1;
 
 		for (p = availablepackages; p; p = p->next)
 		{
-			if ((p->flags & DPF_ENABLED) && p->qhash && p->priority==pri && !Q_strcasecmp(parent_pure, p->gamedir))
+			if ((p->flags & (DPF_ENABLED|DPF_MANIMARKED)) && p->priority==pri && !Q_strcasecmp(parent_pure, p->gamedir))
 			{
+				char *qhash = (p->qhash&&*p->qhash)?p->qhash:NULL;
+				unsigned int fsfl = SPF_COPYPROTECTED;
+				if (qhash && (p->flags&DPF_TRUSTED))
+					;
+				else
+					fsfl |= SPF_UNTRUSTED;	//never trust it if we can't provide it
+
 				for (d = p->deps; d; d = d->next)
 				{
 					if (d->dtype == DEP_FILE)
 					{
 						Q_snprintfz(temp, sizeof(temp), "%s/%s", p->gamedir, d->name);
-						FS_AddHashedPackage(oldpaths, parent_pure, parent_logical, search, loadstuff, temp, *p->qhash?p->qhash:NULL, p->packprefix, SPF_COPYPROTECTED|SPF_UNTRUSTED);
+						FS_AddHashedPackage(oldpaths, parent_pure, parent_logical, search, loadstuff, temp, qhash, p->packprefix, fsfl);
 					}
 					else if (d->dtype == DEP_CACHEFILE)
 					{
 						Q_snprintfz(temp, sizeof(temp), "downloads/%s", d->name);
-						FS_AddHashedPackage(oldpaths, parent_pure, parent_logical, NULL, loadstuff, temp, *p->qhash?p->qhash:NULL, p->packprefix, SPF_COPYPROTECTED|SPF_UNTRUSTED);
+						FS_AddHashedPackage(oldpaths, parent_pure, parent_logical, NULL, loadstuff, temp, qhash, p->packprefix, fsfl);
 					}
 				}
 			}
@@ -2125,7 +2186,7 @@ void PM_Shutdown(qboolean soft)
 	size_t i, pm_numoldsources = pm_numsources;
 	//free everything...
 
-	downloadablessequence++;
+	pm_sequence++;
 
 	pm_numsources = 0;
 	for (i = 0; i < pm_numoldsources; i++)
@@ -2290,6 +2351,8 @@ static void PM_UnmarkPackage(package_t *package, unsigned int markflag)
 {
 	package_t *o;
 	struct packagedep_s *dep;
+
+	COM_AssertMainThread("PM_UnmarkPackage");
 
 	if (pkg_updating)
 		return;
@@ -2471,9 +2534,12 @@ static qboolean PM_MarkPackage(package_t *package, unsigned int markflag)
 }
 
 //just flag stuff as needing updating
+#define UPDAVAIL_UPDATE		1	//there's regular updates available. show the updates menu.
+#define UPDAVAIL_REQUIRED	2	//important updates that require the user to confirm
+#define UPDAVAIL_FORCED		4	//trusted updates that are insisted on by the manifest.
 unsigned int PM_MarkUpdates (void)
 {
-	unsigned int changecount = 0;
+	unsigned int ret = 0;
 	package_t *p, *o, *b;
 #ifdef WEBCLIENT
 	package_t *e = NULL;
@@ -2481,10 +2547,12 @@ unsigned int PM_MarkUpdates (void)
 	int them;
 #endif
 
-	if (manifestpackages)
+	doautoupdate = 0;
+
+	if (fs_manifest && fs_manifest->installupd)
 	{
 		char tok[1024];
-		char *strings = manifestpackages;
+		char *strings = fs_manifest->installupd;
 		while (strings && *strings)
 		{
 			qboolean isunwanted = (*tok=='!');
@@ -2499,17 +2567,20 @@ unsigned int PM_MarkUpdates (void)
 				if (p)
 				{
 					if (PM_MarkPackage(p, DPF_AUTOMARKED))
-						changecount++;
+						ret |= UPDAVAIL_UPDATE;
 				}
 			}
 			else if (isunwanted)
 			{
 				PM_UnmarkPackage(p, DPF_AUTOMARKED);	//try and unmark it.
-				changecount++;
+				ret |= UPDAVAIL_UPDATE;
 			}
 			else if (!(p->flags & DPF_ENABLED))
-				changecount++;
+				ret |= UPDAVAIL_UPDATE;
 		}
+
+		if (ret)
+			ret = (fs_manifest->security==MANIFEST_SECURITY_INSTALLER)?UPDAVAIL_FORCED:UPDAVAIL_REQUIRED;
 	}
 
 	for (p = availablepackages; p; p = p->next)
@@ -2545,7 +2616,7 @@ unsigned int PM_MarkUpdates (void)
 			{
 				if (PM_MarkPackage(b, p->flags&DPF_MARKED))
 				{
-					changecount++;
+					ret |= UPDAVAIL_UPDATE;
 					PM_UnmarkPackage(p, DPF_MARKED);
 				}
 			}
@@ -2557,12 +2628,12 @@ unsigned int PM_MarkUpdates (void)
 		if (pkg_autoupdate.ival >= UPD_STABLE)
 		{
 			if (PM_MarkPackage(e, DPF_AUTOMARKED))
-				changecount++;
+				ret |= UPDAVAIL_UPDATE;
 		}
 	}
 #endif
 
-	return changecount;
+	return ret;
 }
 
 #if defined(M_Menu_Prompt) || defined(SERVERONLY)
@@ -2686,8 +2757,9 @@ static void PM_ListDownloaded(struct dl_download *dl)
 
 	if (f)
 	{
-		pm_source[listidx].status = SRCSTAT_OBTAINED;
-		downloadablessequence++;
+		if (dl->replycode != 100)
+			pm_source[listidx].status = SRCSTAT_OBTAINED;
+		pm_sequence++;
 		if (pm_source[listidx].flags & SRCFL_UNSAFE)
 			PM_ParsePackageList(f, DPF_SIGNATUREACCEPTED, dl->url, pm_source[listidx].prefix);
 		else
@@ -2710,54 +2782,24 @@ static void PM_ListDownloaded(struct dl_download *dl)
 		pm_source[listidx].status = SRCSTAT_FAILED_EOF;
 	BZ_Free(f);
 
-	if (!doautoupdate && !domanifestinstall)
+	if (!doautoupdate)
 		return;	//don't spam this.
-
+	if (pm_pendingprompts)
+		return;
 	//check if we're still waiting
 	for (listidx = 0; listidx < pm_numsources; listidx++)
 	{
 		if (pm_source[listidx].status == SRCSTAT_PENDING)
-			break;
+			return;
 	}
-/*
-	if (domanifestinstall == MANIFEST_SECURITY_INSTALLER && manifestpackages)
-	{
-		package_t *meta;
-		meta = PM_MarkedPackage(manifestpackages);
-		if (!meta)
-		{
-			meta = PM_FindPackage(manifestpackages);
-			if (meta)
-			{
-				PM_RevertChanges();
-				PM_MarkPackage(meta);
-				PM_ApplyChanges();
-
-#ifdef DOWNLOADMENU
-				if (!isDedicated)
-				{
-					if (Key_Dest_Has(kdm_emenu))
-					{
-						Key_Dest_Remove(kdm_emenu);
-					}
-#ifdef MENU_DAT
-					if (Key_Dest_Has(kdm_gmenu))
-						MP_Toggle(0);
-#endif
-					Cmd_ExecuteString("menu_download\n", RESTRICT_LOCAL);
-				
-				}
-#endif
-				return;
-			}
-		}
-	}
-*/
 
 	//if our downloads finished and we want to shove it in the user's face then do so now.
-	if ((doautoupdate || domanifestinstall == MANIFEST_SECURITY_DEFAULT) && listidx == pm_numsources)
+	if (doautoupdate && listidx == pm_numsources)
 	{
-		if (PM_MarkUpdates())
+		int updates = PM_MarkUpdates();
+		if (updates == UPDAVAIL_FORCED)
+			PM_PromptApplyChanges();
+		else if (updates)
 		{
 #ifdef DOWNLOADMENU
 			if (!isDedicated)
@@ -2772,7 +2814,7 @@ static void PM_ListDownloaded(struct dl_download *dl)
 	}
 }
 static void PM_Plugin_Source_Finished(void *ctx, vfsfile_t *f)
-{
+{	//plugin closed its write end.
 	struct pm_source_s *src = ctx;
 	size_t idx = src-pm_source;
 	if (idx < pm_numsources && ctx == &pm_source[idx])
@@ -2785,19 +2827,36 @@ static void PM_Plugin_Source_Finished(void *ctx, vfsfile_t *f)
 			dl.status = DL_FINISHED;
 			dl.user_num = src-pm_source;
 			dl.url = src->url;
+			dl.replycode = 200;	//okay
 			src->curdl = &dl;
 			PM_ListDownloaded(&dl);
 		}
 	}
-	else
+	VFS_CLOSE(f);
+}
+static void PM_Plugin_Source_CacheFinished(void *ctx, vfsfile_t *f)
+{	//plugin closed its write end.
+	struct pm_source_s *src = ctx;
+	size_t idx = src-pm_source;
+	if (idx < pm_numsources && ctx == &pm_source[idx])
 	{
-		Con_Printf("PM_Plugin_Source_Finished: stale\n");
+		COM_AssertMainThread("PM_Plugin_Source_CacheFinished");
+		if (!src->curdl)
+		{
+			struct dl_download dl;
+			dl.file = f;
+			dl.status = DL_FINISHED;
+			dl.user_num = src-pm_source;
+			dl.url = src->url;
+			dl.replycode = 100;
+			src->curdl = &dl;
+			PM_ListDownloaded(&dl);
+		}
 	}
 	VFS_CLOSE(f);
 }
 #endif
 #if defined(HAVE_CLIENT) && defined(WEBCLIENT)
-static void PM_UpdatePackageList(qboolean autoupdate, int retry);
 static void PM_AllowPackageListQuery_Callback(void *ctx, promptbutton_t opt)
 {
 	unsigned int i;
@@ -2812,16 +2871,13 @@ static void PM_AllowPackageListQuery_Callback(void *ctx, promptbutton_t opt)
 				pm_source[i].flags |= SRCFL_ONCE;
 		}
 	}
-	PM_UpdatePackageList(false, 0);
+	PM_UpdatePackageList(false);
 }
 #endif
 //retry 1==
-static void PM_UpdatePackageList(qboolean autoupdate, int retry)
+static void PM_UpdatePackageList(qboolean autoupdate)
 {
 	unsigned int i;
-
-	if (retry>1)
-		PM_Shutdown(true);
 
 	PM_PreparePackageList();
 
@@ -2834,20 +2890,27 @@ static void PM_UpdatePackageList(qboolean autoupdate, int retry)
 #else
 	doautoupdate |= autoupdate;
 
+	if (COM_CheckParm("-noupdate") || COM_CheckParm("-noupdates"))
+		allowphonehome = false;
 	#ifdef HAVE_CLIENT
-		if (pkg_autoupdate.ival >= 1)
-			allowphonehome = true;
-		else if (allowphonehome == -1)
-		{
-			if (retry)
-				Menu_Prompt(PM_AllowPackageListQuery_Callback, NULL, "Query updates list?\n", "Okay", NULL, "Nope", true);
-			return;
-		}
+	else if (pkg_autoupdate.ival >= 1)
+		allowphonehome = true;
+	else if (allowphonehome == -1)
+	{
+		if (doautoupdate)
+			Menu_Prompt(PM_AllowPackageListQuery_Callback, NULL, localtext("Query updates list?\n"), "Okay", NULL, "Nope", true);
+		return;
+	}
+
+	if (allowphonehome && PM_AreSourcesNew(true))
+		return;
 	#else
 		allowphonehome = true; //erk.
 	#endif
-	if (COM_CheckParm("-noupdate") || COM_CheckParm("-noupdates"))
-		allowphonehome = false;
+
+	if (pm_pendingprompts)
+		return;
+	autoupdate = doautoupdate;
 
 	//kick off the initial tier of list-downloads.
 	for (i = 0; i < pm_numsources; i++)
@@ -2866,12 +2929,12 @@ static void PM_UpdatePackageList(qboolean autoupdate, int retry)
 			continue;
 		}
 		if (pm_source[i].status == SRCSTAT_OBTAINED)
-			return;	//already successful once. no need to do it again.
+			continue;	//already successful once. no need to do it again.
 		pm_source[i].flags &= ~SRCFL_ONCE;
 
 		if (pm_source[i].funcs)
 		{
-			pm_source[i].funcs->Update(pm_source[i].url, VFS_OpenPipeCallback(PM_Plugin_Source_Finished, &pm_source[i]));
+			pm_source[i].funcs->Update(pm_source[i].url, VFS_OpenPipeCallback(PM_Plugin_Source_Finished, &pm_source[i]), false);
 		}
 		else
 		{
@@ -2895,9 +2958,6 @@ static void PM_UpdatePackageList(qboolean autoupdate, int retry)
 
 	if (autoupdate)
 	{
-#ifdef WEBCLIENT
-		doautoupdate = 0;
-#endif
 		if (PM_MarkUpdates())
 		{
 #ifdef DOWNLOADMENU
@@ -2925,7 +2985,7 @@ qboolean PM_RegisterUpdateSource(void *module, plugupdatesourcefuncs_t *funcs)
 		}
 	}
 	else
-		PM_AddSubListModule(module, funcs, va("plug:%s", funcs->description), NULL, SRCFL_PLUGIN);
+		PM_AddSubListModule(module, funcs, va("plug:%s", funcs->description), NULL, SRCFL_PLUGIN|SRCFL_ENABLED);	//plugin sources default to enabled as you can always just disable the plugin that provides it.
 	return true;
 }
 
@@ -2973,18 +3033,260 @@ static void COM_QuotedKeyVal(const char *key, const char *val, char *buf, size_t
 
 	Q_strncatz(buf, "\"\n", bufsize);
 }
+static void PM_WriteInstalledPackage_v3(package_t *p, char *buf, size_t bufsize)
+{
+	struct packagedep_s *dep;
+
+	buf[0] = '{';
+	buf[1] = '\n';
+	buf[2] = 0;
+	COM_QuotedKeyVal("package", p->name, buf, bufsize);
+	COM_QuotedKeyVal("category", p->category, buf, bufsize);
+	if (p->flags & DPF_ENABLED)
+		COM_QuotedKeyVal("enabled", "1", buf, bufsize);
+	if (p->flags & DPF_GUESSED)
+		COM_QuotedKeyVal("guessed", "1", buf, bufsize);
+	if (p->flags & DPF_TRUSTED)
+		COM_QuotedKeyVal("trusted", "1", buf, bufsize);
+	if (*p->title && strcmp(p->title, p->name))
+		COM_QuotedKeyVal("title", p->title, buf, bufsize);
+	if (*p->version)
+		COM_QuotedKeyVal("ver", p->version, buf, bufsize);
+	COM_QuotedKeyVal("gamedir", p->gamedir, buf, bufsize);
+	if (p->qhash)
+		COM_QuotedKeyVal("qhash", p->qhash, buf, bufsize);
+	if (p->priority!=PM_DEFAULTPRIORITY)
+		COM_QuotedKeyVal("priority", va("%i", p->priority), buf, bufsize);
+	if (p->arch)
+		COM_QuotedKeyVal("arch", p->arch, buf, bufsize);
+
+	if (p->license)
+		COM_QuotedKeyVal("license", p->license, buf, bufsize);
+	if (p->website)
+		COM_QuotedKeyVal("website", p->website, buf, bufsize);
+	if (p->author)
+		COM_QuotedKeyVal("author", p->author, buf, bufsize);
+	if (p->description)
+		COM_QuotedKeyVal("desc", p->description, buf, bufsize);
+	if (p->previewimage)
+		COM_QuotedKeyVal("preview", p->previewimage, buf, bufsize);
+	if (p->filesize)
+		COM_QuotedKeyVal("filesize", va("%"PRIu64, p->filesize), buf, bufsize);
+
+	if (p->fsroot == FS_BINARYPATH)
+		COM_QuotedKeyVal("root", "bin", buf, bufsize);
+	else if (p->fsroot == FS_LIBRARYPATH)
+		COM_QuotedKeyVal("root", "lib", buf, bufsize);
+	if (p->packprefix)
+		COM_QuotedKeyVal("packprefix", p->packprefix, buf, bufsize);
+
+	for (dep = p->deps; dep; dep = dep->next)
+	{
+		safeswitch(dep->dtype)
+		{
+		case DEP_FILE:			COM_QuotedKeyVal("file",		dep->name, buf, bufsize); break;
+		case DEP_CACHEFILE:		COM_QuotedKeyVal("cachefile",	dep->name, buf, bufsize); break;
+		case DEP_MAP:			COM_QuotedKeyVal("map",			dep->name, buf, bufsize); break;
+		case DEP_REQUIRE:		COM_QuotedKeyVal("depend",		dep->name, buf, bufsize); break;
+		case DEP_CONFLICT:		COM_QuotedKeyVal("conflict",	dep->name, buf, bufsize); break;
+		case DEP_REPLACE:		COM_QuotedKeyVal("replace",		dep->name, buf, bufsize); break;
+		case DEP_FILECONFLICT:	COM_QuotedKeyVal("fileconflict",dep->name, buf, bufsize); break;
+		case DEP_RECOMMEND:		COM_QuotedKeyVal("recommend",	dep->name, buf, bufsize); break;
+		case DEP_NEEDFEATURE:	COM_QuotedKeyVal("need",		dep->name, buf, bufsize); break;
+		case DEP_SUGGEST:		COM_QuotedKeyVal("suggest",		dep->name, buf, bufsize); break;
+		case DEP_SOURCE:		COM_QuotedKeyVal("source",		dep->name, buf, bufsize); break;
+		case DEP_EXTRACTNAME:	COM_QuotedKeyVal("unzipfile",	dep->name, buf, bufsize); break;
+		safedefault:
+			break;
+		}
+	}
+
+	if (p->flags & DPF_TESTING)
+		COM_QuotedKeyVal("test", "1", buf, bufsize);
+
+	if ((p->flags & DPF_AUTOMARKED) && !(p->flags & DPF_USERMARKED))
+		COM_QuotedKeyVal("auto", "1", buf, bufsize);
+
+	Q_strncatz(buf, "}", bufsize);
+	Q_strncatz(buf, "\n", bufsize);
+}
+static void PM_WriteInstalledPackage_v2(package_t *p, char *buf, size_t bufsize)
+{
+	struct packagedep_s *dep;
+
+	buf[0] = 0;
+	COM_QuotedString(va("%s%s", p->category, p->name), buf, bufsize, false);
+	if (p->flags & DPF_ENABLED)
+	{	//v3+
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("enabled=1"), buf, bufsize);
+	}
+	else
+	{	//v2
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("stale=1"), buf, bufsize);
+	}
+	if (p->flags & DPF_TRUSTED)
+	{	//v3+. was signed when installed.
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("trusted=1"), buf, bufsize);
+	}
+	if (p->flags & DPF_GUESSED)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("guessed=1"), buf, bufsize);
+	}
+	if (*p->title && strcmp(p->title, p->name))
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("title=%s", p->title), buf, bufsize);
+	}
+	if (*p->version)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("ver=%s", p->version), buf, bufsize);
+	}
+	//if (*p->gamedir)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("gamedir=%s", p->gamedir), buf, bufsize);
+	}
+	if (p->qhash)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("qhash=%s", p->qhash), buf, bufsize);
+	}
+	if (p->priority!=PM_DEFAULTPRIORITY)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("priority=%i", p->priority), buf, bufsize);
+	}
+	if (p->arch)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("arch=%s", p->arch), buf, bufsize);
+	}
+
+	if (p->license)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("license=%s", p->license), buf, bufsize);
+	}
+	if (p->website)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("website=%s", p->website), buf, bufsize);
+	}
+	if (p->author)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("author=%s", p->author), buf, bufsize);
+	}
+	if (p->description)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("desc=%s", p->description), buf, bufsize);
+	}
+	if (p->previewimage)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("preview=%s", p->previewimage), buf, bufsize);
+	}
+	if (p->filesize)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("filesize=%"PRIu64, p->filesize), buf, bufsize);
+	}
+
+	if (p->fsroot == FS_BINARYPATH)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat("root=bin", buf, bufsize);
+	}
+	if (p->packprefix)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat(va("packprefix=%s", p->packprefix), buf, bufsize);
+	}
+
+	for (dep = p->deps; dep; dep = dep->next)
+	{
+		if (dep->dtype == DEP_FILE)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("file=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_CACHEFILE)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("cachefile=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_MAP)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("map=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_REQUIRE)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("depend=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_CONFLICT)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("conflict=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_REPLACE)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("replace=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_FILECONFLICT)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("fileconflict=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_RECOMMEND)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("recommend=%s", dep->name), buf, bufsize);
+		}
+		else if (dep->dtype == DEP_NEEDFEATURE)
+		{
+			Q_strncatz(buf, " ", bufsize);
+			COM_QuotedConcat(va("need=%s", dep->name), buf, bufsize);
+		}
+	}
+
+	if (p->flags & DPF_TESTING)
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat("test=1", buf, bufsize);
+	}
+
+	if ((p->flags & DPF_AUTOMARKED) && !(p->flags & DPF_USERMARKED))
+	{
+		Q_strncatz(buf, " ", bufsize);
+		COM_QuotedConcat("auto", buf, bufsize);
+	}
+
+	buf[bufsize-2] = 0;	//just in case.
+	Q_strncatz(buf, "\n", bufsize);
+}
 static void PM_WriteInstalledPackages(void)
 {
 	char buf[65536];
 	int i;
 	char *s;
 	package_t *p;
-	struct packagedep_s *dep;
 	vfsfile_t *f = FS_OpenVFS(INSTALLEDFILES, "wb", FS_ROOT);
 	qboolean v3 = false;
 	if (!f)
 	{
-		Con_Printf("package manager: Can't update installed list\n");
+		if (FS_NativePath(INSTALLEDFILES, FS_ROOT, buf, sizeof(buf)))
+			Con_Printf("package manager: Can't write %s\n", buf);
+		else
+			Con_Printf("package manager: Can't update installed list\n");
 		return;
 	}
 
@@ -3021,233 +3323,11 @@ static void PM_WriteInstalledPackages(void)
 	{
 		if (p->flags & (DPF_PRESENT|DPF_ENABLED))
 		{
-			buf[0] = 0;
 			if (v3)
-			{
-				buf[0] = '{';
-				buf[1] = '\n';
-				buf[2] = 0;
-				COM_QuotedKeyVal("package", p->name, buf, sizeof(buf));
-				COM_QuotedKeyVal("category", p->category, buf, sizeof(buf));
-				if (p->flags & DPF_ENABLED)
-					COM_QuotedKeyVal("enabled", "1", buf, sizeof(buf));
-				if (p->flags & DPF_GUESSED)
-					COM_QuotedKeyVal("guessed", "1", buf, sizeof(buf));
-				if (*p->title && strcmp(p->title, p->name))
-					COM_QuotedKeyVal("title", p->title, buf, sizeof(buf));
-				if (*p->version)
-					COM_QuotedKeyVal("ver", p->version, buf, sizeof(buf));
-				COM_QuotedKeyVal("gamedir", p->gamedir, buf, sizeof(buf));
-				if (p->qhash)
-					COM_QuotedKeyVal("qhash", p->qhash, buf, sizeof(buf));
-				if (p->priority!=PM_DEFAULTPRIORITY)
-					COM_QuotedKeyVal("priority", va("%i", p->priority), buf, sizeof(buf));
-				if (p->arch)
-					COM_QuotedKeyVal("arch", p->arch, buf, sizeof(buf));
-
-				if (p->license)
-					COM_QuotedKeyVal("license", p->license, buf, sizeof(buf));
-				if (p->website)
-					COM_QuotedKeyVal("website", p->website, buf, sizeof(buf));
-				if (p->author)
-					COM_QuotedKeyVal("author", p->author, buf, sizeof(buf));
-				if (p->description)
-					COM_QuotedKeyVal("desc", p->description, buf, sizeof(buf));
-				if (p->previewimage)
-					COM_QuotedKeyVal("preview", p->previewimage, buf, sizeof(buf));
-				if (p->filesize)
-					COM_QuotedKeyVal("filesize", va("%"PRIu64, p->filesize), buf, sizeof(buf));
-
-				if (p->fsroot == FS_BINARYPATH)
-					COM_QuotedKeyVal("root", "bin", buf, sizeof(buf));
-				if (p->packprefix)
-					COM_QuotedKeyVal("packprefix", p->packprefix, buf, sizeof(buf));
-
-				for (dep = p->deps; dep; dep = dep->next)
-				{
-					if (dep->dtype == DEP_FILE)
-						COM_QuotedKeyVal("file", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_CACHEFILE)
-						COM_QuotedKeyVal("cachefile", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_MAP)
-						COM_QuotedKeyVal("map", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_REQUIRE)
-						COM_QuotedKeyVal("depend", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_CONFLICT)
-						COM_QuotedKeyVal("conflict", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_REPLACE)
-						COM_QuotedKeyVal("replace", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_FILECONFLICT)
-						COM_QuotedKeyVal("fileconflict", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_RECOMMEND)
-						COM_QuotedKeyVal("recommend", dep->name, buf, sizeof(buf));
-					else if (dep->dtype == DEP_NEEDFEATURE)
-						COM_QuotedKeyVal("need", dep->name, buf, sizeof(buf));
-				}
-
-				if (p->flags & DPF_TESTING)
-					COM_QuotedKeyVal("test", "1", buf, sizeof(buf));
-
-				if ((p->flags & DPF_AUTOMARKED) && !(p->flags & DPF_USERMARKED))
-					COM_QuotedKeyVal("auto", "1", buf, sizeof(buf));
-
-				Q_strncatz(buf, "}", sizeof(buf));
-			}
+				PM_WriteInstalledPackage_v3(p, buf, sizeof(buf));
 			else
-			{
-				COM_QuotedString(va("%s%s", p->category, p->name), buf, sizeof(buf), false);
-				if (p->flags & DPF_ENABLED)
-				{	//v3+
-	//				Q_strncatz(buf, " ", sizeof(buf));
-	//				COM_QuotedConcat(va("enabled=1"), buf, sizeof(buf));
-				}
-				else
-				{	//v2
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("stale=1"), buf, sizeof(buf));
-				}
-				if (p->flags & DPF_GUESSED)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("guessed=1"), buf, sizeof(buf));
-				}
-				if (*p->title && strcmp(p->title, p->name))
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("title=%s", p->title), buf, sizeof(buf));
-				}
-				if (*p->version)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("ver=%s", p->version), buf, sizeof(buf));
-				}
-				//if (*p->gamedir)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("gamedir=%s", p->gamedir), buf, sizeof(buf));
-				}
-				if (p->qhash)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("qhash=%s", p->qhash), buf, sizeof(buf));
-				}
-				if (p->priority!=PM_DEFAULTPRIORITY)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("priority=%i", p->priority), buf, sizeof(buf));
-				}
-				if (p->arch)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("arch=%s", p->arch), buf, sizeof(buf));
-				}
+				PM_WriteInstalledPackage_v2(p, buf, sizeof(buf));
 
-				if (p->license)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("license=%s", p->license), buf, sizeof(buf));
-				}
-				if (p->website)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("website=%s", p->website), buf, sizeof(buf));
-				}
-				if (p->author)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("author=%s", p->author), buf, sizeof(buf));
-				}
-				if (p->description)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("desc=%s", p->description), buf, sizeof(buf));
-				}
-				if (p->previewimage)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("preview=%s", p->previewimage), buf, sizeof(buf));
-				}
-				if (p->filesize)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("filesize=%"PRIu64, p->filesize), buf, sizeof(buf));
-				}
-
-				if (p->fsroot == FS_BINARYPATH)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat("root=bin", buf, sizeof(buf));
-				}
-				if (p->packprefix)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat(va("packprefix=%s", p->packprefix), buf, sizeof(buf));
-				}
-
-				for (dep = p->deps; dep; dep = dep->next)
-				{
-					if (dep->dtype == DEP_FILE)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("file=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_CACHEFILE)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("cachefile=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_MAP)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("map=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_REQUIRE)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("depend=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_CONFLICT)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("conflict=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_REPLACE)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("replace=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_FILECONFLICT)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("fileconflict=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_RECOMMEND)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("recommend=%s", dep->name), buf, sizeof(buf));
-					}
-					else if (dep->dtype == DEP_NEEDFEATURE)
-					{
-						Q_strncatz(buf, " ", sizeof(buf));
-						COM_QuotedConcat(va("need=%s", dep->name), buf, sizeof(buf));
-					}
-				}
-
-				if (p->flags & DPF_TESTING)
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat("test=1", buf, sizeof(buf));
-				}
-
-				if ((p->flags & DPF_AUTOMARKED) && !(p->flags & DPF_USERMARKED))
-				{
-					Q_strncatz(buf, " ", sizeof(buf));
-					COM_QuotedConcat("auto", buf, sizeof(buf));
-				}
-			}
-
-			buf[sizeof(buf)-2] = 0;	//just in case.
-			Q_strncatz(buf, "\n", sizeof(buf));
 			VFS_WRITE(f, buf, strlen(buf));
 		}
 	}
@@ -3270,6 +3350,8 @@ static void PM_PackageEnabled(package_t *p)
 		if (dep->dtype != DEP_FILE && dep->dtype != DEP_CACHEFILE)
 			continue;
 		COM_FileExtension(dep->name, ext, sizeof(ext));
+/*this is now done after all downloads completed, so we don't keep re-execing configs nor forgetting that they changed.
+		if (!pm_packagesinstalled)
 		if (!stricmp(ext, "pak") || !stricmp(ext, "pk3") || !stricmp(ext, "zip"))
 		{
 			if (pm_packagesinstalled)
@@ -3279,7 +3361,7 @@ static void PM_PackageEnabled(package_t *p)
 			}
 			else
 				FS_ReloadPackFiles();
-		}
+		}*/
 #ifdef PLUGINS
 		if ((p->flags & DPF_PLUGIN) && !Q_strncasecmp(dep->name, PLUGINPREFIX, strlen(PLUGINPREFIX)))
 			Cmd_ExecuteString(va("plug_load %s\n", dep->name), RESTRICT_LOCAL);
@@ -3309,16 +3391,16 @@ static void PM_PackageEnabled(package_t *p)
 		}
 
 #ifndef HAVE_CLIENT
-#define Menu_Prompt(cb,ctx,msg,yes,no,cancel,highpri) Con_Printf(CON_WARNING msg "\n")
+#define Menu_Prompt(cb,ctx,msg,yes,no,cancel,highpri) Con_Printf(CON_WARNING "%s\n", msg)
 #endif
 
 		if (FS_NativePath(ef->name, p->fsroot, native, sizeof(native)) && Sys_SetUpdatedBinary(native))
 		{
 			Q_strncpyz(enginerevision, p->version, sizeof(enginerevision));	//make sure 'revert' picks up the new binary...
-			Menu_Prompt(NULL, NULL, "Engine binary updated.\nRestart to use.", NULL, NULL, NULL, true);
+			Menu_Prompt(NULL, NULL, localtext("Engine binary updated.\nRestart to use."), NULL, NULL, NULL, true);
 		}
 		else
-			Menu_Prompt(NULL, NULL, "Engine update failed.\nManual update required.", NULL, NULL, NULL, true);
+			Menu_Prompt(NULL, NULL, localtext("Engine update failed.\nManual update required."), NULL, NULL, NULL, true);
 	}
 #endif
 }
@@ -3420,6 +3502,10 @@ static qboolean PM_Download_Got_Extract(package_t *p, searchpathfuncs_t *archive
 						archive->ReadFile(archive, &loc, f);
 						if (FS_WriteFile(destname, f, loc.len, p->fsroot))
 						{
+							if (!FS_NativePath(destname, p->fsroot, native, sizeof(native)))
+								Q_strncpyz(native, destname, sizeof(native));
+							Con_Printf("Extracted %s (to %s)\n", p->name, native);
+
 							p->flags = nfl;
 							success = true;
 							continue;
@@ -3639,7 +3725,10 @@ static void PM_Download_PreliminaryGot(struct dl_download *dl)
 	for (info.p = availablepackages; info.p ; info.p=info.p->next)
 	{
 		if (info.p->download == dl)
+		{
+			info.p->download = NULL;
 			break;
+		}
 	}
 
 	info.successful = (dl->status == DL_FINISHED);
@@ -3822,6 +3911,9 @@ static qboolean PM_SignatureOkay(package_t *p)
 	if (p->flags & DPF_SIGNATUREACCEPTED)	//sign value is present and correct
 		return true;	//go for it.
 
+	if (p->flags & DPF_TRUSTED)
+		return true;
+
 	//packages without a signature are only allowed under some limited conditions.
 	//basically we only allow meta packages, pk3s, and paks.
 
@@ -3872,24 +3964,6 @@ static qboolean PM_SignatureOkay(package_t *p)
 	p->author = NULL;
 	p->previewimage = NULL;
 }*/
-
-int PM_IsApplying(qboolean listsonly)
-{
-	int count = 0;
-#ifdef WEBCLIENT
-	package_t *p;
-//	int i;
-	if (!listsonly)
-	{
-		for (p = availablepackages; p ; p=p->next)
-		{
-			if (p->download)
-				count++;
-		}
-	}
-#endif
-	return count;
-}
 
 #ifdef WEBCLIENT
 static size_t PM_AddFilePackage(const char *packagename, struct gamepacks *gp, size_t numgp)
@@ -3945,7 +4019,7 @@ static void PM_DownloadsCompleted(int iarg, void *data)
 			Z_Free(pm_onload.package);
 			pm_onload.package = NULL;
 			COM_Gamedir(p->gamedir, packs);
-			Cbuf_InsertText(va("map %s\n", map), RESTRICT_LOCAL, false);
+			Cbuf_InsertText(map, RESTRICT_LOCAL, false);
 			Z_Free(map);
 		}
 		else
@@ -3953,6 +4027,17 @@ static void PM_DownloadsCompleted(int iarg, void *data)
 	}
 }
 
+static unsigned int PM_DownloadingCount(void)
+{
+	package_t *p;
+	unsigned int count = 0;
+	for (p = availablepackages; p ; p=p->next)
+	{
+		if (p->download)
+			count++;
+	}
+	return count;
+}
 
 //looks for the next package that needs downloading, and grabs it
 static void PM_StartADownload(void)
@@ -3961,11 +4046,11 @@ static void PM_StartADownload(void)
 	char *temp;
 	enum fs_relative temproot;
 	package_t *p;
-	const int simultaneous = PM_IsApplying(true)?1:2;
+	const int simultaneous = 2;
 	int i;
 	qboolean downloading = false;
 
-	for (p = availablepackages; p && simultaneous > PM_IsApplying(false); p=p->next)
+	for (p = availablepackages; p && simultaneous > PM_DownloadingCount(); p=p->next)
 	{
 		if (p->download)
 			downloading = true;
@@ -4071,7 +4156,7 @@ static void PM_StartADownload(void)
 			}
 
 			if (p->filesha512 && tmpfile)
-				tmpfile = FS_Hash_ValidateWrites(tmpfile, p->name, p->filesize, &hash_sha512, p->filesha512);
+				tmpfile = FS_Hash_ValidateWrites(tmpfile, p->name, p->filesize, &hash_sha2_512, p->filesha512);
 			else if (p->filesha1 && tmpfile)
 				tmpfile = FS_Hash_ValidateWrites(tmpfile, p->name, p->filesize, &hash_sha1, p->filesha1);
 
@@ -4084,8 +4169,7 @@ static void PM_StartADownload(void)
 			else
 			{
 				char syspath[MAX_OSPATH];
-				FS_NativePath(temp, temproot, syspath, sizeof(syspath));
-				Con_Printf("Unable to write %s. Fix permissions before trying to download %s\n", syspath, p->name);
+				Con_Printf("Unable to write %s. Fix permissions before trying to download %s\n", FS_NativePath(temp, temproot, syspath, sizeof(syspath))?syspath:p->name, p->name);
 				p->trymirrors = 0;	//don't bother trying other mirrors if we can't write the file or understand its type.
 			}
 			if (p->download)
@@ -4152,6 +4236,24 @@ void PM_LoadMap(const char *package, const char *map)
 {	//not supported, which is a shame because it might have been downloaded via other means.
 }
 #endif
+unsigned int PM_IsApplying(void)
+{
+	int ret = 0;
+#ifdef WEBCLIENT
+	size_t i;
+	if (PM_DownloadingCount())
+		ret |= 1;
+	for (i = 0; i < pm_numsources; i++)
+		if (pm_source[i].curdl)
+			ret |= 1;	//some source is downloading.
+#endif
+	if (pm_pendingprompts)
+		ret |= 2;	//waiting for user action to complete.
+	if (doautoupdate)
+		ret |= 4;	//will want to trigger a prompt...
+
+	return ret;
+}
 //'just' starts doing all the things needed to remove/install selected packages
 void PM_ApplyChanges(void)
 {
@@ -4262,9 +4364,9 @@ void PM_ApplyChanges(void)
 				FS_ReloadPackFiles();
 
 			if ((p->flags & DPF_FORGETONUNINSTALL) && !(p->flags & DPF_PRESENT))
-			{
+			{	//packages that have no source to redownload
 #if 1
-				downloadablessequence++;
+				pm_sequence++;
 				PM_FreePackage(p);
 #else
 				if (p->alternative)
@@ -4303,6 +4405,8 @@ void PM_ApplyChanges(void)
 				((p->flags&DPF_MARKED) && !(p->flags&DPF_ENABLED)))			//actually enabled stuff requires actual enablement
 			{
 				p->trymirrors = ~0u;
+				if (p->flags & DPF_SIGNATUREACCEPTED)
+					p->flags |= DPF_TRUSTED;	//user confirmed it, engine trusts it, we're all okay with any exploits it may have...
 			}
 	}
 	PM_StartADownload();	//and try to do those downloads.
@@ -4346,22 +4450,16 @@ void PM_ApplyChanges(void)
 #endif
 }
 
-#if defined(M_Menu_Prompt) || defined(SERVERONLY)
-//if M_Menu_Prompt is a define, then its a stub...
-static void PM_PromptApplyChanges(void)
-{
-	PM_ApplyChanges();
-}
-#else
+#ifdef DOWNLOADMENU
 static qboolean PM_DeclinedPackages(char *out, size_t outsize)
 {
 	size_t ofs = 0;
 	package_t *p;
 	qboolean ret = false;
-	if (manifestpackages)
+	if (fs_manifest)
 	{
 		char tok[1024];
-		char *strings = manifestpackages;
+		char *strings = fs_manifest->installupd;
 		while (strings && *strings)
 		{
 			strings = COM_ParseStringSetSep(strings, ';', tok, sizeof(tok));
@@ -4415,6 +4513,14 @@ static qboolean PM_DeclinedPackages(char *out, size_t outsize)
 		PM_WriteInstalledPackages();
 	return ret;
 }
+#endif
+#if defined(M_Menu_Prompt) || defined(SERVERONLY)
+//if M_Menu_Prompt is a define, then its a stub...
+static void PM_PromptApplyChanges(void)
+{
+	PM_ApplyChanges();
+}
+#else
 static void PM_PromptApplyChanges_Callback(void *ctx, promptbutton_t opt)
 {
 #ifdef WEBCLIENT
@@ -4423,7 +4529,6 @@ static void PM_PromptApplyChanges_Callback(void *ctx, promptbutton_t opt)
 	if (opt == PROMPT_YES)
 		PM_ApplyChanges();
 }
-static void PM_PromptApplyChanges(void);
 static void PM_PromptApplyDecline_Callback(void *ctx, promptbutton_t opt)
 {
 #ifdef WEBCLIENT
@@ -4443,18 +4548,18 @@ static void PM_PromptApplyChanges(void)
 	//lock it down, so noone can make any changes while this prompt is still displayed
 	if (pkg_updating)
 	{
-		Menu_Prompt(PM_PromptApplyChanges_Callback, NULL, "An update is already in progress\nPlease wait\n", NULL, NULL, "Cancel", true);
+		Menu_Prompt(PM_PromptApplyChanges_Callback, NULL, localtext("An update is already in progress\nPlease wait\n"), NULL, NULL, "Cancel", true);
 		return;
 	}
 	pkg_updating = true;
 #endif
 
-	strcpy(text, "Really decline the following\nrecommended packages?\n\n");
+	strcpy(text, localtext("Really decline the following\nrecommended packages?\n\n"));
 	if (PM_DeclinedPackages(text+strlen(text), sizeof(text)-strlen(text)))
 		Menu_Prompt(PM_PromptApplyDecline_Callback, NULL, text, NULL, "Confirm", "Cancel", true);
 	else
 	{
-		strcpy(text, "Apply the following changes?\n\n");
+		strcpy(text, localtext("Apply the following changes?\n\n"));
 		changes = PM_ChangeList(text+strlen(text), sizeof(text)-strlen(text));
 		if (!changes)
 		{
@@ -4474,26 +4579,11 @@ static void PM_AddSubList_Callback(void *ctx, promptbutton_t opt)
 	{
 		PM_AddSubList(ctx, "", SRCFL_USER|SRCFL_ENABLED);
 		PM_WriteInstalledPackages();
-		PM_UpdatePackageList(false, 0);
+		PM_UpdatePackageList(false);
 	}
 	Z_Free(ctx);
 }
 #endif
-
-//names packages that were listed from the  manifest.
-//if 'mark' is true, then this is an initial install.
-void PM_ManifestPackage(const char *metaname, int security)
-{
-	domanifestinstall = security;
-	Z_Free(manifestpackages);
-	if (metaname)
-	{
-		manifestpackages = Z_StrDup(metaname);
-//		PM_UpdatePackageList(false, false);
-	}
-	else
-		manifestpackages = NULL;
-}
 
 qboolean PM_CanInstall(const char *packagename)
 {
@@ -4561,7 +4651,7 @@ void PM_Command_f(void)
 			else
 			{
 				#ifdef HAVE_CLIENT
-					Menu_Prompt(PM_AddSubList_Callback, Z_StrDup(Cmd_Argv(2)), va("Add updates source?\n%s", Cmd_Argv(2)), "Confirm", NULL, "Cancel", true);
+					Menu_Prompt(PM_AddSubList_Callback, Z_StrDup(Cmd_Argv(2)), va(localtext("Add updates source?\n%s"), Cmd_Argv(2)), "Confirm", NULL, "Cancel", true);
 				#else
 					PM_AddSubList(Cmd_Argv(2), "", SRCFL_USER|SRCFL_ENABLED);
 					PM_WriteInstalledPackages();
@@ -4580,7 +4670,7 @@ void PM_Command_f(void)
 	{
 	
 		if (!loadedinstalled)
-			PM_UpdatePackageList(false, false);
+			PM_UpdatePackageList(false);
 
 		if (!strcmp(act, "list"))
 		{
@@ -4672,10 +4762,33 @@ void PM_Command_f(void)
 					Con_Printf(" ^[[Add]\\type\\pkg add %s;pkg apply^]", COM_QuotedString(p->name, quoted, sizeof(quoted), false));
 				if ((p->flags&DPF_MARKED) && p == PM_MarkedPackage(p->name, DPF_MARKED))
 					Con_Printf(" ^[[Remove]\\type\\pkg rem %s;pkg apply^]", COM_QuotedString(p->name, quoted, sizeof(quoted), false));
+
+
+				if (p->flags & DPF_SIGNATUREACCEPTED)
+					Con_Printf(" ^&02Trusted");
+				else if (p->flags & DPF_SIGNATUREREJECTED)
+					Con_Printf(" ^&04Untrusted");
+				else if (p->flags & DPF_SIGNATUREUNKNOWN)
+					Con_Printf(" ^&0EUnverified");
+				else
+					Con_Printf(" ^&0EUnsigned");
+
 				Con_Printf("\n");
 			}
 			Z_Free(sorted);
 			Con_Printf("<end of list>\n");
+		}
+		else if (!strcmp(act, "internal"))
+		{
+			char buf[65536];
+			key = Cmd_Argv(2);
+			for (p = availablepackages; p; p=p->next)
+			{
+				if (Q_strcasecmp(p->name, key))
+					continue;
+				PM_WriteInstalledPackage_v3(p, buf, sizeof(buf));
+				Con_Printf("%s", buf);
+			}
 		}
 		else if (!strcmp(act, "show"))
 		{
@@ -4804,7 +4917,7 @@ void PM_Command_f(void)
 			//FIXME: regrab if more than an hour ago?
 			if (!allowphonehome)
 				allowphonehome = -1;	//trigger a prompt, instead of ignoring it.
-			PM_UpdatePackageList(false, 0);
+			PM_UpdatePackageList(false);
 		}
 		else if (!strcmp(act, "refresh"))
 		{	//flush package cache, make a new request even if we already got a response from the server.
@@ -4817,7 +4930,7 @@ void PM_Command_f(void)
 			}
 			if (!allowphonehome)
 				allowphonehome = -1;	//trigger a prompt, instead of ignoring it.
-			PM_UpdatePackageList(false, 0);
+			PM_UpdatePackageList(false);
 		}
 		else if (!strcmp(act, "upgrade"))
 		{	//auto-mark any updated packages.
@@ -5012,6 +5125,7 @@ void PM_AddManifestPackages(ftemanifest_t *man)
 	int idx;
 	struct manpack_s *pack;
 	const char *baseurl = man->updateurl;	//this is a url for updated versions of the fmf itself.
+	int dtype;
 
 	for (p = availablepackages; p; p = p->next)
 		p->flags &= ~DPF_MANIMARKED;
@@ -5031,6 +5145,20 @@ void PM_AddManifestPackages(ftemanifest_t *man)
 				continue;	//ignore it
 		}
 
+		if (pack->mirrors[0])
+		{
+			for (p = availablepackages; p; p = p->next)
+			{
+				if (p->mirror[0] && !strcmp(p->mirror[0], pack->mirrors[0]))
+					break;
+			}
+			if (p)
+			{
+				PM_MarkPackage(p, DPF_MANIMARKED);
+				continue;
+			}
+		}
+
 		p = Z_Malloc(sizeof(*p));
 		p->name = Z_StrDup(pack->path);
 		p->title = Z_StrDup(pack->path);
@@ -5040,6 +5168,20 @@ void PM_AddManifestPackages(ftemanifest_t *man)
 		strcpy(p->version, "");
 		p->flags = DPF_FORGETONUNINSTALL|DPF_MANIFEST|DPF_GUESSED;
 		p->qhash = pack->crcknown?Z_StrDupf("%#x", pack->crc):NULL;
+		dtype = DEP_FILE;
+
+		p->packprefix = pack->prefix?Z_StrDup(pack->prefix):NULL;
+
+		//note that this signs the hash(validated with size) with an separately trusted authority and is thus not dependant upon trusting the manifest itself...
+		//that said, we can't necessarily trust any overrides the manifest might include - those parts do not form part of the signature.
+		if (pack->crcknown && strchr(p->name, '/'))
+		{
+			p->signature = pack->signature?Z_StrDup(pack->signature):NULL;
+		}
+		else if (pack->signature)
+			Con_Printf(CON_WARNING"Ignoring signature for %s\n", p->name);
+		p->filesha512 = pack->sha512?Z_StrDup(pack->sha512):NULL;
+		p->filesize = pack->filesize;
 
 		{
 			char *c = p->name;
@@ -5104,7 +5246,11 @@ void PM_AddManifestPackages(ftemanifest_t *man)
 			if (url && *url)
 				p->mirror[i] = Z_StrDup(url);
 		}
-		PM_AddDep(p, DEP_FILE, path);
+		PM_AddDep(p, dtype, path);
+
+		PM_ValidateAuthenticity(p, VH_UNSUPPORTED);
+		if (p->flags & DPF_SIGNATUREACCEPTED)
+			p->flags |= DPF_TRUSTED;	//user confirmed it, engine trusts it, we're all okay with any exploits it may have...
 
 		m = PM_InsertPackage(p);
 		if (!m)
@@ -5181,7 +5327,7 @@ void QCBUILTIN PF_cl_getpackagemanagerinfo(pubprogfuncs_t *prinst, struct global
 			break;
 		case GPMI_AVAILABLE:
 #ifdef WEBCLIENT
-			if (PM_SignatureOkay(p))
+			if (PM_SignatureOkay(p) && !(p->flags&DPF_FORGETONUNINSTALL))
 				RETURN_TSTRING("1");
 #endif
 			break;
@@ -5241,9 +5387,6 @@ qboolean PM_CanInstall(const char *packagename)
 void PM_EnumeratePlugins(void (*callback)(const char *name, qboolean blocked))
 {
 }
-void PM_ManifestPackage(const char *metaname, int security)
-{
-}
 int PM_IsApplying(qboolean listsonly)
 {
 	return false;
@@ -5262,6 +5405,8 @@ typedef struct {
 	int downloadablessequence;
 	char titletext[128];
 	char applymessage[128];	//so we can change its text to give it focus
+	char filtertext[128];
+	qboolean filtering;
 	const void *expandedpackage;	//which package we're currently viewing maps for.
 	qboolean populated;
 } dlmenu_t;
@@ -5275,7 +5420,7 @@ static void MD_Draw (int x, int y, struct menucustom_s *c, struct emenu_s *m)
 	if (y + 8 < 0 || y >= vid.height)	//small optimisation.
 		return;
 
-	if (c->dint != downloadablessequence)
+	if (c->dint != pm_sequence)
 		return;	//probably stale
 
 #ifdef WEBCLIENT
@@ -5283,7 +5428,7 @@ static void MD_Draw (int x, int y, struct menucustom_s *c, struct emenu_s *m)
 	{
 		allowphonehome = false;
 #ifdef HAVE_CLIENT
-		Menu_Prompt(PM_AllowPackageListQuery_Callback, NULL, "Query updates list?\n", "Okay", NULL, "Nope", true);
+		Menu_Prompt(PM_AllowPackageListQuery_Callback, NULL, localtext("Query updates list?\n"), "Okay", NULL, "Nope", true);
 #endif
 	}
 #endif
@@ -5432,7 +5577,7 @@ static qboolean MD_Key (struct menucustom_s *c, struct emenu_s *m, int key, unsi
 	package_t *p, *p2;
 	struct packagedep_s *dep, *dep2;
 	dlmenu_t *info = m->data;
-	if (c->dint != downloadablessequence)
+	if (c->dint != pm_sequence)
 		return false;	//probably stale
 	p = c->dptr;
 	if (key == 'c' && ctrl)
@@ -5452,7 +5597,7 @@ static qboolean MD_Key (struct menucustom_s *c, struct emenu_s *m, int key, unsi
 		{	//close this submenu thing...
 			info->expandedpackage = NULL;
 			//remove the following map items.
-			downloadablessequence++;
+			pm_sequence++;
 			return true;
 		}
 
@@ -5461,7 +5606,7 @@ static qboolean MD_Key (struct menucustom_s *c, struct emenu_s *m, int key, unsi
 			if (dep->dtype == DEP_MAP)
 			{
 				info->expandedpackage = p;
-				downloadablessequence++;
+				pm_sequence++;
 				//add the map items after (and shift everything)
 				return true;
 			}
@@ -5567,20 +5712,22 @@ static qboolean MD_Key (struct menucustom_s *c, struct emenu_s *m, int key, unsi
 
 static void MD_MapDraw (int x, int y, struct menucustom_s *c, struct emenu_s *m)
 {
-	const package_t *p = c->dptr;
 	struct packagedep_s *map = c->dptr2;
+#if defined(HAVE_SERVER)
+	const package_t *p = c->dptr;
 	struct packagedep_s *dep;
 	float besttime, fulltime, bestkills, bestsecrets;
 	char *package = NULL;
 	const char *ext;
+#endif
 
 	if (y + 8 < 0 || y >= vid.height)	//small optimisation.
 		return;
 
-	if (c->dint != downloadablessequence)
+	if (c->dint != pm_sequence)
 		return;	//probably stale
 
-
+#if defined(HAVE_SERVER)
 	for (dep = p->deps; dep; dep = dep->next)
 	{
 		if (dep->dtype == DEP_CACHEFILE)
@@ -5600,6 +5747,7 @@ static void MD_MapDraw (int x, int y, struct menucustom_s *c, struct emenu_s *m)
 			Draw_FunStringU8(CON_WHITEMASK, x+48+8*4, y, va("^m%s^m (%g %g in %.1f secs)", map->name, bestkills,bestsecrets,fulltime));
 	}
 	else
+#endif
 		Draw_FunStringU8(CON_WHITEMASK, x+48+8*4, y, map->name);
 }
 static qboolean MD_MapKey (struct menucustom_s *c, struct emenu_s *m, int key, unsigned int unicode)
@@ -5608,7 +5756,7 @@ static qboolean MD_MapKey (struct menucustom_s *c, struct emenu_s *m, int key, u
 	struct packagedep_s *map = c->dptr2;
 	struct packagedep_s *dep;
 
-	if (c->dint != downloadablessequence)
+	if (c->dint != pm_sequence)
 		return false;	//probably stale
 
 	if (key == K_ENTER || key == K_KP_ENTER || key == K_GP_START || key == K_MOUSE1 || key == K_TOUCH || key == K_GP_DIAMOND_CONFIRM)
@@ -5698,7 +5846,9 @@ static qboolean MD_Source_Key (struct menucustom_s *c, struct emenu_s *m, int ke
 			pm_source[c->dint].status = SRCSTAT_PENDING;
 		}
 		PM_WriteInstalledPackages();
-		PM_UpdatePackageList(true, 2);
+		if (pm_source[c->dint].flags & SRCFL_DISABLED)
+			PM_Shutdown(true);
+		PM_UpdatePackageList(true);
 		return true;
 	}
 	if (key == K_DEL || key == K_BACKSPACE || key == K_GP_DIAMOND_ALTCONFIRM)
@@ -5716,7 +5866,9 @@ static qboolean MD_Source_Key (struct menucustom_s *c, struct emenu_s *m, int ke
 		else
 			return false;	//will just be re-added anyway... :(
 		PM_WriteInstalledPackages();
-		PM_UpdatePackageList(true, 2);
+		if (pm_source[c->dint].flags & SRCFL_DISABLED)
+			PM_Shutdown(true);
+		PM_UpdatePackageList(true);
 		return true;
 	}
 	return false;
@@ -5752,7 +5904,7 @@ static qboolean MD_AutoUpdate_Key (struct menucustom_s *c, struct emenu_s *m, in
 		Cvar_ForceSet(&pkg_autoupdate, nv);
 		PM_WriteInstalledPackages();
 
-		PM_UpdatePackageList(true, 0);
+		PM_UpdatePackageList(true);
 	}
 	return false;
 }
@@ -5798,7 +5950,7 @@ static qboolean MD_RevertUpdates (union menuoption_s *mo,struct emenu_s *m,int k
 	return false;
 }
 
-static int MD_AddMapItems(emenu_t *m, package_t *p, int y)
+static int MD_AddMapItems(emenu_t *m, package_t *p, int y, const char *filter)
 {
 	struct packagedep_s *dep;
 	menucustom_t *c;
@@ -5806,7 +5958,10 @@ static int MD_AddMapItems(emenu_t *m, package_t *p, int y)
 	{
 		if (dep->dtype != DEP_MAP)
 			continue;
-		c = MC_AddCustom(m, 0, y, p, downloadablessequence, NULL);
+		if (filter)
+			if (!strstr(dep->name, filter))
+				continue;
+		c = MC_AddCustom(m, 0, y, p, pm_sequence, NULL);
 		c->dptr2 = dep;
 		c->draw = MD_MapDraw;
 		c->key = MD_MapKey;
@@ -5816,7 +5971,37 @@ static int MD_AddMapItems(emenu_t *m, package_t *p, int y)
 	}
 	return y;
 }
-static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, void *selpackage)
+static int MD_DownloadMenuFiltered(package_t *p, const char *filter)
+{
+	struct packagedep_s *dep;
+	if ((p->flags & DPF_HIDDEN) && (p->arch || !(p->flags & DPF_ENABLED)))
+		return true;
+	if ((p->flags & DPF_HIDEUNLESSPRESENT) && !(p->flags & DPF_PRESENT))
+		return true;
+
+	if (filter && *filter)
+	{
+		if (strstr(p->title, filter) ||
+			strstr(p->name, filter) ||
+			(p->description && strstr(p->description, filter)) ||
+			(p->author && strstr(p->author, filter)))
+			;
+		else
+		{
+			for (dep = p->deps; dep; dep = dep->next)
+			{
+				if (dep->dtype == DEP_MAP)
+					if (strstr(dep->name, filter))
+						return -1;
+			}
+			if (!dep)
+				return true;
+		}
+	}
+	return false;
+}
+
+static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, const char *filter, void *selpackage)
 {
 	char path[MAX_QPATH];
 	package_t *p;
@@ -5826,15 +6011,15 @@ static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, 
 	int prefixlen = strlen(pathprefix);
 	struct packagedep_s *dep;
 	dlmenu_t *info = m->data;
+	int filtered;
 
 	//add all packages in this dir
 	for (p = availablepackages; p; p = p->next)
 	{
 		if (strncmp(p->category, pathprefix, prefixlen))
 			continue;
-		if ((p->flags & DPF_HIDDEN) && (p->arch || !(p->flags & DPF_ENABLED)))
-			continue;
-		if ((p->flags & DPF_HIDEUNLESSPRESENT) && !(p->flags & DPF_PRESENT))
+		filtered = MD_DownloadMenuFiltered(p, filter);
+		if (filtered==true)
 			continue;
 		slash = strchr(p->category+prefixlen, '/');
 		if (!slash)
@@ -5892,18 +6077,49 @@ static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, 
 			else if (head)
 				desc = va(U8("%s"), head);
 
-			c = MC_AddCustom(m, 0, y, p, downloadablessequence, desc);
+			if (developer.ival)
+			{
+				const char *root = "?/";
+				switch(p->fsroot)
+				{
+				//valid roots
+				case FS_ROOT:			root = "$BASEDIR/";				break;
+				case FS_BINARYPATH:		root = "$BINDIR/";				break;
+				case FS_LIBRARYPATH:	root = "$LIBDIR/";				break;
+
+				//invalid roots... (we don't use fs_game etc for packages because that breaks when switching mods within the same basedir)
+				case FS_GAME:			root = "$FS_GAME/";				break;
+				case FS_GAMEONLY:		root = "$FS_GAMEONLY/";			break;
+				case FS_BASEGAMEONLY:	root = "$FS_BASEGAMEONLY/";		break;
+				case FS_PUBGAMEONLY:	root = "$FS_PUBGAMEONLY/";		break;
+				case FS_PUBBASEGAMEONLY:root = "FS_PUBBASEGAMEONLY://";	break;
+				case FS_SYSTEM:			root = "file://";				break;
+				default:				root = "?/";					break;
+				}
+				if (!desc)
+					desc = "";
+				for (dep = p->deps; dep; dep = dep->next)
+					if (dep->dtype == DEP_FILE)
+					{
+						if (p->qhash || p->packprefix)
+							desc = va("%s\n%s%s%s%s.%s%s", desc, root, p->gamedir, *p->gamedir?"/":"", dep->name, p->qhash, p->packprefix);
+						else
+							desc = va("%s\n%s%s%s%s", desc, root, p->gamedir, *p->gamedir?"/":"", dep->name);
+					}
+			}
+
+			c = MC_AddCustom(m, 0, y, p, pm_sequence, desc);
 			c->draw = MD_Draw;
 			c->key = MD_Key;
 			c->common.width = 320-16;
 			c->common.height = 8;
 			y += 8;
 
-			if (info->expandedpackage == p)
+			if (info->expandedpackage == p || filtered<0)
 			{
 				m->selecteditem = (menuoption_t*)c;
 
-				y = MD_AddMapItems(m, p, y);
+				y = MD_AddMapItems(m, p, y, (filtered==-1)?filter:NULL);
 			}
 			if (!m->selecteditem || p == selpackage)
 				m->selecteditem = (menuoption_t*)c;
@@ -5915,9 +6131,7 @@ static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, 
 	{
 		if (strncmp(p->category, pathprefix, prefixlen))
 			continue;
-		if ((p->flags & DPF_HIDDEN) && (p->arch || !(p->flags & DPF_ENABLED)))
-			continue;
-		if ((p->flags & DPF_HIDEUNLESSPRESENT) && !(p->flags & DPF_PRESENT))
+		if (MD_DownloadMenuFiltered(p, filter)==true)
 			continue;
 
 		slash = strchr(p->category+prefixlen, '/');
@@ -5938,7 +6152,7 @@ static int MD_AddItemsToDownloadMenu(emenu_t *m, int y, const char *pathprefix, 
 				MC_AddBufferedText(m, 48, 320-16, y, path+prefixlen, false, true);
 				y += 8;
 				Q_strncatz(path, "/", sizeof(path));
-				y = MD_AddItemsToDownloadMenu(m, y, path, selpackage);
+				y = MD_AddItemsToDownloadMenu(m, y, path, filter, selpackage);
 			}
 		}
 	}
@@ -5963,7 +6177,7 @@ static void MD_Download_UpdateStatus(struct emenu_s *m)
 	float framefrac = 0;
 	void *oldpackage = NULL;
 
-	if (info->downloadablessequence != downloadablessequence || !info->populated)
+	if (info->downloadablessequence != pm_sequence || !info->populated)
 	{
 		while(m->options)
 		{
@@ -5977,10 +6191,12 @@ static void MD_Download_UpdateStatus(struct emenu_s *m)
 				Z_Free(op);
 		}
 		m->cursoritem = m->selecteditem = m->mouseitem = NULL;
-		info->downloadablessequence = downloadablessequence;
+		info->downloadablessequence = pm_sequence;
 
 		info->populated = false;
 		MC_AddWhiteText(m, 24, 320, 8, "Downloads", false)->text = info->titletext;
+		if (info->filtering || *info->filtertext)
+			MC_AddWhiteText(m, 24, 320, 16, va("%sFilter: %s", info->filtering?"^m":"", info->filtertext), false);
 		MC_AddWhiteText(m, 16, 320, 24, "^Ue01d^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01e^Ue01f", false);
 
 		//FIXME: should probably reselect the previous selected item. lets just assume everyone uses a mouse...
@@ -6053,64 +6269,71 @@ static void MD_Download_UpdateStatus(struct emenu_s *m)
 
 		info->populated = true;
 		MC_AddFrameStart(m, 48);
-#ifdef WEBCLIENT
-		for (i = 0, sources=false; i < pm_numsources; i++)
+		if (!info->filtering)
 		{
-			if (pm_source[i].flags & SRCFL_HISTORIC)
-				continue;	//historic... ignore it.
-			if (!sources)
-				MC_AddBufferedText(m, 48, 320-16, y, "Sources", false, true), y += 8;
-			sources=true;
-			c = MC_AddCustom(m, 0, y, p, i, NULL);
-			c->draw = MD_Source_Draw;
-			c->key = MD_Source_Key;
-			c->common.width = 320-48-16;
-			c->common.height = 8;
+#ifdef WEBCLIENT
+			for (i = 0, sources=false; i < pm_numsources; i++)
+			{
+				if (pm_source[i].flags & SRCFL_HISTORIC)
+					continue;	//historic... ignore it.
+				if (!sources)
+					MC_AddBufferedText(m, 48, 320-16, y, "Sources", false, true), y += 8;
+				sources=true;
+				c = MC_AddCustom(m, 0, y, p, i, NULL);
+				c->draw = MD_Source_Draw;
+				c->key = MD_Source_Key;
+				c->common.width = 320-48-16;
+				c->common.height = 8;
 
-			if (!m->selecteditem)
-				m->selecteditem = (menuoption_t*)c;
-			y += 8;
-		}
-		y+=4;	//small gap
+				if (!m->selecteditem)
+					m->selecteditem = (menuoption_t*)c;
+				y += 8;
+			}
+			y+=4;	//small gap
 #endif
-		MC_AddBufferedText(m, 48, 320-16, y, "Options", false, true), y += 8;
-		b = MC_AddCommand(m, 48, 320-16, y, info->applymessage, MD_ApplyDownloads);
-		b->rightalign = false;
-		b->common.tooltip = "Enable/Disable/Download/Delete packages to match any changes made (you will be prompted with a list of the changes that will be made).";
-		y+=8;
-		d = b = MC_AddCommand(m, 48, 320-16, y, "Back", MD_PopMenu);
-		b->rightalign = false;
-		y+=8;
-#ifdef WEBCLIENT
-		if (pm_numsources)
-		{
-			b = MC_AddCommand(m, 48, 320-16, y, "Mark Updates", MD_MarkUpdatesButton);
+			MC_AddBufferedText(m, 48, 320-16, y, "Options", false, true), y += 8;
+			b = MC_AddCommand(m, 48, 320-16, y, info->applymessage, MD_ApplyDownloads);
 			b->rightalign = false;
-			b->common.tooltip = "Select any updated versions of packages that are already installed.";
+			b->common.tooltip = "Enable/Disable/Download/Delete packages to match any changes made (you will be prompted with a list of the changes that will be made).";
 			y+=8;
-		}
-#endif
-		b = MC_AddCommand(m, 48, 320-16, y, "Undo Changes", MD_RevertUpdates);
-		b->rightalign = false;
-		b->common.tooltip = "Reset selection to only those packages that are currently installed.";
-		y+=8;
+			d = b = MC_AddCommand(m, 48, 320-16, y, "Back", MD_PopMenu);
+			b->rightalign = false;
+			y+=8;
 #ifdef WEBCLIENT
-		if (pm_numsources)
-		{
-			c = MC_AddCustom(m, 48, y, p, 0, NULL);
-			c->draw = MD_AutoUpdate_Draw;
-			c->key = MD_AutoUpdate_Key;
-			c->common.width = 320-48-16;
-			c->common.height = 8;
-			y += 8;
-		}
+			if (pm_numsources)
+			{
+				b = MC_AddCommand(m, 48, 320-16, y, "Mark Updates", MD_MarkUpdatesButton);
+				b->rightalign = false;
+				b->common.tooltip = "Select any updated versions of packages that are already installed.";
+				y+=8;
+			}
 #endif
-		y+=4;	//small gap
+			b = MC_AddCommand(m, 48, 320-16, y, "Undo Changes", MD_RevertUpdates);
+			b->rightalign = false;
+			b->common.tooltip = "Reset selection to only those packages that are currently installed.";
+			y+=8;
+#ifdef WEBCLIENT
+			if (pm_numsources)
+			{
+				c = MC_AddCustom(m, 48, y, p, 0, NULL);
+				c->draw = MD_AutoUpdate_Draw;
+				c->key = MD_AutoUpdate_Key;
+				c->common.width = 320-48-16;
+				c->common.height = 8;
+				y += 8;
+			}
+#endif
+			y+=4;	//small gap
+		}
+		else d = NULL;
 		MC_AddBufferedText(m, 48, 320-16, y, "Packages", false, true), y += 8;
-		MD_AddItemsToDownloadMenu(m, y, info->pathprefix, oldpackage);
+		MD_AddItemsToDownloadMenu(m, y, info->pathprefix, info->filtertext, oldpackage);
 		if (!m->selecteditem)
 			m->selecteditem = (menuoption_t*)d;
-		m->cursoritem = (menuoption_t*)MC_AddWhiteText(m, 40, 0, m->selecteditem->common.posy, NULL, false);
+		if (info->filtering)
+			m->cursoritem = NULL;
+		else
+			m->cursoritem = (menuoption_t*)MC_AddWhiteText(m, 40, 0, m->selecteditem->common.posy, NULL, false);
 		MC_AddFrameEnd(m, 48)->frac = framefrac;
 	}
 
@@ -6129,6 +6352,57 @@ static void MD_Download_UpdateStatus(struct emenu_s *m)
 	}
 }
 
+static qboolean MD_Download_Key(struct emenu_s *m, int key, unsigned int unicode)
+{
+	dlmenu_t *info = m->data;
+
+	if (info->filtering)
+	{
+		if (key == K_BACKSPACE)
+		{
+			unsigned int l = strlen(info->filtertext);
+			if (l)
+			{
+				while (l > 0 && (info->filtertext[--l]&0xc0) == 0x80)
+					;
+				info->filtertext[l] = 0;
+			}
+			else
+				info->filtering = false;
+		}
+		else if (key == K_ENTER || key == K_ESCAPE)
+			info->filtering = false; //done...
+		else if (key>=K_F1 && key!=K_RALT && key!=K_RCTRL && key!=K_RSHIFT)
+		{	//some other action... don't swallow clicks.
+			info->filtering = false;
+			info->populated = false;
+			return false;
+		}
+		else if (unicode)
+		{
+			unsigned int l = strlen(info->filtertext);
+			l+=utf8_encode(info->filtertext+l, unicode, sizeof(info->filtertext)-1-l);
+			info->filtertext[l] = 0;
+		}
+
+		info->populated = false;
+		return true;
+	}
+	else if (key == '/')
+	{
+		info->filtering = true;
+		info->filtertext[0] = 0;
+
+		info->populated = false;
+		return true;
+	}
+	else
+	{
+		info->filtering = false;
+		return false;
+	}
+}
+
 void Menu_DownloadStuff_f (void)
 {
 	emenu_t *menu;
@@ -6140,20 +6414,22 @@ void Menu_DownloadStuff_f (void)
 
 	menu->menu.persist = true;
 	menu->predraw = MD_Download_UpdateStatus;
-	info->downloadablessequence = downloadablessequence;
+	menu->key = MD_Download_Key;
+	info->downloadablessequence = pm_sequence;
 
 
 	Q_strncpyz(info->pathprefix, Cmd_Argv(1), sizeof(info->pathprefix));
 	if (!*info->pathprefix || !loadedinstalled)
-		PM_UpdatePackageList(false, true);
+		PM_UpdatePackageList(false);
 
 	info->populated = false;	//will add any headers as needed
 }
 
 #ifdef WEBCLIENT
 static void PM_ConfirmSource(void *ctx, promptbutton_t button)
-{
+{ //yes='Enable', no='Configure', cancel='Later'...
 	size_t i;
+	pm_pendingprompts--;
 	if (button == PROMPT_YES)
 	{
 		for (i = 0; i < pm_numsources; i++)
@@ -6162,8 +6438,8 @@ static void PM_ConfirmSource(void *ctx, promptbutton_t button)
 			{
 				pm_source[i].flags |= (button == PROMPT_YES)?SRCFL_ENABLED:SRCFL_DISABLED;
 				PM_WriteInstalledPackages();
-				Menu_Download_Update();
-				return;
+				PM_UpdatePackageList(true);
+				break;
 			}
 		}
 	}
@@ -6174,6 +6450,8 @@ static void PM_ConfirmSource(void *ctx, promptbutton_t button)
 
 		if (button == PROMPT_NO)
 			Cmd_ExecuteString("menu_download\n", RESTRICT_LOCAL);
+		else
+			doautoupdate = false; //try don't want updates... don't give them any.
 	}
 }
 
@@ -6216,30 +6494,24 @@ qboolean PM_AreSourcesNew(qboolean doprompt)
 {
 	qboolean ret = false;
 #ifdef WEBCLIENT
-	if (pkg_autoupdate.ival > 0)
-	{	//only prompt if autoupdate is actually enabled.
-		int i;
-		for (i = 0; i < pm_numsources; i++)
+	//only prompt if autoupdate is actually enabled.
+	int i;
+	for (i = 0; i < pm_numsources; i++)
+	{
+		if (pm_source[i].flags & SRCFL_HISTORIC)
+			continue;	//hidden anyway
+		if (!(pm_source[i].flags & (SRCFL_ENABLED|SRCFL_DISABLED|SRCFL_PROMPTED)) && (pkg_autoupdate.ival > 0 || (pm_source[i].flags&SRCFL_MANIFEST)))
 		{
-			if (pm_source[i].flags & SRCFL_HISTORIC)
-				continue;	//hidden anyway
-			if (!(pm_source[i].flags & (SRCFL_ENABLED|SRCFL_DISABLED|SRCFL_PROMPTED)))
+			ret = true;	//something is dirty.
+			if (doprompt)
 			{
-				ret = true;	//something is dirty.
-				if (doprompt)
-				{
-					const char *msg = va("Enable update source\n\n^x66F%s", (pm_source[i].flags&SRCFL_MANIFEST)?PrettyHostFromURL(pm_source[i].url):pm_source[i].url);
-					Menu_Prompt(PM_ConfirmSource, Z_StrDup(pm_source[i].url), msg, "Enable", "Configure", "Later", true);
-					pm_source[i].flags |= SRCFL_PROMPTED;
-				}
-				break;
+				const char *msg = va(localtext("Enable update source\n\n^x66F%s"), (pm_source[i].flags&SRCFL_MANIFEST)?PrettyHostFromURL(pm_source[i].url):pm_source[i].url);
+				pm_pendingprompts++;
+				Menu_Prompt(PM_ConfirmSource, Z_StrDup(pm_source[i].url), msg, "Enable", "Configure", "Later", true);
+				pm_source[i].flags |= SRCFL_PROMPTED;
 			}
+			break;
 		}
-		/*if (!pluginpromptshown && i < pm_numsources)
-		{
-			pluginpromptshown = true;
-			Menu_Prompt(PM_AutoUpdateQuery, NULL, "Configure update sources now?", "View", NULL, "Later", true);
-		}*/
 	}
 #endif
 	return ret;
@@ -6251,13 +6523,13 @@ void Menu_Download_Update(void)
 	if (pkg_autoupdate.ival <= 0)
 		return;
 
-	PM_UpdatePackageList(true, 2);
+	PM_UpdatePackageList(true);
 }
 #else
 void Menu_Download_Update(void)
 {
 #ifdef PACKAGEMANAGER
-	PM_UpdatePackageList(true, 2);
+	PM_UpdatePackageList(true);
 #endif
 }
 void Menu_DownloadStuff_f (void)

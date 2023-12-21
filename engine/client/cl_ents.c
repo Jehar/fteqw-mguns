@@ -2892,6 +2892,15 @@ void CLQ1_AddVisibleBBoxes(void)
 	shader_t *s;
 	vec3_t min, max, size;
 
+	#pragma message("Temporary Code: BBoxes calling R2D_Flush")
+	/*
+	* HACK(fhomolka): For some reason, bboxes like to mess with progs-drawn Polygons.
+	* The clean way would be to understand WHY they mess with eachother, for now this must do.
+	* TODO(fhomolka)
+	* Comment by Spike: "qc's polys should have been flushed inside renderscene"
+	*/
+	if(R2D_Flush) R2D_Flush();
+
 	switch(r_showbboxes.ival & 3)
 	{
 	default:
@@ -2919,6 +2928,7 @@ void CLQ1_AddVisibleBBoxes(void)
 			s = R_RegisterShader("bboxshader", SUF_NONE,
 				"{\n"
 					"polygonoffset\n"
+					"sort additive\n"
 					"{\n"
 						"map $whiteimage\n"
 						"blendfunc add\n"
@@ -2975,6 +2985,7 @@ void CLQ1_AddVisibleBBoxes(void)
 	s = R_RegisterShader("bboxshader", SUF_NONE,
 		"{\n"
 			"polygonoffset\n"
+			"sort additive\n"
 			"{\n"
 				"map $whiteimage\n"
 				"blendfunc add\n"
@@ -3231,7 +3242,7 @@ void CLQ1_AddShadow(entity_t *ent)
 	scenetris_t *t;
 	cl_adddecal_ctx_t ctx;
 
-	if (!r_blobshadows || !ent->model || (ent->model->type != mod_alias && ent->model->type != mod_halflife))
+	if (!r_blobshadows || !ent->model || (ent->model->type != mod_alias && ent->model->type != mod_halflife) || (ent->flags & RF_NOSHADOW))
 		return;
 
 	s = R_RegisterShader("shadowshader", SUF_NONE,
@@ -3295,7 +3306,7 @@ void CLQ1_AddShadow(entity_t *ent)
 	}
 
 	ctx.t = t;
-	Vector4Set(ctx.rgbavalue, 0, 0, 0, r_blobshadows);
+	Vector4Set(ctx.rgbavalue, 0, 0, 0, r_blobshadows*((ent->flags & RF_TRANSLUCENT)?ent->shaderRGBAf[3]:1));
 	Mod_ClipDecal(cl.worldmodel, shadoworg, ctx.axis[0], ctx.axis[1], ctx.axis[2], radius, 0,0, CL_AddDecal_Callback, &ctx);
 	if (!t->numidx)
 		cl_numstris--;
@@ -4194,7 +4205,12 @@ void CL_LinkPacketEntities (void)
 			if (radius)
 			{
 				radius += r_lightflicker.value?((flicker + state->number)&31):0;
-				CL_NewDlight(state->number, ent->origin, radius, 0.1, colour[0], colour[1], colour[2]);
+				dl = CL_NewDlight(state->number, ent->origin, radius, 0.1, colour[0], colour[1], colour[2]);
+
+				if (state->effects & EF_BRIGHTLIGHT)
+				{	//urgh. apparently correct for vanilla quake. puts the bright effect about where the firing point is. broken for hexen2, yet still consistent with the hexen2 engine...
+					dl->origin[2] += 16;
+				}
 			}
 		}
 		if ((state->lightpflags & (PFLAGS_FULLDYNAMIC|PFLAGS_CORONA)) && ((state->lightpflags&PFLAGS_FULLDYNAMIC)||state->light[3]))
@@ -4286,6 +4302,12 @@ void CL_LinkPacketEntities (void)
 			{
 				Con_DPrintf("Bad modelindex (%i)\n", state->modelindex);
 				continue;
+			}
+			if (model->loadstate != MLS_LOADED)
+			{
+				if (model->loadstate == MLS_NOTLOADED)
+					Mod_LoadModel(model, MLV_WARN);
+				continue;	//still waiting for it to load, don't poke anything here
 			}
 
 			//DP extension. .modelflags (which is sent in the high parts of effects) allows to specify exactly the q1-compatible flags.
@@ -5772,7 +5794,16 @@ void CL_LinkViewModel(void)
 		{
 			lerpents_t *le = &cl.lerpents[plnum+1];
 			if (le->entstate)
+			{
 				playereffects = le->entstate->effects;
+#ifdef HEXEN2
+				if (!le->entstate->modelindex || (le->entstate->hexen2flags & DRF_TRANSLUCENT))
+				{	//urgh.
+					ent.shaderRGBAf[3] *= .5;
+					ent.flags |= RF_TRANSLUCENT;
+				}
+#endif
+			}
 		}
 	}
 	else if (plnum < cl.allocated_client_slots)

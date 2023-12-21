@@ -56,7 +56,7 @@ struct
 extern cvar_t scr_conalpha;
 extern cvar_t gl_conback;
 extern cvar_t gl_font, con_textfont;
-extern cvar_t r_font_postprocess_outline;
+extern cvar_t r_font_postprocess_outline, r_font_postprocess_mono;
 extern cvar_t gl_screenangle;
 extern cvar_t vid_minsize;
 extern cvar_t vid_conautoscale;
@@ -167,6 +167,7 @@ void R2D_Shutdown(void)
 	Cvar_Unhook(&con_textfont);
 	Cvar_Unhook(&gl_font);
 	Cvar_Unhook(&r_font_postprocess_outline);
+	Cvar_Unhook(&r_font_postprocess_mono);
 	Cvar_Unhook(&vid_conautoscale);
 	Cvar_Unhook(&gl_screenangle);
 	Cvar_Unhook(&vid_conheight);
@@ -444,6 +445,7 @@ void R2D_Init(void)
 	Cvar_Hook(&con_textfont, R2D_Font_Callback);
 	Cvar_Hook(&gl_font, R2D_Font_Callback);
 	Cvar_Hook(&r_font_postprocess_outline, R2D_Font_Callback);
+	Cvar_Hook(&r_font_postprocess_mono, R2D_Font_Callback);
 	Cvar_Hook(&vid_conautoscale, R2D_Conautoscale_Callback);
 	Cvar_Hook(&gl_screenangle, R2D_ScreenAngle_Callback);
 	Cvar_Hook(&vid_conheight, R2D_Conheight_Callback);
@@ -486,7 +488,7 @@ mpic_t	*R2D_SafeCachePic (const char *path)
 mpic_t *R2D_SafePicFromWad (const char *name)
 {
 	shader_t *s;
-	if (!qrenderer)
+	if (!qrenderer || strchr(name, ':'))
 		return NULL;
 	s = R_RegisterCustom (NULL, va("gfx/%s", name), SUF_2D, Shader_Default2D, "wad");
 	return s;
@@ -1073,7 +1075,22 @@ void QDECL R2D_Conback_Callback(struct cvar_s *var, char *oldvalue)
 }
 
 #ifdef AVAIL_FREETYPE
-#if defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT) && !defined(_XBOX)
+#if defined(LIBFONTCONFIG_STATIC)
+#include <fontconfig/fontconfig.h>
+static int QDECL SortCompareFonts(const void *av, const void *bv)
+{	//qsort compare
+	const FcPattern *af = *(FcPattern *const*const)av, *bf = *(FcPattern *const*const)bv;
+	FcChar8 *as, *bs;
+	int r = 0;
+	if (FcPatternGetString(af, FC_FAMILY, 0, &as) == FcResultMatch && FcPatternGetString(bf, FC_FAMILY, 0, &bs) == FcResultMatch)
+	{
+		r = strcmp(as, bs);
+		if (!r && FcPatternGetString(af, FC_STYLE, 0, &as) == FcResultMatch && FcPatternGetString(bf, FC_STYLE, 0, &bs) == FcResultMatch)
+			r = strcmp(as, bs);
+	}
+	return r;
+}
+#elif defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT) && !defined(_XBOX)
 #include <windows.h>
 qboolean R2D_Font_WasAdded(char *buffer, char *fontfilename)
 {
@@ -1137,6 +1154,7 @@ void R2D_Font_Changed(void)
 {
 	float tsize;
 	const char *con_font_name = con_textfont.string;
+	unsigned int flags;
 	if (!con_textsize.modified)
 		return;
 	if (!*con_font_name)
@@ -1170,10 +1188,53 @@ void R2D_Font_Changed(void)
 	if (qrenderer == QR_NONE)
 		return;
 
+	flags = 0;
+	if (r_font_postprocess_mono.ival)
+		flags |= FONT_MONO;
+
 	if (!strcmp(gl_font.string, "?"))
 	{
 #ifndef AVAIL_FREETYPE
 		Cvar_Set(&gl_font, "");
+#elif defined(LIBFONTCONFIG_STATIC)
+		Cvar_Set(&gl_font, "");
+		{
+			FcConfig *config = FcInitLoadConfigAndFonts();
+			FcPattern *pat = FcPatternCreate();
+			FcObjectSet *os = FcObjectSetBuild (FC_FAMILY, FC_STYLE, (char *) 0);
+			FcFontSet *fs = FcFontList(config, pat, os);
+
+			if (fs)
+			{
+				int i;
+				FcChar8 *oldfam = NULL;
+				FcPattern **fonts = BZ_Malloc(sizeof(*fonts)*fs->nfont);
+				memcpy(fonts, fs->fonts, sizeof(*fonts)*fs->nfont);
+				qsort(fonts, fs->nfont, sizeof(*fonts), SortCompareFonts);
+				for (i=0; fs && i < fs->nfont; i++)
+				{
+					FcPattern *font = fonts[i];
+					FcChar8 *style, *family;
+					if (FcPatternGetString(font, FC_FAMILY, 0, &family) == FcResultMatch && FcPatternGetString(font, FC_STYLE, 0, &style) == FcResultMatch)
+					{
+						if (!oldfam || strcmp(oldfam, family))
+						{
+							if (oldfam)
+								Con_Printf("\n");
+							oldfam = family;
+							Con_Printf("^["S_COLOR_WHITE"%s\\type\\/gl_font %s^]: ", family, family);
+						}
+						Con_Printf(" \t^[%s\\type\\/gl_font %s?style=%s^]", style, family, style);
+					}
+				}
+				if (oldfam)
+					Con_Printf("\n");
+				BZ_Free(fonts);
+				FcFontSetDestroy(fs);
+			}
+			FcObjectSetDestroy(os);
+			FcPatternDestroy(pat);
+		}
 #elif defined(_WIN32) && !defined(FTE_SDL) && !defined(WINRT) && !defined(_XBOX)
 		BOOL (APIENTRY *pChooseFontW)(LPCHOOSEFONTW) = NULL;
 		dllfunction_t funcs[] =
@@ -1184,9 +1245,9 @@ void R2D_Font_Changed(void)
 		LOGFONTW lf = {0};
 		CHOOSEFONTW cf = {sizeof(cf)};
 		extern HWND	mainwindow;
-		font_default = Font_LoadFont("", 8, 1, r_font_postprocess_outline.ival);
+		font_default = Font_LoadFont("", 8, 1, r_font_postprocess_outline.ival, flags);
 		if (tsize != 8)
-			font_console = Font_LoadFont("", tsize, 1, r_font_postprocess_outline.ival);
+			font_console = Font_LoadFont("", tsize, 1, r_font_postprocess_outline.ival, flags);
 		if (!font_console)
 			font_console = font_default;
 
@@ -1229,20 +1290,20 @@ void R2D_Font_Changed(void)
 #endif
 	}
 
-	if (COM_FCheckExists("fonts/qfont.kfont"))
-		font_menu = Font_LoadFont("qfont", 20, 1, r_font_postprocess_outline.ival);
+	if (COM_FDepthFile("fonts/qfont.kfont", true) <= COM_FDepthFile("gfx/mainmenu.lmp", true))
+		font_menu = Font_LoadFont("qfont", 20, 1, r_font_postprocess_outline.ival, flags);
 	else
 		font_menu = NULL;
 
-	font_default = Font_LoadFont(gl_font.string, 8, 1, r_font_postprocess_outline.ival);
+	font_default = Font_LoadFont(gl_font.string, 8, 1, r_font_postprocess_outline.ival, flags);
 	if (!font_default && *gl_font.string)
-		font_default = Font_LoadFont("", 8, 1, r_font_postprocess_outline.ival);
+		font_default = Font_LoadFont("", 8, 1, r_font_postprocess_outline.ival, flags);
 
 	if (tsize != 8 || strcmp(gl_font.string, con_font_name))
 	{
-		font_console = Font_LoadFont(con_font_name, tsize, 1, r_font_postprocess_outline.ival);
+		font_console = Font_LoadFont(con_font_name, tsize, 1, r_font_postprocess_outline.ival, flags);
 		if (!font_console)
-			font_console = Font_LoadFont("", tsize, 1, r_font_postprocess_outline.ival);
+			font_console = Font_LoadFont("", tsize, 1, r_font_postprocess_outline.ival, flags);
 	}
 	if (!font_console)
 		font_console = font_default;

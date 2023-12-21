@@ -3816,7 +3816,7 @@ static void QCBUILTIN PF_pointsound(pubprogfuncs_t *prinst, struct globalvars_s 
 }
 
 //an evil one from telejano.
-#ifndef SERVERONLY
+#if defined(HAVE_CLIENT) && !defined(NOLEGACY)
 static void QCBUILTIN PF_ss_LocalSound(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	sfx_t	*sfx;
@@ -4235,6 +4235,7 @@ static void QCBUILTIN PF_spawnclient (pubprogfuncs_t *prinst, struct globalvars_
 			svs.clients[i].userid = ++nextuserid;
 			svs.clients[i].protocol = SCP_BAD;	//marker for bots
 			svs.clients[i].state = cs_spawned;
+			svs.clients[i].connection_started = realtime;
 			svs.clients[i].spawned = true;
 			sv.spawned_client_slots++;
 			svs.clients[i].netchan.message.allowoverflow = true;
@@ -6135,7 +6136,10 @@ void SV_point_tempentity (vec3_t o, int type, int count)	//count (usually 1) is 
 #endif
 		break;
 	case TEQW_NQGUNSHOT:
-		qwtype[0] = TEQW_NQGUNSHOT;
+#ifdef NQPROT
+		nqtype[0] = TENQ_NQGUNSHOT;
+		nqtype[1] = TENQ_NQGUNSHOT;
+#endif
 		qwtype[1] = TEQW_QWGUNSHOT;
 		split = PEXT_TE_BULLET;
 		break;
@@ -6192,8 +6196,9 @@ void SV_point_tempentity (vec3_t o, int type, int count)	//count (usually 1) is 
 		}
 		else if (nqtype[i] >= 0)
 		{
-			int nqcount = min(3,count);
-			do
+			//messy - TENQ_NQGUNSHOT loops until we reach our counter. should probably randomize positions a little
+			int nqcount = (nqtype[i] == TENQ_NQGUNSHOT)?min(3,count):1;
+			while(nqcount-->0)
 			{
 				MSG_WriteByte (&sv.nqmulticast, svc_temp_entity);
 				MSG_WriteByte (&sv.nqmulticast, nqtype[i]);
@@ -6203,19 +6208,12 @@ void SV_point_tempentity (vec3_t o, int type, int count)	//count (usually 1) is 
 					MSG_WriteChar(&sv.nqmulticast, 0);
 					MSG_WriteChar(&sv.nqmulticast, 0);
 				}
-				else if (/*nqtype == TENQ_QWBLOOD ||*/ nqtype[i] == TENQ_QWGUNSHOT)
+				else if (nqtype[i] == TENQ_QWGUNSHOT)
 					MSG_WriteByte (&sv.nqmulticast, count);
 				MSG_WriteCoord (&sv.nqmulticast, o[0]);
 				MSG_WriteCoord (&sv.nqmulticast, o[1]);
 				MSG_WriteCoord (&sv.nqmulticast, o[2]);
-
-				//messy - TENQ_NQGUNSHOT looks until we reach our counter. should probably randomize positions a little
-				if (nqcount > 1 && nqtype[i] == TENQ_NQGUNSHOT)
-				{
-					nqcount--;
-					continue;
-				}
-			} while(0);
+			}
 		}
 #endif
 		if (i)
@@ -6536,6 +6534,31 @@ char *PF_infokey_Internal (int entnum, const char *key)
 			sprintf(ov, "%d", SV_CalcPing (&svs.clients[entnum-1], true));
 		else if (!strcmp(key, "guid"))
 			sprintf(ov, "%s", pl->guid);
+		else if (!strcmp(key, "*cert_dn"))
+			NET_GetConnectionCertificate(svs.sockets, &controller->netchan.remote_address, QCERT_PEERSUBJECT, ov, sizeof(ov));
+		else if (!strncmp(key, "*cert_", 6))
+		{
+			static struct
+			{
+				const char *name;
+				hashfunc_t *func;
+			} funcs[] = {{"sha1",&hash_sha1}, {"sha2_256", &hash_sha2_256}, {"sha2_512", &hash_sha2_512}};
+			int i;
+			char buf[8192];
+			char digest[DIGEST_MAXSIZE];
+			int certsize;
+			*ov = 0;
+			for (i = 0; i < countof(funcs); i++)
+			{
+				if (!strcmp(key+6, funcs[i].name))
+				{
+					certsize = NET_GetConnectionCertificate(svs.sockets, &controller->netchan.remote_address, QCERT_PEERCERTIFICATE, buf, sizeof(buf));
+					if (certsize > 0)
+						Base64_EncodeBlockURI(digest,CalcHash(&hash_sha1, digest, sizeof(digest), buf, certsize), ov, sizeof(ov));
+					break;
+				}
+			}
+		}
 		else if (!strcmp(key, "challenge"))
 			sprintf(ov, "%u", pl->challenge);
 		else if (!strcmp(key, "*userid"))
@@ -8184,6 +8207,8 @@ void PRH2_SetPlayerClass(client_t *cl, int classnum, qboolean fromqc)
 		return; //reject it (it would crash the (standard hexen2) mod)
 	if (classnum > 5)
 		return;
+	while (classnum>1 && !COM_FCheckExists(va("gfx/menu/netp%i.lmp", classnum)))
+		classnum--;
 
 	if (!fromqc)
 	{
@@ -8998,7 +9023,7 @@ void QCBUILTIN PF_sj_strhash (pubprogfuncs_t *prinst, struct globalvars_s *pr_gl
 {	//not quite the same, but oh well
 	const char *str = PF_VarString(prinst, 0, pr_globals);
 	int len = strlen(str);
-	G_FLOAT(OFS_RETURN) = Com_BlockChecksum(str, len);
+	G_FLOAT(OFS_RETURN) = CalcHashInt(&hash_md4, str, len);
 }
 #endif
 static void QCBUILTIN PF_StopSound(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
@@ -10893,7 +10918,23 @@ static void QCBUILTIN PF_finaleFinished_qex(pubprogfuncs_t *prinst, struct globa
 	}
 }
 static void QCBUILTIN PF_localsound_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
-{	//undocumented. just stub it.
+{	//localsound(player, "foo.wav") - plays the sound with no attenuation to only that specific player. to be paired with centerprints.
+	int oldmsgent = pr_global_struct->msg_entity;
+	edict_t *ent = G_EDICT(prinst, OFS_PARM0);
+	const char *sample = PR_GetStringOfs(prinst, OFS_PARM1);
+	int entnum = NUM_FOR_EDICT(prinst, ent);
+	if (entnum < 1 || entnum > sv.allocated_client_slots)
+	{
+		PR_RunWarning(sv.world.progs, "tried to localsound to a non-client\n");
+		return;
+	}
+	if (svs.clients[entnum-1].state < cs_connected)
+		return;	//bad caller!
+
+	pr_global_struct->msg_entity = G_INT(OFS_PARM0);	//required for CF_SV_UNICAST
+	SV_StartSound(NUM_FOR_EDICT(svprogfuncs, ent), ent->v->origin, vec3_origin, ent->xv->dimension_seen, CHAN_AUTO, sample, 1/*vol*/, 0/*attn*/, 1/*rate*/, 0/*ofs*/, CF_SV_UNICAST|CF_SV_RELIABLE|CF_NOREVERB|CF_NOSPACIALISE);
+	pr_global_struct->msg_entity = oldmsgent; //don't break stuff.
+
 }
 static void QCBUILTIN PF_CheckPlayerEXFlags_qex(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
@@ -11450,7 +11491,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 
 //QuakeEx (aka: quake rerelease). These conflict with core extensions so we don't register them by default (Update: they now link by name rather than number.
 	{"ex_finaleFinished",PF_finaleFinished_qex,0,	0,		0,0/*79*/,	D("float()", "Behaviour is undocumented.")},
-	{"ex_localsound",	PF_localsound_qex,	0,		0,		0,0/*80*/,	D("void(entity client, string sample)", "Behaviour is undocumented.")},
+	{"ex_localsound",	PF_localsound_qex,	0,		0,		0,0/*80*/,	D("void(entity client, string sample)", "Plays a sound only to the single specified player. The sound will be full volume, unattenuated, unaffected by reverb. Suitable for menus and things that are not part of the actual game world.")},
 	{"ex_draw_point",	PF_Fixme,			0,		0,		0,0/*81*/,	D("void(vector point, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
 	{"ex_draw_line",	PF_Fixme,			0,		0,		0,0/*82*/,	D("void(vector start, vector end, float colormap, float lifetime, float depthtest)", "Behaviour is undocumented.")},
 	{"ex_draw_arrow",	PF_Fixme,			0,		0,		0,0/*83*/,	D("void(vector start, vector end, float colormap, float size, float lifetime, float depthtest)", "Behaviour is undocumented.")},
@@ -11467,9 +11508,9 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"ex_bot_followentity",PF_Fixme,		0,		0,		0,0,	D("float(entity bot, entity goal)", "Behaviour is undocumented.")},
 	{"ex_CheckPlayerEXFlags",PF_CheckPlayerEXFlags_qex,0,0,	0,0,	D("float(entity playerEnt)", "Behaviour is undocumented.")},
 	{"ex_walkpathtogoal",PF_walkpathtogoal_qex,0,	0,		0,0,	D("float(float movedist, vector goal)", "Behaviour is undocumented.")},
-	{"ex_prompt",		PF_prompt_qex,		0,		0,		0,0,	D("void(entity player, string text, float numchoices)", "Initiates a user prompt. You must call ex_promptchoice once per choice.")},
+	{"ex_prompt",		PF_prompt_qex,		0,		0,		0,0,	D("void(entity player, string text, float numchoices)", "Initiates a user prompt. You must call ex_promptchoice exactly once per choice, with no other networking between.")},
 	{"ex_promptchoice",	PF_promptchoice_qex,0,		0,		0,0,	D("void(entity player, string text, float impulse)", "Follows a call to ex_prompt.")},
-	{"ex_clearprompt",	PF_prompt_qex,		0,		0,		0,0,	D("void(entity player)", "Behaviour is undocumented.")},
+	{"ex_clearprompt",	PF_prompt_qex,		0,		0,		0,0,	D("void(entity player)", "Hides a previously sent prompt.")},
 //End QuakeEx, for now. :(
 
 // Tomaz - QuakeC String Manipulation Begin
@@ -11640,7 +11681,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 
 //these are telejano's
 	{"cvar_setf",		PF_cvar_setf,		0,		0,		0,		176,	"void(string cvar, float val)"},
-	{"localsound",		PF_ss_LocalSound,	0,		0,		0,		177,	D("void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... probably best not to call this from ssqc. Also disables reverb.")},//	#177
+	{"localsound",		PF_ss_LocalSound,	0,		0,		0,		177,	D("DEP_SSQC(\"This bypasses networking by design, so do NOT call this from ssqc. Use ex_localsound or sound(...,CF_UNICAST) instead.\") void(string soundname, optional float channel, optional float volume)", "Plays a sound... locally... Also disables reverb.")},//	#177
 //end telejano
 
 //fte extras
@@ -11848,9 +11889,9 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	"} patchvert_t;\n"				\
 	"#define patch_delete(modelidx,patchidx) brush_delete(modelidx,patchidx)\n"
 	{"patch_getcp",		PF_patch_getcp,		0,		0,		0,		0,		D(qcpatchvert "int(float modelidx, int patchid, patchvert_t *out_controlverts, int maxcp, patchinfo_t *out_info)", "Queries a patch's information. You must pre-allocate the face array for the builtin to write to. Return value is the total number of control verts that were retrieved, 0 on error.")},
-	{"patch_getmesh",	PF_patch_getmesh,	0,		0,		0,		0,		D("int(float modelidx, int patchid, patchvert_t *out_verts, int maxverts, __out patchinfo_t out_info)", "Queries a patch's information. You must pre-allocate the face array for the builtin to write to. Return value is the total number of control verts that were retrieved, 0 on error.")},
+	{"patch_getmesh",	PF_patch_getmesh,	0,		0,		0,		0,		D("int(float modelidx, int patchid, patchvert_t *out_verts, int maxverts, patchinfo_t *out_info)", "Queries a patch's information. You must pre-allocate the face array for the builtin to write to. Return value is the total number of control verts that were retrieved, 0 on error.")},
 	{"patch_create",	PF_patch_create,	0,		0,		0,		0,		D("int(float modelidx, int oldpatchid, patchvert_t *in_controlverts, patchinfo_t in_info)", "Inserts a new patch into the model. Return value is the new patch's id.")},
-//	{"patch_calculate",	PF_patch_calculate,	0,		0,		0,		0,		D("int(patchvert_t *in_controlverts, patchvert_t *out_renderverts, int maxout, __inout patchinfo_t inout_info)", "Calculates the geometry of a hyperthetical patch.")},
+	{"patch_evaluate",	PF_patch_evaluate,	0,		0,		0,		0,		D("int(patchvert_t *in_controlverts, patchvert_t *out_renderverts, int maxout, patchinfo_t *inout_info)", "Calculates the geometry of a hyperthetical patch.")},
 #endif
 
 #ifdef ENGINE_ROUTING
@@ -12277,7 +12318,9 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 //	{"delayedparticle",	PF_Fixme,			0,		0,		0,		528,	D("float(vector org, vector vel, float delay, float collisiondelay, optional float theme)","Basically just extra args for 'particle'.")},
 	{"loadfromdata",	PF_loadfromdata,	0,		0,		0,		529,	D("void(string s)", "Reads a set of entities from the given string. This string should have the same format as a .ent file or a saved game. Entities will be spawned as required. If you need to see the entities that were created, you should use parseentitydata instead.")},
 	{"loadfromfile",	PF_loadfromfile,	0,		0,		0,		530,	D("void(string s)", "Reads a set of entities from the named file. This file should have the same format as a .ent file or a saved game. Entities will be spawned as required. If you need to see the entities that were created, you should use parseentitydata instead.")},
-	{"setpause",		PF_setpause,		0,		0,		0,		531,	D("void(float pause)", "Sets whether the server should or should not be paused. This does not affect auto-paused things like when the console is down.")},
+	{"setpause",		PF_setpause,		0,		0,		0,		531,	D("void(float pause)",	"SSQC: Sets whether the server should or should not be paused.\n"
+																									"CSQC: Only works in singleplayer, suitable for menu auto-pause. To pause in multiplayer use eg localcmd(\"cmd pause\n\") to ask the server side to pause.\n"
+																									"Pause state between modules will be ORed, along with engine reasons for auto pausing.")},
 	//end dp extras
 	//begin mvdsv extras
 #ifdef HAVE_LEGACY
@@ -12640,7 +12683,7 @@ void PR_ResetBuiltins(progstype_t type)	//fix all nulls to PF_FIXME and add any 
 				}
 			}
 			if (!BuiltinList[i].name)
-				Con_Printf("Failed to map builtin %s to %i specified in fte_bimap.dat\n", com_token, binum);
+				Con_Printf("Failed to map builtin %s to %i specified in fte_bimap.txt\n", com_token, binum);
 		}
 	}
 }
@@ -13762,6 +13805,8 @@ void PR_DumpPlatform_f(void)
 		{"INFOKEY_P_CSQCACTIVE","const string", QW|NQ, D("Client has csqc enabled. CSQC ents etc will be sent to this player."), 0, "\"csqcactive\""},
 		{"INFOKEY_P_SVPING",	"const string", QW|NQ, NULL, 0, "\"svping\""},
 		{"INFOKEY_P_GUID",		"const string", QW|NQ, D("Some hash string which should be reasonably unique to this player's quake installation."), 0, "\"guid\""},
+		{"INFOKEY_P_CERT_SHA1",	"const string", QW|NQ, D("Obtains the client's (d)tls certificate's fingerprint."), 0, "\"*cert_sha1\""},
+		{"INFOKEY_P_CERT_DN",	"const string", QW|NQ, D("Obtains the client's (d)tls certificate's Distinguished Name string."), 0, "\"*cert_dn\""},
 		{"INFOKEY_P_CHALLENGE",	"const string", QW|NQ, NULL, 0, "\"challenge\""},
 		{"INFOKEY_P_USERID",	"const string", QW|NQ, NULL, 0, "\"*userid\""},
 		{"INFOKEY_P_DOWNLOADPCT","const string",QW|NQ, D("The client's download percentage for the current file. Additional files are not known."), 0, "\"download\""},
@@ -14352,6 +14397,17 @@ void PR_DumpPlatform_f(void)
 	}
 	else
 		VFS_PRINTF(f, "#define DEP_CSQC DEP\n");
+	if (targ&(NQ|QW|H2))
+	{	//DEP_SSQC means deprecated in ssqc only, but NOT in the CSQC.
+		VFS_PRINTF(f,	"#if defined(SSQC)"
+							"\t#define DEP_SSQC DEP\n"
+						"#else\n"
+							"\t#define DEP_SSQC\n"
+						"#endif\n"
+						);
+	}
+	else
+		VFS_PRINTF(f, "#define DEP_SSQC\n");
 	VFS_PRINTF(f,	"#ifndef DEP\n"
 						"\t#define DEP __deprecated //predefine this if you want to avoid our deprecation warnings.\n"
 					"#endif\n"

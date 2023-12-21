@@ -2190,6 +2190,30 @@ int MSG_ReadShort (void)
 	return c;
 }
 
+int MSG_ReadUInt16 (void)
+{
+	int	c;
+	unsigned int msg_readcount;
+
+	if (msg_readmsg->packing!=SZ_RAWBYTES)
+		return (short)MSG_ReadBits(16);
+
+	msg_readcount = msg_readmsg->currentbit>>3;
+	if (msg_readcount+2 > msg_readmsg->cursize)
+	{
+		msg_badread = true;
+		return -1;
+	}
+
+	c = (unsigned short)(msg_readmsg->data[msg_readcount]
+	+ (msg_readmsg->data[msg_readcount+1]<<8));
+
+	msg_readcount += 2;
+	msg_readmsg->currentbit = msg_readcount<<3;
+
+	return c;
+}
+
 int MSG_ReadLong (void)
 {
 	int	c;
@@ -2247,9 +2271,9 @@ quint64_t MSG_ReadUInt64 (void)
 		v-=l;
 		b++;
 	}
-	r = v<<(b*8);
+	r = (quint64_t)v<<(b*8);
 	while(b --> 0)
-		r |= MSG_ReadByte()<<(b*8);
+		r |= (quint64_t)MSG_ReadByte()<<(b*8);
 	return r;
 }
 qint64_t MSG_ReadInt64 (void)
@@ -2842,12 +2866,12 @@ void COM_CleanUpPath(char *str)
 	int criticize = 0;
 	for (dots = str; *dots; dots++)
 	{
-		if (*dots >= 'A' && *dots <= 'Z')
+		/*if (*dots >= 'A' && *dots <= 'Z')
 		{
 			*dots = *dots - 'A' + 'a';
 			criticize = 1;
 		}
-		else if (*dots == '\\')
+		else */if (*dots == '\\')
 		{
 			*dots = '/';
 			criticize = 2;
@@ -5436,7 +5460,7 @@ void COM_InitArgv (int argc, const char **argv)	//not allowed to tprint
 	qboolean	safe;
 	int			i;
 
-#if !defined(NACL) && !defined(FTE_TARGET_WEB)
+#if !defined(FTE_TARGET_WEB)
 	FILE *f;
 
 	if (argv && argv[0])
@@ -5538,8 +5562,8 @@ static void COM_Version_f (void)
 
 #ifdef FTE_BRANCH
 	Con_Printf("Branch: "STRINGIFY(FTE_BRANCH)"\n");
-#endif
-#if defined(SVNREVISION) && defined(SVNDATE)
+	Con_Printf("Revision: %s - %s\n",STRINGIFY(SVNREVISION), STRINGIFY(SVNDATE));
+#elif defined(SVNREVISION) && defined(SVNDATE)
 	if (!strncmp(STRINGIFY(SVNREVISION), "git-", 4))
 		Con_Printf("GIT Revision: %s - %s\n",STRINGIFY(SVNREVISION), STRINGIFY(SVNDATE));
 	else
@@ -6905,9 +6929,9 @@ static int Base64_Decode(char inp)
 		return (inp-'a') + 26;
 	if (inp >= '0' && inp <= '9')
 		return (inp-'0') + 52;
-	if (inp == '+')
+	if (inp == '+' || inp == '-')
 		return 62;
-	if (inp == '/')
+	if (inp == '/' || inp == '_')
 		return 63;
 	//if (inp == '=') //padding char
 	return 0;	//invalid
@@ -6942,6 +6966,23 @@ size_t Base64_EncodeBlock(const qbyte *in, size_t length, char *out, size_t outs
 	if (out < end)
 		*out = 0;
 	return out-start;
+}
+size_t Base64_EncodeBlockURI(const qbyte *in, size_t length, char *out, size_t outsize)
+{	//special uri-safe version (also trims)
+	outsize = Base64_EncodeBlock(in, length, out, outsize);
+	for (length = 0; length < outsize; length++)
+	{
+		if (out[length] == '+')
+			out[length] = '-';
+		else if (out[length] == '/')
+			out[length] = '_';
+		else if (out[length] == '=')
+		{	//truncate it here.
+			out[length] = 0;
+			return length;
+		}
+	}
+	return outsize;
 }
 size_t Base64_DecodeBlock(const char *in, const char *in_end, qbyte *out, size_t outsize)
 {
@@ -8484,10 +8525,15 @@ char *version_string(void)
 #ifdef OFFICIAL_RELEASE
 		Q_snprintfz(s, sizeof(s), "%s v%i.%02i", DISTRIBUTION, FTE_VER_MAJOR, FTE_VER_MINOR);
 #elif defined(SVNREVISION) && defined(SVNDATE)
+	#ifdef FTE_BRANCH
+		//something like 'FTE master 6410M-HASH'
+		Q_snprintfz(s, sizeof(s), "%s %s %s", DISTRIBUTION, STRINGIFY(FTE_BRANCH), STRINGIFY(SVNREVISION));
+	#else
 		if (!strncmp(STRINGIFY(SVNREVISION), "git-", 4))
 			Q_snprintfz(s, sizeof(s), "%s %s", DISTRIBUTION, STRINGIFY(SVNREVISION));	//if both are defined then its a known unmodified svn revision.
 		else
 			Q_snprintfz(s, sizeof(s), "%s SVN %s", DISTRIBUTION, STRINGIFY(SVNREVISION));	//if both are defined then its a known unmodified svn revision.
+	#endif
 #else
 	#if defined(SVNREVISION)
 		if (!strncmp(STRINGIFY(SVNREVISION), "git-", 4))
@@ -8542,9 +8588,17 @@ int parse_revision_number(const char *s, qboolean strict)
 	}
 	else
 	{
-		//[lower-]upper[M]
+		//svn: [lower-]upper[M]
+		//git: revision-git-hash[-dirty]
+		//git: branch-revision-git-hash[-dirty]
 		rev = strtoul(s, &e, 10);
-		if (*e && strict)
+		if (!strncmp(e, "-git", 4))
+		{	//if there's a -dirty in there then its bad.
+			//we can't validate that the commit id matches the same branch as this build. we'll just have to live with it.
+			if (strict && strstr(s, "-dirty"))
+				return false;
+		}
+		else if (*e && strict)
 			return false;	//something odd.
 	}
 	return rev;

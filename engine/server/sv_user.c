@@ -85,7 +85,7 @@ cvar_t cmd_allowaccess	= CVAR("cmd_allowaccess", "0");	//set to 1 to allow cmd t
 cvar_t cmd_gamecodelevel	= CVARF("cmd_gamecodelevel", STRINGIFY(RESTRICT_LOCAL), CVAR_NOTFROMSERVER);	//execution level which gamecode is told about (for unrecognised commands)
 
 cvar_t	sv_pure	= CVARFD("sv_pure", "", CVAR_SERVERINFO, "The most evil cvar in the world, many clients will ignore this.\n0=standard quake rules.\n1=clients should prefer files within packages present on the server.\n2=clients should use *only* files within packages present on the server.\nDue to quake 1.01/1.06 differences, a setting of 2 only works in total conversions.");
-cvar_t	sv_nqplayerphysics	= CVARAFCD("sv_nqplayerphysics", "auto", "sv_nomsec", CVAR_ARCHIVE, SV_NQPhysicsUpdate, "Disable player prediction and run NQ-style player physics instead. This can be used for compatibility with mods that expect exact behaviour.");
+cvar_t	sv_nqplayerphysics	= CVARAFCD("sv_nqplayerphysics", "auto", "sv_nomsec", CVAR_ARCHIVE, SV_NQPhysicsUpdate, "Disable player prediction and run NQ-style player physics instead. This can be used for compatibility with mods that expect exact behaviour. A value of 2 will not block prediction, and may be juddery/jerky/swimmy.");
 
 #ifdef HAVE_LEGACY
 static cvar_t	sv_brokenmovetypes	= CVARD("sv_brokenmovetypes", "0", "Emulate vanilla quakeworld by forcing MOVETYPE_WALK on all players. Shouldn't be used for any games other than QuakeWorld.");
@@ -116,6 +116,7 @@ extern cvar_t	pm_bunnyspeedcap;
 extern cvar_t	pm_ktjump;
 extern cvar_t	pm_slidefix;
 extern cvar_t	pm_slidyslopes;
+extern cvar_t	pm_bunnyfriction;
 extern cvar_t	pm_autobunny;
 extern cvar_t	pm_airstep;
 extern cvar_t	pm_pground;
@@ -375,7 +376,6 @@ void SV_New_f (void)
 			ClientReliableWrite_Byte (host_client, playernum);
 
 			split->state = cs_connected;
-			split->connection_started = realtime;
 		#ifdef SVRANKING
 			split->stats_started = realtime;
 		#endif
@@ -412,7 +412,6 @@ void SV_New_f (void)
 				playernum |= 128;
 
 			split->state = cs_connected;
-			split->connection_started = realtime;
 		#ifdef SVRANKING
 			split->stats_started = realtime;
 		#endif
@@ -691,6 +690,8 @@ void SVNQ_New_f (void)
 
 #ifdef OFFICIAL_RELEASE
 	Q_snprintfz(build, sizeof(build), "v%i.%02i", FTE_VER_MAJOR, FTE_VER_MINOR);
+#elif defined(FTE_BRANCH)
+	Q_snprintfz(build, sizeof(build), "Rev %s", STRINGIFY(SVNREVISION));
 #elif defined(SVNREVISION)
 	Q_snprintfz(build, sizeof(build), "SVN %s", STRINGIFY(SVNREVISION));
 #else
@@ -2088,8 +2089,17 @@ void SVQW_Spawn_f (void)
 		//which really sucks.
 		//so let multiplayer people know what's going on so that they don't think its an actual bug, and can harass the admin to get it fixed in mods that allow for it.
 		if (!strcmp(sv_nqplayerphysics.string, "auto") || !strcmp(sv_nqplayerphysics.string, ""))
-			if (sv_nqplayerphysics.ival)
+		{
+			if (svprogfuncs&&(PR_FindFunction(svprogfuncs, "SV_RunClientCommand", PR_ANY)	//modern mod with custom physics
+				||PR_FindFunction(svprogfuncs, "SV_PlayerPhysics", PR_ANY)))	//lame dp mod with hacky player physics.
+				;	//say nothing. its annoying. this mod ain't gonna have weird badly defined behaviour anyway.
+			else if (sv_nqplayerphysics.ival == 2)
+				SV_PrintToClient(host_client, PRINT_MEDIUM, CON_WARNING"Movement prediction may not match server due to non-quakeworld mod compatibilty\n");
+			else if (sv_nqplayerphysics.ival)
 				SV_PrintToClient(host_client, PRINT_HIGH, CON_WARNING"Movement prediction is disabled in favour of non-quakeworld mod compatibilty\n");
+//			else
+//				SV_PrintToClient(host_client, PRINT_LOW, CON_NOTICE"Movement prediction works, yay this server is awesome and good and all that is right with the world\n");
+		}
 	}
 }
 
@@ -3174,7 +3184,6 @@ qboolean SV_FindRemotePackage(const char *package, char *url, size_t urlsize)
 
 	//or something.
 
-	extern cvar_t sv_dlURL;
 	vfsfile_t *f;
 	char line[512];
 
@@ -3208,9 +3217,9 @@ qboolean SV_FindRemotePackage(const char *package, char *url, size_t urlsize)
 		VFS_CLOSE(f);
 	}
 
-	if (*sv_dlURL.string)
+	if (*fs_dlURL.string)
 	{	//a fallback, though the above mechanism allows for a wildcard for all.
-		Q_strncatz(sv_dlURL.string, package, urlsize);
+		Q_strncatz(fs_dlURL.string, package, urlsize);
 		Q_strncatz(url, package, urlsize);
 		return true;
 	}
@@ -5460,7 +5469,6 @@ void SV_SetUpClientEdict (client_t *cl, edict_t *ent)
 	ent->v->movetype = MOVETYPE_NOCLIP;
 
 	ent->v->frags = 0;
-	cl->connection_started = realtime;
 }
 
 //dynamically add/remove a splitscreen client
@@ -5951,18 +5959,7 @@ static void SVNQ_Spawn_f (void)
 		host_client->maxspeed = ent->xv->maxspeed;
 	}
 	else
-	{
-		ED_Clear(svprogfuncs, ent);
-		ED_Spawned(ent, false);
-
-		ent->v->colormap = NUM_FOR_EDICT(svprogfuncs, ent);
-		ent->v->team = 0;	// FIXME
-		svprogfuncs->SetStringField(svprogfuncs, ent, &ent->v->netname, host_client->name, true);
-
-		host_client->entgravity = ent->xv->gravity = 1.0;
-		host_client->entgravity*=sv_gravity.value;
-		host_client->maxspeed = ent->xv->maxspeed = sv_maxspeed.value;
-	}
+		SV_SetUpClientEdict(host_client, ent);
 
 //
 // force stats to be updated
@@ -6223,6 +6220,8 @@ static void SVNQ_Status_f(void)
 		int hours, mins, secs;
 		if (!cl->state)
 			continue;
+		if (i >= host_client->max_net_clients)
+			break;	//don't send more than it expects. the ping parsers will give up and get spammy (sucks).
 		secs = realtime - cl->connection_started;
 		mins = secs/60;
 		secs -= mins*60;
@@ -6420,6 +6419,10 @@ ucmd_t ucmds[] =
 	{"sayone",		SV_SayOne_f},
 	{"say",			SV_Say_f},
 	{"say_team",	SV_Say_Team_f},
+#ifdef NQPROT
+	{"status",		SVNQ_Status_f},
+#endif
+
 #ifdef SVRANKING
 	{"topten",		Rank_ListTop10_f},
 #endif
@@ -7158,6 +7161,9 @@ int SV_PMTypeForClient (client_t *cl, edict_t *ent)
 	}
 #endif
 
+	if (sv_nqplayerphysics.ival && sv_nqplayerphysics.ival != 2)
+		return PM_NONE;	//let the client know that its prediction is fucked. should make it just lerp.
+
 	switch((int)ent->v->movetype)
 	{
 	case MOVETYPE_NOCLIP:
@@ -7246,6 +7252,12 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 #ifdef NEWSPEEDCHEATPROT
 		if (ucmd->msec && host_client->msecs > 500)
 			host_client->msecs = 500;
+		if (host_client->hoverms)
+		{
+			if (sv_showpredloss.ival)
+				Con_Printf("%s: forcing %g msecs (anti-hover)\n", host_client->name, cmd.msec);
+			host_client->hoverms = 0;
+		}
 		if (ucmd->msec > host_client->msecs)
 		{	//they're over their timeslice allocation
 			//if they're not taking the piss then be prepared to truncate the frame. this should hide clockskew without allowing full-on speedcheats.
@@ -7611,6 +7623,7 @@ void SV_RunCmd (usercmd_t *ucmd, qboolean recurse)
 	movevars.stepdown = (pm_stepdown.value != 0);
 	movevars.walljump = (pm_walljump.value);
 	movevars.slidyslopes = (pm_slidyslopes.value!=0);
+	movevars.bunnyfriction = (pm_bunnyfriction.value!=0);
 	movevars.autobunny = (pm_autobunny.value!=0);
 	movevars.watersinkspeed = *pm_watersinkspeed.string?pm_watersinkspeed.value:60;
 	movevars.flyfriction = *pm_flyfriction.string?pm_flyfriction.value:4;
@@ -9527,7 +9540,7 @@ static void SV_AirMove (void)
 	}
 }
 
-static void SV_WaterMove (void)
+static void SV_WaterMove (qboolean flymode)
 {
 	int		i;
 	vec3_t	wishvel;
@@ -9543,7 +9556,9 @@ static void SV_WaterMove (void)
 	for (i=0 ; i<3 ; i++)
 		wishvel[i] = forward[i]*cmd.forwardmove + right[i]*cmd.sidemove;
 
-	if (!cmd.forwardmove && !cmd.sidemove && !cmd.upmove)
+	if (flymode)
+		VectorMA(wishvel, cmd.upmove, up, wishvel);
+	else if (!cmd.forwardmove && !cmd.sidemove && !cmd.upmove)
 		wishvel[2] -= 60;		// drift towards bottom
 	else
 		wishvel[2] += cmd.upmove;
@@ -9565,7 +9580,8 @@ static void SV_WaterMove (void)
 		VectorScale (wishvel, maxspeed/wishspeed, wishvel);
 		wishspeed = maxspeed*scale;
 	}
-	wishspeed *= 0.7;
+	if (!flymode)
+		wishspeed *= 0.7;
 
 //
 // water friction
@@ -9779,7 +9795,11 @@ void SV_ClientThink (void)
 // walk
 //
 	if ( (sv_player->v->waterlevel >= 2) && (sv_player->v->movetype != MOVETYPE_NOCLIP) )
-		SV_WaterMove ();
+		SV_WaterMove (false);
+#ifdef HEXEN2
+	else if (progstype == PROG_H2 && sv_player->v->movetype == MOVETYPE_FLY)
+		SV_WaterMove (true);	//just reuse our swimming code for hexen2's flying (quake tends to deny traction).
+#endif
 	else if (((int)sv_player->xv->pmove_flags&PMF_LADDER) && (sv_player->v->movetype != MOVETYPE_NOCLIP) )
 		SV_LadderMove();
 	else

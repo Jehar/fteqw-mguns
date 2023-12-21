@@ -17,8 +17,6 @@
 #linux->morphos (FTE_TARGET=morphos)
 #linux->macosx (FTE_TARGET=macosx) or (FTE_TARGET=macosx_x86)
 #linux->javascript (FTE_TARGET=web)
-#linux->nacl (FTE_TARGET=nacl NARCH=x86_64) deprecated.
-#win32->nacl
 #linux->droid (make droid)
 #win32->droid (make droid)
 #if you are cross compiling, you'll need to use FTE_TARGET=mytarget
@@ -83,11 +81,11 @@ MAKE:=$(MAKE) --no-print-directory SVNREVISION="$(SVNREVISION)" SVN_VERSION="$(S
 
 #update these to download+build a different version. this assumes that the url+subdirs etc contain a consistant version everywhere.
 JPEGVER=9c
-ZLIBVER=1.2.13
-PNGVER=1.6.37
+ZLIBVER=1.3
+PNGVER=1.6.39
 OGGVER=1.3.4
 VORBISVER=1.3.6
-SDL2VER=2.0.10
+SDL2VER=2.26.4
 SCINTILLAVER=373
 OPUSVER=1.3.1
 SPEEXVER=1.2.0
@@ -574,7 +572,6 @@ HTTP_DIR=$(BASE_DIR)/http
 #LIBS_DIR=$(BASE_DIR)/libs
 LIBS_DIR?=.
 PROGS_DIR=$(BASE_DIR)/qclib
-NACL_DIR=$(BASE_DIR)/nacl
 
 ifeq ($(NOCOMPAT),1)
 	NCCFLAGS=-DNOLEGACY -DOMIT_QCC
@@ -717,7 +714,7 @@ ifeq ($(FTE_TARGET),SDL2)
 	BASE_CFLAGS+=-DLIBJPEG_STATIC -DLIBJPEG_STATIC -DLIBPNG_STATIC -DOPUS_STATIC -DSPEEX_STATIC -DFREETYPE_STATIC -DLIBVORBISFILE_STATIC
 endif
 
-VPATH := $(BASE_DIR) : $(CLIENT_DIR) : $(GL_DIR) : $(SW_DIR) : $(COMMON_DIR) : $(SERVER_DIR) : $(HTTP_DIR) : $(QUX_DIR) : $(PROGS_DIR) : $(NACL_DIR) : $(D3D_DIR) : $(VK_DIR) : $(BASE_DIR)/web
+VPATH := $(BASE_DIR) : $(CLIENT_DIR) : $(GL_DIR) : $(SW_DIR) : $(COMMON_DIR) : $(SERVER_DIR) : $(HTTP_DIR) : $(QUX_DIR) : $(PROGS_DIR) : $(D3D_DIR) : $(VK_DIR) : $(BASE_DIR)/web
 
 PROFILE_CFLAGS=-pg
 DX7SDK=-I./libs/dxsdk7/include/
@@ -725,7 +722,6 @@ DX7SDK=-I./libs/dxsdk7/include/
 GLCFLAGS?=-DGLQUAKE
 D3DCFLAGS?=-DD3D9QUAKE -DD3D11QUAKE
 VKCFLAGS?=-DVKQUAKE
-NPFTECFLAGS=-DNPFTE
 
 CLIENT_OBJS = \
 	textedit.o	\
@@ -1044,6 +1040,14 @@ endif
 ifeq (1,$(LINK_ZLIB))
     CLIENTLIBFLAGS+=-DZLIB_STATIC
     CLIENTLDDEPS+=-lz
+
+    #and deflate64, because why not.
+    ifneq ("$(wildcard $(ARCHLIBS)/infback9.h)","")
+        CLIENTLIBFLAGS+=-DZLIB_DEFLATE64
+        CLIENTLDDEPS+=-lz9
+        QCC_CFLAGS+=-DZLIB_DEFLATE64
+        QCC_LDFLAGS+=-lz9
+    endif
 endif
 ifeq (1,$(LINK_ODE))
     ALL_CFLAGS+=$(shell $(PKGCONFIG) ode --cflags --silence-errors) -DODE_STATIC
@@ -1128,76 +1132,6 @@ endif
 
 
 #specific targets override those defaults as needed.
-#google native client
-ifeq ($(FTE_TARGET),nacl)
-	CLIENTLDDEPS=
-	SERVERLDDEPS=
-
-	NARCH ?= x86_32
-	ifeq ($(shell uname -o 2>&1 | grep Cygwin),)
-		MYOS=linux
-	else
-		MYOS=win
-	endif
-
-	CC=
-	CXX=
-	STRIP=@echo SKIP: strip
-	NACLLIBC=glibc
-	ifeq ($(NARCH),x86_32)
-		CC=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-gcc -DNACL -m32
-		CXX=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-g++ -DNACL -m32
-		STRIP=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-strip
-		BITS=
-		NACLLIBS=$(NACLLIBC)_x86_32/Release
-	endif
-	ifeq ($(NARCH),x86_64)
-		CC=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-gcc -DNACL -m64
-		CXX=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-g++ -DNACL -m64
-		STRIP=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_x86_$(NACLLIBC)/bin/i686-nacl-strip
-		BITS=
-		NACLLIBS=$(NACLLIBC)_x86_64/Release
-	endif
-	ifeq ($(NARCH),arm)
-		CC=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_arm_$(NACLLIBC)/bin/arm-nacl-gcc -DNACL
-		CXX=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_arm_$(NACLLIBC)/bin/arm-nacl-g++ -DNACL
-		STRIP=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_arm_$(NACLLIBC)/bin/arm-nacl-strip
-		BITS=
-		NACLLIBS=$(NACLLIBC)_arm/Release
-	endif
-	ifeq ($(NARCH),pnacl)
-		CC=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_pnacl/bin/pnacl-clang -DNACL
-		CXX=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_pnacl/bin/pnacl-clang++ -DNACL
-		STRIP=$(NACL_SDK_ROOT)/toolchain/$(MYOS)_pnacl/bin/pnacl-strip
-		STRIPFLAGS=
-		BITS=
-		NACLLIBS=pnacl/Release
-	endif
-
-	BASELDFLAGS = -lm -lppapi_gles2 -lnosys -lppapi
-	IMAGELDFLAGS =
-
-	GL_CFLAGS=$(GLCFLAGS)
-	GL_CFLAGS+=-I$(realpath $(NACL_SDK_ROOT)/include)
-	BASELDFLAGS+=-L$(realpath $(NACL_SDK_ROOT)/lib/$(NACLLIBS))
-
-	GLCL_OBJS=$(GL_OBJS) $(D3DGL_OBJS) $(GLQUAKE_OBJS) sys_ppapi.o cd_null.o gl_vidppapi.o fs_ppapi.o snd_ppapi.o 
-
-	GL_LDFLAGS=$(GLLDFLAGS)
-	M_LDFLAGS=$(GLLDFLAGS)
-	
-	GLB_DIR=gl_nacl_$(NARCH)
-	MINGL_DIR=mingl_nacl_$(NARCH)
-	ifeq ($(NARCH),pnacl)
-		GL_EXE_NAME=../$(EXE_NAME).pexe
-		GLCL_EXE_NAME=../$(EXE_NAME)-cl.pexe
-		MINGL_EXE_NAME=../$(EXE_NAME)-mingl.pexe
-	else
-		GL_EXE_NAME=../$(EXE_NAME)-$(NARCH).nexe
-		GLCL_EXE_NAME=../$(EXE_NAME)-cl-$(NARCH).nexe
-		MINGL_EXE_NAME=../$(EXE_NAME)-mingl-$(NARCH).nexe
-	endif
-endif
 
 #FTE_TARGET=win32_SDL | FTE_TARGET=win64_SDL (MinGW32 + SDL | MinGW64 + SDL)
 ifeq (win_SDL,$(findstring win,$(FTE_TARGET))$(findstring _SDL,$(FTE_TARGET)))
@@ -1459,12 +1393,6 @@ ifeq (win,$(findstring win,$(FTE_TARGET))$(findstring _SDL,$(FTE_TARGET)))
 	GLB_DIR=gl_mgw$(BITS)
 	GLCL_DIR=glcl_mgw$(BITS)
 
-	NPFTE_OBJS=httpclient.o image.o sys_win_threads.o sys_npfte.o sys_axfte.o sys_plugfte.o $(LTO_END) npplug.o ../../ftequake/npapi.def $(LTO_START)
-	NPFTE_DLL_NAME=../npfte$(BITS).dll
-	NPFTE_LDFLAGS=-Wl,--enable-stdcall-fixup $(IMAGELDFLAGS) -ldxguid -lws2_32 -lwinmm -lgdi32 -lole32 -loleaut32 -luuid -lstdc++ -shared -Wl,--subsystem,windows
-	NPFTE_CFLAGS=$(NPFTECFLAGS) $(W32_CFLAGS) -DMULTITHREAD
-	NPFTEB_DIR=npfte_mgw$(BITS)
-
 	MCL_OBJS=$(D3DGL_OBJS) $(GLQUAKE_OBJS) $(SOFTWARE_OBJS) $(D3DQUAKE_OBJS) gl_vidnt.o gl_videgl.o $(WINDOWS_OBJS)
 	M_EXE_NAME=../$(EXE_NAME)$(BITS)$(EXEPOSTFIX)
 	MCL_EXE_NAME=../$(EXE_NAME)cl$(BITS)$(EXEPOSTFIX)
@@ -1581,12 +1509,6 @@ ifneq (,$(findstring linux,$(FTE_TARGET)))
 	endif
 	
 	QCC_DIR=linqcc$(BITS)
-	
-	NPFTE_OBJS=httpclient.o image.o sys_linux_threads.o sys_npfte.o sys_axfte.o sys_plugfte.o
-	NPFTE_DLL_NAME=../npfte$(BITS).so
-	NPFTE_LDFLAGS=-shared -Wl,-z,defs -ldl -lpthread
-	NPFTE_CFLAGS=$(NPFTECFLAGS) $(W32_CFLAGS) -DMULTITHREAD -fPIC -DDYNAMIC_LIBPNG -DDYNAMIC_LIBJPEG
-	NPFTEB_DIR=npfte_linux$(BITS)
 
 	GLCL_OBJS=$(GL_OBJS) $(D3DGL_OBJS) $(GLQUAKE_OBJS) gl_vidlinuxglx.o gl_vidwayland.o gl_videgl.o snd_pulse.o snd_alsa.o snd_linux.o snd_sdl.o cd_linux.o sys_linux.o sys_linux_threads.o
 	GL_EXE_NAME=../$(EXE_NAME)-gl$(BITS)
@@ -1886,7 +1808,6 @@ releases:
 #	-$(MAKE) FTE_TARGET=win32 relcl
 	-$(MAKE) droid-rel
 	-$(MAKE) web-rel
-	-$(MAKE) FTE_TARGET=win32 npfte-rel
 
 autoconfig: clean
 	/bin/bash makeconfig.sh y
@@ -1905,9 +1826,6 @@ DO_WINDRES?=$(DO_ECHO) $(WINDRES) $(BRANDFLAGS) -I$(CLIENT_DIR) -O coff $< $@
 $(OUT_DIR)/resources.o : winquake.rc
 	$(DO_WINDRES)
 $(OUT_DIR)/fteqcc.o : fteqcc.rc
-	$(DO_WINDRES)
-#npAPI stuff requires some extra resources
-$(OUT_DIR)/npplug.o : ftequake/npplug.rc
 	$(DO_WINDRES)
 
 
@@ -2124,7 +2042,7 @@ m-profile:
 
 
 _qcc-tmp: $(REQDIR)
-	@$(MAKE) $(TYPE) EXE_NAME="$(EXE_NAME)$(EXEPOSTFIX)" PRECOMPHEADERS="" OUT_DIR="$(OUT_DIR)" WCFLAGS="$(CLIENT_ONLY_CFLAGS) $(WCFLAGS)" LDFLAGS="$(LDFLAGS) $(QCC_LDFLAGS)" OBJS="QCC_OBJS SOBJS"
+	@$(MAKE) $(TYPE) EXE_NAME="$(EXE_NAME)$(EXEPOSTFIX)" PRECOMPHEADERS="" OUT_DIR="$(OUT_DIR)" WCFLAGS="$(QCC_CFLAGS) $(WCFLAGS)" LDFLAGS="$(LDFLAGS) $(QCC_LDFLAGS)" OBJS="QCC_OBJS SOBJS"
 qcc-rel:
 	@$(MAKE) _qcc-tmp TYPE=_out-rel REQDIR=reldir EXE_NAME="../fteqcc$(BITS)" OUT_DIR="$(RELEASE_DIR)/$(NCDIRPREFIX)$(QCC_DIR)" SOBJS="qcctui.o packager.o $(if $(findstring win,$(FTE_TARGET)),fteqcc.o)"
 qccgui-rel:
@@ -2202,15 +2120,13 @@ help:
 	@-echo "'glcl-???' (currently broken)"
 	@-echo "'droid-???' (cross compiles Android package)"
 	@-echo "'web-???' (compiles javascript/emscripten page)"
-	@-echo "'npfte-???' (cross compiles QuakeTV Firefox/Netscape browser plugin)"
-	@-echo "'nacl-???' (cross compiles QuakeTV Firefox/Netscape browser plugin)"
 	@-echo ""
 	@-echo "Cross targets can be specified with FTE_TARGET=blah"
 	@-echo "linux32, linux64 specify specific x86 archs"
 	@-echo "SDL - Attempt to use sdl for the current target"
 	@-echo "win32 - Mingw compile for win32"
 	@-echo "vc - Attempts to use msvc8+ to compile. Note: uses profile guided optimisations. You must build+run the relevent profile target before a release target will compile properly. Debug doesn't care."
-	@-echo "android, npfte, nacl targets explicitly cross compile, and should generally not be given an FTE_TARGET."
+	@-echo "android targets explicitly cross compile, and should generally not be given an FTE_TARGET."
 
 clean:
 	-rm -f -r $(RELEASE_DIR)
@@ -2229,48 +2145,6 @@ distclean: clean
 	-rm -f -r libs/SDL2-$(SDL2VER)
 
 
-#################################################
-#npfte
-
-npfte-tmprel: reldir
-	@$(MAKE) $(OUT_DIR)/$(EXE_NAME)  OUT_DIR="$(OUT_DIR)" WCFLAGS="$(NPFTE_CFLAGS) $(RELEASE_CFLAGS)" LDFLAGS="$(NPFTE_LDFLAGS) $(LDFLAGS) $(RELEASE_LDFLAGS)" OBJS="NPFTE_OBJS"
-npfte-tmpdbg: debugdir
-	@$(MAKE) $(OUT_DIR)/$(EXE_NAME)  OUT_DIR="$(OUT_DIR)" WCFLAGS="$(NPFTE_CFLAGS) $(DEBUG_CFLAGS)" LDFLAGS="$(NPFTE_LDFLAGS) $(LDFLAGS) $(DEBUG_LDFLAGS)" OBJS="NPFTE_OBJS"
-npfte-rel:
-	-@$(MAKE) npfte-tmprel OUT_DIR="$(RELEASE_DIR)/$(NPFTEB_DIR)w32" EXE_NAME="../npfte.dll" PRECOMPHEADERS="" FTE_TARGET=win32
-	-@$(MAKE) npfte-tmprel OUT_DIR="$(RELEASE_DIR)/$(NPFTEB_DIR)l32" EXE_NAME="../npfte32.so" PRECOMPHEADERS="" FTE_TARGET=linux32
-	-@$(MAKE) npfte-tmprel OUT_DIR="$(RELEASE_DIR)/$(NPFTEB_DIR)l64" EXE_NAME="../npfte64.so" PRECOMPHEADERS="" FTE_TARGET=linux64
-	-cp $(RELEASE_DIR)/npfte.dll npfte/plugins
-	-cp $(RELEASE_DIR)/npfte32.so npfte/plugins
-	-cp $(RELEASE_DIR)/npfte64.so npfte/plugins
-	cd npfte && zip $(abspath $(RELEASE_DIR)/npfte.xpi) install.rdf plugins/npfte.dll plugins/npfte32.so plugins/npfte64.so
-	rm -rf /tmp/npfte
-	mkdir /tmp/npfte
-	cp $(RELEASE_DIR)/npfte.dll /tmp/npfte
-	cp ./npfte/manifest.json /tmp/npfte
-	-cd $(RELEASE_DIR)/ && ../npfte/crxmake.sh /tmp/npfte ../npfte/chrome.pem
-	rm -rf /tmp/npfte
-npfte-dbg:
-	@$(MAKE) npfte-tmpdbg OUT_DIR="$(DEBUG_DIR)/$(NPFTEB_DIR)w32" EXE_NAME="../npfte.dll" PRECOMPHEADERS="" FTE_TARGET=win32
-	@$(MAKE) npfte-tmpdbg OUT_DIR="$(DEBUG_DIR)/$(NPFTEB_DIR)l32" EXE_NAME="../npfte32.so" PRECOMPHEADERS="" FTE_TARGET=linux32
-	@$(MAKE) npfte-tmpdbg OUT_DIR="$(DEBUG_DIR)/$(NPFTEB_DIR)l64" EXE_NAME="../npfte64.so" PRECOMPHEADERS="" FTE_TARGET=linux64
-npfte-profile:
-	@$(MAKE) npfte-tmp TYPE=_npfte-profile OUT_DIR="$(PROFILE_DIR)/$(NPFTEB_DIR)"
-
-
-#################################################
-#nacl shortcut
-
-nacl-rel:
-	@$(MAKE) gl-rel FTE_TARGET=nacl NARCH=x86_32
-	@$(MAKE) gl-rel FTE_TARGET=nacl NARCH=x86_64
-	@$(MAKE) gl-rel FTE_TARGET=nacl NARCH=arm
-	@$(MAKE) gl-rel FTE_TARGET=nacl NARCH=pnacl
-nacl-dbg:
-	@$(MAKE) gl-dbg FTE_TARGET=nacl NARCH=x86_32
-	@$(MAKE) gl-dbg FTE_TARGET=nacl NARCH=x86_64
-	@$(MAKE) gl-dbg FTE_TARGET=nacl NARCH=arm
-	@$(MAKE) gl-dbg FTE_TARGET=nacl NARCH=pnacl
 
 #################################################
 #webgl helpers
@@ -2429,6 +2303,13 @@ libs-$(ARCH)/libz.a libs-$(ARCH)/libz.pc:
 	test -f zlib-$(ZLIBVER).tar.gz || wget http://zlib.net/zlib-$(ZLIBVER).tar.gz
 	-test -f libs-$(ARCH)/libz.a || (mkdir -p libs-$(ARCH) && cd libs-$(ARCH) && tar -xvzf ../zlib-$(ZLIBVER).tar.gz && cd zlib-$(ZLIBVER) && $(TOOLOVERRIDES) ./configure --static && $(TOOLOVERRIDES) $(MAKE) libz.a CC="$(CC) $(W32_CFLAGS) -fPIC" && cp libz.a ../ && $(TOOLOVERRIDES) $(AR) -s ../libz.a && cp zlib.h zconf.h zutil.h zlib.pc ../ )
 endif
+libs-$(ARCH)/libz9.a: libs-$(ARCH)/libz.a
+	(cd libs-$(ARCH)/zlib-$(ZLIBVER) && \
+		$(CC) -o contrib/infback9/infback9.o -c contrib/infback9/infback9.c -I.	&& \
+		$(CC) -o contrib/infback9/inftree9.o -c contrib/infback9/inftree9.c -I.	&& \
+		cp contrib/infback9/infback9.h .. && \
+		$(AR) rcs ../libz9.a contrib/infback9/infback9.o contrib/infback9/inftree9.o)
+
 
 libs-$(ARCH)/libpng.a libs-$(ARCH)/libpng.pc: libs-$(ARCH)/libz.a libs-$(ARCH)/libz.pc
 	test -f libpng-$(PNGVER).tar.gz || wget http://prdownloads.sourceforge.net/libpng/libpng-$(PNGVER).tar.gz?download -O libpng-$(PNGVER).tar.gz
@@ -2465,7 +2346,7 @@ libs-$(ARCH)/libBulletDynamics.a:
 ifeq ($(FTE_TARGET),web)
 makelibs: libs-$(ARCH)/libz.a $(MAKELIBS)
 else
-makelibs: libs-$(ARCH)/libjpeg.a libs-$(ARCH)/libz.a libs-$(ARCH)/libpng.a libs-$(ARCH)/libogg.a libs-$(ARCH)/libvorbis.a libs-$(ARCH)/libopus.a libs-$(ARCH)/libspeex.a libs-$(ARCH)/libspeexdsp.a libs-$(ARCH)/libfreetype.a $(MAKELIBS)
+makelibs: libs-$(ARCH)/libjpeg.a libs-$(ARCH)/libz9.a libs-$(ARCH)/libz.a libs-$(ARCH)/libpng.a libs-$(ARCH)/libogg.a libs-$(ARCH)/libvorbis.a libs-$(ARCH)/libopus.a libs-$(ARCH)/libspeex.a libs-$(ARCH)/libspeexdsp.a libs-$(ARCH)/libfreetype.a $(MAKELIBS)
 endif
 
 HTTP_OBJECTS=http/httpserver.c http/iwebiface.c common/fs_stdio.c http/ftpserver.c

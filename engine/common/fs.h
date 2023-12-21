@@ -27,6 +27,7 @@ extern int fs_hash_files;	//for tracking efficiency. no functional use.
 extern qboolean fs_readonly;	//if true, fopen(, "w") should always fail.
 extern void *fs_thread_mutex;
 extern float fs_accessed_time;
+extern cvar_t	fs_dlURL;
 
 struct searchpath_s;
 struct searchpathfuncs_s
@@ -72,16 +73,16 @@ void FS_UnRegisterFileSystemModule(void *module);
 
 void FS_AddHashedPackage(searchpath_t **oldpaths, const char *parent_pure, const char *parent_logical, searchpath_t *search, unsigned int loadstuff, const char *pakpath, const char *qhash, const char *pakprefix, unsigned int packageflags);
 void PM_LoadPackages(searchpath_t **oldpaths, const char *parent_pure, const char *parent_logical, searchpath_t *search, unsigned int loadstuff, int minpri, int maxpri);
+void PM_ManifestChanged(ftemanifest_t *man);
 void *PM_GeneratePackageFromMeta(vfsfile_t *file, char *fname, size_t fnamesize, enum fs_relative *fsroot);
 void PM_FileInstalled(const char *filename, enum fs_relative fsroot, void *metainfo, qboolean enable); //we finished installing a file via some other mechanism (drag+drop or from server. insert it into the updates menu.
 void PM_EnumeratePlugins(void (*callback)(const char *name, qboolean blocked));
 struct xcommandargcompletioncb_s;
 void PM_EnumerateMaps(const char *partial, struct xcommandargcompletioncb_s *ctx);
 void PM_LoadMap(const char *package, const char *map);
-int PM_IsApplying(qboolean listsonly);
+unsigned int PM_IsApplying(void);
 unsigned int PM_MarkUpdates (void);	//mark new/updated packages as needing install.
 void PM_ApplyChanges(void);	//for -install/-doinstall args
-void PM_ManifestPackage(const char *name, int security);
 qboolean PM_AreSourcesNew(qboolean doprompt);
 qboolean PM_FindUpdatedEngine(char *syspath, size_t syspathsize);	//names the engine we should be running
 void PM_AddManifestPackages(ftemanifest_t *man);
@@ -90,16 +91,28 @@ void Menu_Download_Update(void);
 typedef struct
 {
 	char *description;
-	void (*Update)			(const char *url, vfsfile_t *out);
+	void (*Update)			(const char *url, vfsfile_t *out, qboolean favourcache);
 #define plugupdatesourcefuncs_name "UpdateSource"
 } plugupdatesourcefuncs_t;
 qboolean PM_RegisterUpdateSource(void *module, plugupdatesourcefuncs_t *funcs);
 
-int FS_EnumerateKnownGames(qboolean (*callback)(void *usr, ftemanifest_t *man), void *usr);
+enum modsourcetype_e
+{
+	MST_SYSTEM,		//found via an fmf installed at system level (eg part of a flatpak app)
+	MST_DEFAULT,	//the default.fmf in the working directory
+	MST_BASEDIR,	//other fmf files in the basedir
+	MST_HOMEDIR,	//other fmf files in the homedir
+	MST_GAMEDIR,	//mod found from just looking for gamedirs.
+	MST_INTRINSIC,	//knowledge of the mod came one of the games we're hardcoded with.
+
+	MST_UNKNOWN,	//forgot where it came from...
+};
+int FS_EnumerateKnownGames(qboolean (*callback)(void *usr, ftemanifest_t *man, enum modsourcetype_e sourcetype), void *usr);
 
 struct modlist_s
 {
 	ftemanifest_t *manifest;
+	enum modsourcetype_e sourcetype;
 	char *gamedir;
 	char *description;
 };

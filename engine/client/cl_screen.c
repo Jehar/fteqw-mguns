@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #include "shader.h"
 #include "gl_draw.h"
+#include "fs.h"
 
 //name of the current backdrop for the loading screen
 char levelshotname[MAX_QPATH];
@@ -78,6 +79,7 @@ void RSpeedShow(void)
 
 	RSpNames[RSPEED_PROTOCOL]		= "Client Protocol";
 	RSpNames[RSPEED_SERVER]			= "Server";
+	RSpNames[RSPEED_AUDIO]			= "Audio";
 
 	memset(RQntNames, 0, sizeof(RQntNames));
 	RQntNames[RQUANT_MSECS]					= "Microseconds";
@@ -1399,7 +1401,7 @@ const char *SCR_ShowPics_ClickCommand(float cx, float cy, qboolean istouch)
 	float x, y, w, h;
 	showpic_t *sp;
 	mpic_t *p;
-	qboolean tryload = !showpics_touchtime;
+	qboolean tryload = istouch && !showpics_touchtime;
 	float bestdist = istouch?16:1;
 	const char *best = NULL;
 	showpics_touchtime = realtime;
@@ -1876,9 +1878,9 @@ void R_GetGPUUtilisation(float *gpu, float *mem)
 	typedef void *nvmlDevice_t;
 	struct nvmlUtilization_s
 	{
-		unsigned int cpu;
+		unsigned int gpu;
 		unsigned int mem;
-	} util = {-1,-1};
+	} util = {~0u,~0u};
 	static int (*nvmlDeviceGetUtilizationRates) (nvmlDevice_t device, struct nvmlUtilization_s *utilization);
 	static nvmlDevice_t dev;
 	if (!tried)
@@ -1906,8 +1908,8 @@ void R_GetGPUUtilisation(float *gpu, float *mem)
 
 	if (dev)
 		nvmlDeviceGetUtilizationRates(dev, &util);
-	*gpu = util.cpu/100.0;
-	*mem = util.mem/100.0;
+	*gpu = (util.gpu == ~0u)?-1:(util.gpu/100.0);
+	*mem = (util.mem == ~0u)?-1:(util.mem/100.0);
 #else
 	*gpu = *mem = -1;
 #endif
@@ -1954,6 +1956,11 @@ void SCR_DrawFPS (void)
 		sprintf(str, "%.0f%% GPU", gpu*100);
 		SCR_StringXY(str, show_fps_x.value, (show_fps_y.value>=0)?(show_fps_y.value+8):(show_fps_y.value-1));
 	}
+/*	if (gpumem>=0)
+	{
+		sprintf(str, "%.0f%% VRAM Bus", gpumem*100);
+		SCR_StringXY(str, show_fps_x.value, (show_fps_y.value>=0)?(show_fps_y.value+16):(show_fps_y.value-2));
+	}*/
 }
 
 void SCR_DrawClock(void)
@@ -2456,7 +2463,7 @@ void SCR_SetUpToDrawConsole (void)
 					{
 						if (CL_TryingToConnect())	//if we're trying to connect, make sure there's a loading/connecting screen showing instead of forcing the menu visible
 							SCR_SetLoadingStage(LS_CONNECTION);
-						else if (!Key_Dest_Has(kdm_menu) && !startuppending)	//don't force anything until the startup stuff has been done
+						else if (!Key_Dest_Has(kdm_menu) && !Key_Dest_Has(kdm_prompt) && !PM_IsApplying() && !startuppending)	//don't force anything until the startup stuff has been done
 							M_ToggleMenu_f();
 					}
 				}

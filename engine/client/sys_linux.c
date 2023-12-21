@@ -213,7 +213,7 @@ void Sys_Printf (char *fmt, ...)
 		if (w >= 0xe000 && w < 0xe100)
 		{
 			/*not all quake chars are ascii compatible, so map those control chars to safe ones so we don't mess up anyone's xterm*/
-			if ((w & 0x7f) > 0x20)
+			if ((w & 0x7f) >= 0x20)
 				putc(w&0x7f, out);
 			else if (w & 0x80)
 			{
@@ -993,10 +993,10 @@ dllhandle_t *Sys_LoadLibrary(const char *name, dllfunction_t *funcs)
 	lib = NULL;
 	if (!lib)
 		lib = dlopen (name, RTLD_LOCAL|RTLD_LAZY);
-	if (!lib && !strstr(name, ".so"))
-		lib = dlopen (va("%s.so", name), RTLD_LOCAL|RTLD_LAZY);
-	if (!lib && !strstr(name, ".so") && !strncmp(name, "./", 2) && host_parms.binarydir)
-		lib = dlopen (va("%s%s.so", host_parms.binarydir, name+2), RTLD_LOCAL|RTLD_LAZY);
+	if (!lib && !strstr(name, ARCH_DL_POSTFIX))
+		lib = dlopen (va("%s"ARCH_DL_POSTFIX, name), RTLD_LOCAL|RTLD_LAZY);
+	if (!lib && !strstr(name, ARCH_DL_POSTFIX) && !strncmp(name, "./", 2) && host_parms.binarydir)
+		lib = dlopen (va("%s%s"ARCH_DL_POSTFIX, host_parms.binarydir, name+2), RTLD_LOCAL|RTLD_LAZY);
 	if (!lib)
 	{
 		Con_DLPrintf(2,"%s\n", dlerror());
@@ -1195,20 +1195,24 @@ static int Crypto_GenerateSignature(qbyte *hashdata, size_t hashsize, qbyte *sig
 }
 static void DoSign(const char *fname, int signtype)
 {
-	qbyte digest[1024];
+	qbyte digest[1024], digest2[1024];
 	qbyte signature[2048];
 	qbyte base64[2048*4];
 	int sigsize;
 	vfsfile_t *f;
 	const char *auth = "Unknown";
+	const char *prefix = "";
 	int i = COM_CheckParm("-certhost");
 	if (i)
 		auth = com_argv[i+1];
+	i = COM_CheckParm("-prefix");
+	if (i)
+		prefix = com_argv[i+1];
 
 	f = FS_OpenVFS(fname, "rb", FS_SYSTEM);
 	if (f && signtype == -1)
 	{	//just report the qhash
-		searchpathfuncs_t *search = FS_OpenPackByExtension(f, NULL, fname, fname);
+		searchpathfuncs_t *search = FS_OpenPackByExtension(f, NULL, fname, fname, prefix);
 		if (search)
 		{
 			printf("%#08x", search->GeneratePureCRC(search, 0, 0));
@@ -1219,7 +1223,7 @@ static void DoSign(const char *fname, int signtype)
 	}
 	else if (f)
 	{
-		hashfunc_t *h = (signtype==1)?&hash_sha256:&hash_sha512;
+		hashfunc_t *h = (signtype==1)?&hash_sha2_256:&hash_sha2_512;
 		size_t l, ts = 0;
 		void *ctx = alloca(h->contextsize);
 		qbyte data[65536*16];
@@ -1232,27 +1236,53 @@ static void DoSign(const char *fname, int signtype)
 		h->terminate(digest, ctx);
 		VFS_CLOSE(f);
 
-		if (signtype == 0)
+		//prefix it by the prefix
+		if (*prefix)
+		{
+			h->init(ctx);
+			h->process(ctx, prefix, strlen(prefix));
+			h->process(ctx, "\0", 1);
+			h->process(ctx, digest, h->digestsize);
+			h->terminate(digest2, ctx);
+		}
+		else
+			memcpy(digest2, digest, h->digestsize);
+
+		if (signtype == 3)
+		{	//the stupid package crap in fmf files which is different just to be an absolute pain
+			printf(" prefix \"%s\"", prefix);
+			printf(" filesize %zu", ts);
+
+			base64[Base16_EncodeBlock(digest, h->digestsize, base64+2048, sizeof(base64)-2048-1)] = 0;
+			printf(" sha512 \"%s\"", base64+2048);
+
+			sigsize = Crypto_GenerateSignature(digest2, h->digestsize, signature, sizeof(signature));
+			Base64_EncodeBlock(signature, sigsize, base64, sizeof(base64));
+			printf(" signature \"%s:%s\"\n", auth, base64);
+		}
+		else if (signtype == 0)
 		{	//old junk
+			if (*prefix)
+				printf(" \\\"prefix=%s\\\"", prefix);
 			printf(" \\\"dlsize=%zu\\\"", ts);
 
-			Base16_EncodeBlock(digest, h->digestsize, base64, sizeof(base64));
+			base64[Base16_EncodeBlock(digest, h->digestsize, base64, sizeof(base64)-1)] = 0;
 			printf(" \\\"sha512=%s\\\"", base64);
 
-			sigsize = Crypto_GenerateSignature(digest, h->digestsize, signature, sizeof(signature));
+			sigsize = Crypto_GenerateSignature(digest2, h->digestsize, signature, sizeof(signature));
 			Base64_EncodeBlock(signature, sigsize, base64, sizeof(base64));
 			printf(" \\\"sign=%s:%s\\\"\n", auth, base64);
 		}
 		else if (signtype == 2)
 		{	//spits out the raw signature.
-			sigsize = Crypto_GenerateSignature(digest, h->digestsize, signature, sizeof(signature));
+			sigsize = Crypto_GenerateSignature(digest2, h->digestsize, signature, sizeof(signature));
 			Base64_EncodeBlock(signature, sigsize, base64, sizeof(base64));
 
 			printf("%s", base64);
 		}
 		else
 		{	//just spits out the hash
-			Base16_EncodeBlock(digest, h->digestsize, base64, sizeof(base64));
+			base64[Base16_EncodeBlock(digest, h->digestsize, base64, sizeof(base64))] = 0;
 			printf("%s", base64);
 		}
 	}
@@ -1461,7 +1491,7 @@ int main (int c, const char **v)
 		nostdout = 1;
 
 //begin meta generation helpers
-	//fteqw -privcert privcert.key -pubcert pubcert.key -sign binaryfile.pk3
+	//fteqw -privkey privcert.key -pubkey pubcert.key -certhost Spike -prefix foo -sign binaryfile.pk3
 	{
 		static struct
 		{
@@ -1471,6 +1501,8 @@ int main (int c, const char **v)
 		{
 			{"-sign", 0},
 			{"-sign2", 2},
+			{"-signraw", 2},
+			{"-signfmfpkg", 3},
 			{"-qhash", -1},
 			{"-sha1", 1},
 			{"-sha256", 256},

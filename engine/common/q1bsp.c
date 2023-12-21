@@ -1658,6 +1658,8 @@ void Q1BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *node)
 	float		l, maxdist;
 	int			j, s, t;
 	vec3_t		impact;
+	vec4_t		*lmvecs;
+	float		*lmvecscale;
 
 	if (node->contents < 0)
 		return;
@@ -1689,13 +1691,18 @@ void Q1BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *node)
 		for (j=0 ; j<3 ; j++)
 			impact[j] = light->origin[j] - surf->plane->normal[j]*dist;
 
+		if (currentmodel->facelmvecs)
+			lmvecs = currentmodel->facelmvecs[surf-currentmodel->surfaces].lmvecs, lmvecscale = currentmodel->facelmvecs[surf-currentmodel->surfaces].lmvecscale;
+		else
+			lmvecs = surf->texinfo->vecs, lmvecscale = surf->texinfo->vecscale;
+
 		// clamp center of light to corner and check brightness
-		l = DotProduct (impact, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3] - surf->texturemins[0];
+		l = DotProduct (impact, lmvecs[0]) + lmvecs[0][3] - surf->texturemins[0];
 		s = l+0.5;if (s < 0) s = 0;else if (s > surf->extents[0]) s = surf->extents[0];
-		s = (l - s)*surf->texinfo->vecscale[0];
-		l = DotProduct (impact, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3] - surf->texturemins[1];
+		s = (l - s)*lmvecscale[0]; //FIXME
+		l = DotProduct (impact, lmvecs[1]) + lmvecs[1][3] - surf->texturemins[1];
 		t = l+0.5;if (t < 0) t = 0;else if (t > surf->extents[1]) t = surf->extents[1];
-		t = (l - t)*surf->texinfo->vecscale[1];
+		t = (l - t)*lmvecscale[1];
 		// compare to minimum light
 		if ((s*s+t*t+dist*dist) < maxdist)
 		{
@@ -1714,7 +1721,7 @@ void Q1BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *node)
 }
 
 //combination of R_AddDynamicLights and R_MarkLights
-static void Q1BSP_StainNode (mnode_t *node, float *parms)
+static void Q1BSP_StainNode_r (model_t *model, mnode_t *node, float *parms)
 {
 	mplane_t	*splitplane;
 	float		dist;
@@ -1729,26 +1736,30 @@ static void Q1BSP_StainNode (mnode_t *node, float *parms)
 
 	if (dist > (*parms))
 	{
-		Q1BSP_StainNode (node->children[0], parms);
+		Q1BSP_StainNode_r (model, node->children[0], parms);
 		return;
 	}
 	if (dist < (-*parms))
 	{
-		Q1BSP_StainNode (node->children[1], parms);
+		Q1BSP_StainNode_r (model, node->children[1], parms);
 		return;
 	}
 
 // mark the polygons
-	surf = cl.worldmodel->surfaces + node->firstsurface;
+	surf = model->surfaces + node->firstsurface;
 	for (i=0 ; i<node->numsurfaces ; i++, surf++)
 	{
 		if (surf->flags&~(SURF_DRAWALPHA|SURF_DONTWARP|SURF_PLANEBACK))
 			continue;
-		Surf_StainSurf(surf, parms);
+		Surf_StainSurf(model, surf, parms);
 	}
 
-	Q1BSP_StainNode (node->children[0], parms);
-	Q1BSP_StainNode (node->children[1], parms);
+	Q1BSP_StainNode_r (model, node->children[0], parms);
+	Q1BSP_StainNode_r (model, node->children[1], parms);
+}
+static void Q1BSP_StainNode (model_t *model, float *parms)
+{
+	Q1BSP_StainNode_r(model, model->rootnode, parms);
 }
 
 
@@ -2625,7 +2636,7 @@ bspx_header_t *BSPX_Setup(model_t *mod, char *filebase, size_t filelen, lump_t *
 		}
 	}
 
-	if (offs < filelen && mod && !mod->archive && mod_loadmappackages.ival)
+	if (offs < filelen && mod && !mod->archive && mod_loadmappackages.ival && filelen-offs > 22)//end-of-central-dir being 22 bytes sets a minimum zip size, which should slightly reduce false-positives.
 	{	//we have some sort of trailing junk... is it a zip?...
 		Mod_LoadMapArchive(mod, filebase+offs, filelen-offs);
 	}
@@ -2922,6 +2933,10 @@ qboolean Mod_BSPXRW_Read(struct bspxrw *ctx, const char *fname)
 		#endif
 		};
 #endif
+#ifdef Q2BSPS
+	static const char *q2corelumpnames[Q2HEADER_LUMPS] = {"entities","planes","vertexes","visibility","nodes","texinfo","faces","lighting","leafs","leaffaces","leafbrushes","edges","surfedges","models","brushes","brushsides","pop","areas","areaportals"};
+#endif
+	static const char *q1corelumpnames[HEADER_LUMPS] = {"entities","planes","textures","vertexes","visibility","nodes","texinfo","faces","lighting","clipnodes","leafs","marksurfaces","edges","surfedges","models"};
 	ctx->fname = fname;
 	ctx->origfile = FS_MallocFile(ctx->fname, FS_GAME, &ctx->origsize);
 	if (!ctx->origfile)
@@ -2936,9 +2951,10 @@ qboolean Mod_BSPXRW_Read(struct bspxrw *ctx, const char *fname)
 	case 30:
 		ctx->fg = ((i==30)?fg_halflife:fg_quake);
 		ctx->lumpofs = 4;
-		ctx->corelumps = 0;
+		ctx->corelumps = HEADER_LUMPS;
+		corelumpnames = q1corelumpnames;
 		break;
-	case ('I'<<0)+('B'<<8)+('S'<<16)+('P'<<24):
+	case ('I'<<0)+('B'<<8)+('S'<<16)+('P'<<24):	//starting with q2.
 		i = LittleLong(*(int*)(ctx->origfile+4));
 		ctx->lumpofs = 8;
 		switch(i)
@@ -2948,6 +2964,7 @@ qboolean Mod_BSPXRW_Read(struct bspxrw *ctx, const char *fname)
 //		case BSPVERSION_Q2W:
 			ctx->fg = fg_quake2;
 			ctx->corelumps = Q2HEADER_LUMPS;
+			corelumpnames = q2corelumpnames;
 			break;
 #endif
 #ifdef Q3BSPS
@@ -3172,14 +3189,11 @@ void Mod_BSPX_List_f(void)
 		fname = cl.worldmodel->name;
 	if (Mod_BSPXRW_Read(&ctx, fname))
 	{
+		Con_Printf("%s:\n", fname);
 		for (i = 0; i < ctx.corelumps; i++)
-		{
-			Con_Printf("%s: %u\n", ctx.lumps[i].lumpname, (unsigned int)ctx.lumps[i].filelen);
-		}
+			Con_Printf("\t%s: %u\n", ctx.lumps[i].lumpname, (unsigned int)ctx.lumps[i].filelen);
 		for (     ; i < ctx.totallumps; i++)
-		{
-			Con_Printf("%s: %u\n", ctx.lumps[i].lumpname, (unsigned int)ctx.lumps[i].filelen);
-		}
+			Con_Printf("\t%s: %u\n", ctx.lumps[i].lumpname, (unsigned int)ctx.lumps[i].filelen);
 		Mod_BSPXRW_Free(&ctx);
 	}
 }

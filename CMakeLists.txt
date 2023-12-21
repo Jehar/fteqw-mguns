@@ -61,8 +61,30 @@ IF (EXISTS ${CMAKE_SOURCE_DIR}/.git)
 		OUTPUT_VARIABLE FTE_BRANCH
 		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
-	MESSAGE(STATUS "FTE GIT ${FTE_BRANCH} Revision git-${FTE_REVISON_GIT}, ${FTE_DATE}")
-	SET(SVNREVISION git-${FTE_REVISON_GIT})
+	EXECUTE_PROCESS(COMMAND
+		git rev-parse --is-shallow-repository
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+		OUTPUT_VARIABLE FTE_GIT_IS_SHALLOW
+		ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+	IF(FTE_GIT_IS_SHALLOW STREQUAL true)
+		MESSAGE(STATUS "shallow clone prevents calculation of revision number.")
+		SET(SVNREVISION "git-${FTE_REVISON_GIT}")	#if its a shallow clone then we can't count commits properly so don't know what revision we actually are.
+	ELSE()
+		EXECUTE_PROCESS(COMMAND
+			git rev-list HEAD --count
+			WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+			OUTPUT_VARIABLE SVNREVISION
+			ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
+		)
+		MATH(EXPR SVNREVISION "${SVNREVISION} + 29") #not all svn commits managed to appear im the git repo, so we have a small bias to keep things consistent.
+		IF (FTE_BRANCH STREQUAL "master")
+			SET(SVNREVISION "${SVNREVISION}-git-${FTE_REVISON_GIT}")
+		ELSE()
+			SET(SVNREVISION "${FTE_BRANCH}-${SVNREVISION}-git-${FTE_REVISON_GIT}") #weird branches get a different form of revision, to reduce confusion.
+		ENDIF()
+	ENDIF()
+	MESSAGE(STATUS "FTE GIT ${FTE_BRANCH} Revision ${SVNREVISION}, ${FTE_DATE}")
 	SET(FTE_REVISON SVNREVISION=${SVNREVISION} SVNDATE=${FTE_DATE} FTE_BRANCH=${FTE_BRANCH})
 ENDIF()
 
@@ -94,6 +116,10 @@ ENDIF()
 SET(FTE_BUILD_CONFIG ${CMAKE_HOME_DIRECTORY}/engine/common/config_fteqw.h CACHE FILEPATH "Which build config file to use to control supported features.")
 SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};CONFIG_FILE_NAME=${FTE_BUILD_CONFIG})
 SET(FTE_USE_SDL false CACHE BOOL "Force the use of SDL instead of using native builds.")
+
+INCLUDE(GNUInstallDirs)
+SET(FTE_INSTALL_BINDIR games CACHE STRING "Binary dir to install to.")
+SET(FTE_INSTALL_LIBDIR fteqw CACHE STRING "Binary dir to install to.")
 
 IF(NOT WIN32)
 	SET(SYS_LIBS ${SYS_LIBS} m)
@@ -131,8 +157,12 @@ ELSE()
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};NO_OPENGL)
 ENDIF()
 
-FIND_PACKAGE(JPEG)
+SET(FTE_DEP_JPEG true CACHE BOOL "Link against libjpeg.")
+IF(FTE_DEP_JPEG)
+	FIND_PACKAGE(JPEG)
+ENDIF()
 IF(JPEG_FOUND)
+	INCLUDE_DIRECTORIES( ${JPEG_INCLUDE_DIRS} )
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};LIBJPEG_STATIC)
 	SET(FTE_LIBS ${FTE_LIBS} ${JPEG_LIBRARIES})
 ELSE()
@@ -142,6 +172,7 @@ ENDIF()
 
 FIND_PACKAGE(PNG)
 IF(PNG_FOUND)
+	INCLUDE_DIRECTORIES( ${PNG_INCLUDE_DIRS} )
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};LIBPNG_STATIC)
 	SET(FTE_LIBS ${FTE_LIBS} ${PNG_LIBRARIES})
 ELSE()
@@ -154,6 +185,15 @@ IF(FREETYPE_FOUND)
 	INCLUDE_DIRECTORIES( ${FREETYPE_INCLUDE_DIRS} )
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};LIBFREETYPE_STATIC)
 	SET(FTE_LIBS ${FTE_LIBS} ${FREETYPE_LIBRARIES})
+
+	FIND_PACKAGE(Fontconfig)
+	IF(Fontconfig_FOUND)
+		INCLUDE_DIRECTORIES( ${Fontconfig_INCLUDE_DIRS} )
+		SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};LIBFONTCONFIG_STATIC)
+		SET(FTE_LIBS ${FTE_LIBS} ${Fontconfig_LIBRARIES})
+	ELSEIF()
+		MESSAGE(WARNING "fontconfig library NOT available. I hope you're not using any system fonts.")
+	ENDIF()
 ELSE()
 	MESSAGE(WARNING "freetype library NOT available. I hope you're okay with ascii.")
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};NO_FREETYPE)
@@ -169,6 +209,7 @@ ENDIF()
 
 FIND_LIBRARY(VORBISFILE_LIBRARY NAMES vorbisfile)
 IF(NOT VORBISFILE_LIBRARY)
+	INCLUDE_DIRECTORIES( ${VORBISFILE_INCLUDE_DIRS} )
 	MESSAGE(WARNING "libvorbisfile library NOT available. Who listens to the bgm anyway?")
 	SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};NO_OGG)
 ENDIF()
@@ -215,18 +256,20 @@ IF(CMAKE_BUILD_TYPE MATCHES "Debug")
 ENDIF()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_FILE_OFFSET_BITS=64")
 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DFTE_LIBRARY_PATH=${CMAKE_INSTALL_FULL_LIBDIR}/${FTE_INSTALL_LIBDIR} -DFTE_DATA_DIR=${CMAKE_INSTALL_FULL_DATAROOTDIR}")
+
 FUNCTION(EMBED_PLUGIN_META PLUGNAME PLUGTITLE PLUGDESC)
 	SET_TARGET_PROPERTIES(plug_${PLUGNAME} PROPERTIES OUTPUT_NAME "${PLUGNAME}")
 	SET_TARGET_PROPERTIES(plug_${PLUGNAME} PROPERTIES PREFIX "fteplug_")
 	SET_TARGET_PROPERTIES(plug_${PLUGNAME} PROPERTIES LINK_FLAGS "-Wl,--no-undefined")
-	SET(INSTALLTARGS ${INSTALLTARGS} "plug_${PLUGNAME}")
+	SET(INSTALLTARGS ${INSTALLTARGS} "plug_${PLUGNAME}" PARENT_SCOPE)
 	#sadly we need to use a temp zip file, because otherwise zip insists on using zip64 extensions which breaks zip -A (as well as any attempts to read any files).
 	ADD_CUSTOM_COMMAND(
 		TARGET plug_${PLUGNAME} POST_BUILD
-		COMMAND echo "{\\n	package fteplug_${PLUGNAME}\\n	ver \"${SVNREVISION}\"\\n	category Plugins\\n	title \"${PLUGTITLE}\"\\n	gamedir \"\"\\n	desc \"${PLUGDESC}\"\\n}" | zip -q -9 -fz- $<TARGET_FILE:plug_${PLUGNAME}>.zip -
-		COMMAND cat $<TARGET_FILE:plug_${PLUGNAME}>.zip >> "$<TARGET_FILE:plug_${PLUGNAME}>"
+		COMMAND /bin/echo -e "{\\n	package fteplug_${PLUGNAME}\\n	ver \"${SVNREVISION}\"\\n	category Plugins\\n	title \"${PLUGTITLE}\"\\n	gamedir \"\"\\n	desc \"${PLUGDESC}\"\\n}" | zip -q -9 -fz- $<TARGET_FILE:plug_${PLUGNAME}>.zip -
+		COMMAND cmake -E cat $<TARGET_FILE:plug_${PLUGNAME}>.zip >> "$<TARGET_FILE:plug_${PLUGNAME}>"
 		COMMAND zip -A "$<TARGET_FILE:plug_${PLUGNAME}>"
-		COMMAND rm $<TARGET_FILE:plug_${PLUGNAME}>.zip
+		COMMAND cmake -E rm $<TARGET_FILE:plug_${PLUGNAME}>.zip
 		VERBATIM)
 ENDFUNCTION()
 
@@ -465,7 +508,6 @@ ELSE()
 #	engine/client/sys_droid.c
 #	engine/client/sys_linux.c
 #	engine/client/sys_morphos.c
-#	engine/client/sys_npfte.c
 #	engine/client/sys_plugfte.c
 #	engine/client/sys_sdl.c
 #	engine/client/sys_xdk.c
@@ -803,6 +845,27 @@ SET(FTE_Q3_FILES
 	plugins/quake3/q3g_public.h
 )
 
+#For annoying compressed gltf2 files.
+SET(FTE_DEP_DRACO false CACHE BOOL "Link against libdraco.")
+IF(FTE_DEP_DRACO)
+	FIND_LIBRARY(
+		DRACO_LIBRARY
+		NAMES draco
+	)
+	IF(DRACO_LIBRARY)
+		SET(DRACO_FILES plugins/models/draco.cpp)
+		SET(DRACO_CFLAGS HAVE_DRACO)
+
+		SET(FTE_COMMON_FILES ${FTE_COMMON_FILES} ${DRACO_FILES})
+		SET(FTE_LIB_DEFINES ${FTE_LIB_DEFINES};${DRACO_CFLAGS})
+		SET(FTE_LIBS ${FTE_LIBS} ${DRACO_LIBRARY})
+		SET(FTESV_LIBS ${FTESV_LIBS} ${DRACO_LIBRARY})
+	ELSE()
+		MESSAGE(WARNING "draco library not found, needed for GLTF's KHR_draco_mesh_compression to be usable.")
+	ENDIF()
+ENDIF()
+
+
 SET(FTE_PLUG_QUAKE3 true CACHE BOOL "Compile Quake3 plugin.")
 IF(FTE_PLUG_QUAKE3)
 	IF (0)
@@ -870,7 +933,7 @@ IF(FTE_PLUG_ODE)
 			#SET (FTE_COMMON_FILES ${FTE_COMMON_FILES} engine/common/com_phys_ode.c)
 			SET(FTE_LIB_DEFINES "${FTE_LIB_DEFINES};USE_INTERNAL_ODE;ODE_STATIC")
 			SET(FTE_LIBS ${FTE_LIBS} ${LIBODE_LIBRARY})
-			SET(FTESV_LIBS ${FTE_LIBS} ${LIBODE_LIBRARY})
+			SET(FTESV_LIBS ${FTESV_LIBS} ${LIBODE_LIBRARY})
 			SET(FTE_INCLUDES ${FTE_INCLUDES} ${ODE_INCLUDE_DIRS})
 		ELSE()
 			ADD_LIBRARY(plug_ode MODULE
@@ -917,6 +980,15 @@ ELSE()
 		TARGET_INCLUDE_DIRECTORIES(fteqw PUBLIC ${FTE_INCLUDES})
 		TARGET_LINK_LIBRARIES(fteqw ${FTE_LIBS})
 		SET(INSTALLTARGS ${INSTALLTARGS} fteqw)
+
+		ADD_CUSTOM_TARGET(fteqw-i18n ALL
+			VERBATIM
+			WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+			COMMAND xgettext --output=${CMAKE_CURRENT_BINARY_DIR}/fteqw.pot -k -kCon_TPrintf -kCon_SafeTPrintf -kNetchan_OutOfBandTPrintf:4 -kSV_OutOfBandTPrintf:4 -klangtext -kSV_TPrintToClient:3 -kSV_ClientTPrintf:3 -kSV_BroadcastTPrintf:2 -kCVARAFCD:6 -kCVARAFD:5 -kCVARFCD:5 -kCVARAD:4 -kCVARFD:4 -kCVARCD:4 -kCVARD:3 -kCmd_AddCommandD:3 -kCmd_AddCommandAD:4 -kMenu_Prompt:4:5:6 -kHost_EndGame	${FTE_ARCH_FILES} ${FTE_COMMON_FILES} ${FTE_CLIENT_FILES} ${FTE_SERVER_FILES}
+			BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/fteqw.pot"
+			SOURCES
+				${FTE_ARCH_FILES} ${FTE_COMMON_FILES} ${FTE_CLIENT_FILES} ${FTE_SERVER_FILES}
+		)
 	ENDIF()
 
 	SET(FTE_ENGINE_SERVER_ONLY true CACHE BOOL "Compile fteqw-sv (server only) engine binary.")
@@ -958,13 +1030,14 @@ ELSE()
 		ADD_EXECUTABLE(iqmtool
 			iqm/iqm.cpp
 			plugins/models/gltf.c
+			${DRACO_FILES}
 			engine/common/json.c
 			engine/client/image.c
 			imgtool.c
 			iqm/iqm.h
 		)
-		SET_TARGET_PROPERTIES(iqmtool PROPERTIES COMPILE_DEFINITIONS "IQMTOOL;${FTE_REVISON}")
-		TARGET_LINK_LIBRARIES(iqmtool ${CMAKE_DL_LIBS})
+		SET_TARGET_PROPERTIES(iqmtool PROPERTIES COMPILE_DEFINITIONS "IQMTOOL;${DRACO_CFLAGS};${FTE_REVISON}")
+		TARGET_LINK_LIBRARIES(iqmtool ${CMAKE_DL_LIBS} ${DRACO_LIBRARY})
 		SET(INSTALLTARGS ${INSTALLTARGS} iqmtool)
 	ENDIF()
 
@@ -1020,6 +1093,7 @@ ELSE()
 				engine/common/cvar.c
 				engine/common/cmd.c
 				engine/common/sha1.c		#for websockets
+				engine/common/sha2.c		#for fingerprints
 				engine/http/httpclient.c	#for the pipe stuff
 				engine/common/log.c
 				engine/common/fs.c
@@ -1157,8 +1231,7 @@ SET(FTE_PLUG_QI true CACHE BOOL "Compile Quake-Injnector plugin.")
 IF(FTE_PLUG_QI)
 	ADD_LIBRARY(plug_qi MODULE
 		plugins/plugin.c
-			plugins/qi/qi.c
-		plugins/emailnot/md5.c
+		plugins/qi/qi.c
 		plugins/jabber/xml.c
 	)
 	SET_TARGET_PROPERTIES(plug_qi PROPERTIES COMPILE_DEFINITIONS "FTEPLUGIN;${FTE_LIB_DEFINES}")
@@ -1241,11 +1314,7 @@ IF(FTE_PLUG_NAMEMAKER)
 		plugins/namemaker/namemaker.c
 	)
 	SET_TARGET_PROPERTIES(plug_namemaker PROPERTIES COMPILE_DEFINITIONS "${FTE_LIB_DEFINES}")
-	SET_TARGET_PROPERTIES(plug_namemaker PROPERTIES OUTPUT_NAME "namemaker")
-	SET_TARGET_PROPERTIES(plug_namemaker PROPERTIES PREFIX "fteplug_")
-	SET_TARGET_PROPERTIES(plug_namemaker PROPERTIES LINK_FLAGS "-Wl,--no-undefined")
 	TARGET_LINK_LIBRARIES(plug_namemaker ${SYS_LIBS})
-	SET(INSTALLTARGS ${INSTALLTARGS} plug_namemaker)
 
 	EMBED_PLUGIN_META(namemaker "Name Maker Plugin" "Provides a lame UI for selecting arbitrary non-ascii glyphs as part of your nickname.")
 ENDIF()
@@ -1315,11 +1384,12 @@ IF(FTE_PLUG_MODELS)
 		plugins/plugin.c
 		plugins/models/models.c
 		plugins/models/gltf.c
+		${DRACO_FILES}
 		engine/common/json.c
 		plugins/models/exportiqm.c
 	)
-	SET_TARGET_PROPERTIES(plug_models PROPERTIES COMPILE_DEFINITIONS "FTEPLUGIN;${FTE_LIB_DEFINES}")
-	TARGET_LINK_LIBRARIES(plug_models ${SYS_LIBS})
+	SET_TARGET_PROPERTIES(plug_models PROPERTIES COMPILE_DEFINITIONS "FTEPLUGIN;${DRACO_CFLAGS};${FTE_LIB_DEFINES}")
+	TARGET_LINK_LIBRARIES(plug_models ${SYS_LIBS} ${DRACO_LIBRARY})
 
 	EMBED_PLUGIN_META(models "Models Plugin" "Kinda redundant now that the engine has gltf2 loading.")
 ENDIF()
@@ -1525,12 +1595,15 @@ IF(FTE_PLUG_XMPP)
 ENDIF()
 ENDIF()	#android
 
-INCLUDE(GNUInstallDirs)
-SET(FTE_INSTALL_BINDIR games CACHE STRING "Binary dir to install to.")
 INSTALL(TARGETS ${INSTALLTARGS}
 	RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/${FTE_INSTALL_BINDIR}"
-	LIBRARY DESTINATION "${CMAKE_INSTALL_FULL_LIBDIR}"
+	LIBRARY DESTINATION "${CMAKE_INSTALL_FULL_LIBDIR}/${FTE_INSTALL_LIBDIR}"
 )
+
+INSTALL(FILES
+	fteqw.desktop
+	DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications/")
+
 
 SET(FTE_MENU_SYS true CACHE BOOL "Compile System Menu.")
 IF(FTE_MENU_SYS)
@@ -1575,6 +1648,14 @@ IF(FTE_MENU_SYS)
 			quakec/menusys/menu/options_video.qc
 			quakec/menusys/menu/quit.qc
 	)
+
+	ADD_CUSTOM_COMMAND(
+		TARGET menusys POST_BUILD
+		COMMAND /bin/echo -e "{\\n	package fte_menusys\\n	ver \"${SVNREVISION}\"\\n	category Plugins\\n	title \"Replacement Menus\"\\n	gamedir \"id1\"\\n	desc \"Modern menus to replace the ancient quake ones\"\\n}" | zip -q -9 -fz- menusys.pk3 - menu.dat
+		VERBATIM)
+	INSTALL(FILES
+		menusys.pk3
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/games/quake/id1/")
 ENDIF()
 
 SET(FTE_CSADDON true CACHE BOOL "CS Addon.")
@@ -1606,4 +1687,12 @@ IF(FTE_CSADDON)
 			quakec/csaddon/src/cam.qc
 			quakec/csaddon/src/csaddon.qc
 	)
+
+	ADD_CUSTOM_COMMAND(
+		TARGET csaddon POST_BUILD
+		COMMAND /bin/echo -e "{\\n	package fte_csaddon\\n	ver \"${SVNREVISION}\"\\n	category Plugins\\n	title \"${PLUGTITLE}\"\\n	gamedir \"id1\"\\n	desc \"${PLUGDESC}\"\\n}" | zip -q -9 -fz- csaddon.pk3 - csaddon.dat
+		VERBATIM)
+	INSTALL(FILES
+		csaddon.pk3
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/games/quake/id1/")
 ENDIF()

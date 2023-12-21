@@ -56,13 +56,13 @@ void ModBrush_LoadGLStuff(void *ctx, void *data, size_t a, size_t b);	//data ===
 		#endif
 		#include <OpenGL/gl.h>	//tuna says use this.
 		//apple really do suck.
-	#elif defined(NACL) || defined(FTE_TARGET_WEB)
+	#elif defined(FTE_TARGET_WEB)
 		#include <GLES2/gl2.h>
 		#define GLclampd GLclampf
 		#define GLdouble GLfloat
 	#else
 		#ifdef _WIN32	//windows might use the standard header filename, but it still requires that we manually include windows.h first.
-			#ifndef WIN32_BLOATED
+			#if !defined(WIN32_BLOATED) && !defined(WIN32_LEAN_AND_MEAN)
 				#define WIN32_LEAN_AND_MEAN
 			#endif
 			#include <windows.h>
@@ -1083,7 +1083,7 @@ void GL_SelectProgram(int program);
 
 
 #ifdef _DEBUG
-#if defined(__GNUC__) && !defined(NACL)
+#if defined(__GNUC__)
 #define checkglerror() do {int i=qglGetError(); if (i) Sys_Printf("GL Error %i detected at line %s:%i (caller %p)\n", i, __FILE__, __LINE__, __builtin_return_address(0));}while(0)
 #else
 #define checkglerror() do {int i=qglGetError(); if (i) Con_Printf("GL Error %i detected at line %s:%i\n", i, __FILE__, __LINE__);}while(0)

@@ -355,7 +355,7 @@ void Surf_PreNewMap(void);
 void Surf_SetupFrame(void);	//determine pvs+viewcontents
 void Surf_DrawWorld(void);
 void Surf_GenBrushBatches(struct batch_s **batches, entity_t *ent);
-void Surf_StainSurf(struct msurface_s *surf, float *parms);
+void Surf_StainSurf(struct model_s *mod, struct msurface_s *surf, float *parms);
 void Surf_AddStain(vec3_t org, float red, float green, float blue, float radius);
 void Surf_LessenStains(void);
 void Surf_WipeStains(void);
@@ -754,6 +754,7 @@ enum {
 	RSPEED_PALETTEFLASHES,
 	RSPEED_2D,
 	RSPEED_SERVER,
+	RSPEED_AUDIO,
 	RSPEED_SETUP,
 	RSPEED_SUBMIT,
 	RSPEED_PRESENT,

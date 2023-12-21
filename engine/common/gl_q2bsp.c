@@ -69,7 +69,6 @@ struct cminfo_s;
 
 void CM_Init(void);
 
-static qboolean	CM_HeadnodeVisible (struct model_s *mod, int nodenum, const qbyte *visbits);
 static qboolean	VARGS CM_AreasConnected (struct model_s *mod, unsigned int area1, unsigned int area2);
 static size_t	CM_WriteAreaBits (struct model_s *mod, qbyte *buffer, size_t buffersize, int area, qboolean merge);
 static qbyte	*CM_ClusterPVS (struct model_s *mod, int cluster, pvsbuffer_t *buffer, pvsmerge_t merge);
@@ -82,9 +81,12 @@ static void	CM_SetAreaPortalState (model_t *mod, unsigned int portalnum, unsigne
 static size_t	CM_SaveAreaPortalBlob (model_t *mod, void **data);
 static size_t	CM_LoadAreaPortalBlob (model_t *mod, void *ptr, size_t ptrsize);
 
+#ifdef HAVE_SERVER
 static unsigned int Q23BSP_FatPVS(model_t *mod, const vec3_t org, pvsbuffer_t *buffer, qboolean merge);
 static qboolean Q23BSP_EdictInFatPVS(model_t *mod, const struct pvscache_s *ent, const qbyte *pvs, const int *areas);
 static void Q23BSP_FindTouchedLeafs(model_t *mod, struct pvscache_s *ent, const float *mins, const float *maxs);
+static qboolean	CM_HeadnodeVisible (struct model_s *mod, int nodenum, const qbyte *visbits);
+#endif
 
 #ifdef HAVE_CLIENT
 static void CM_PrepareFrame(model_t *mod, refdef_t *refdef, int area, int viewclusters[2], pvsbuffer_t *vis, qbyte **entvis_out, qbyte **surfvis_out);
@@ -205,7 +207,9 @@ void Mod_SortShaders(model_t *mod)
 
 #if defined(Q2BSPS) || defined(Q3BSPS)
 
+#ifdef IMAGEFMT_PCX
 qbyte *ReadPCXPalette(qbyte *buf, int len, qbyte *out);
+#endif
 
 #ifdef SERVERONLY
 #define Host_Error SV_Error
@@ -557,7 +561,8 @@ static void Patch_Evaluate_QuadricBezier( float t, const vec_t *point0, const ve
 Patch_Evaluate
 ===============
 */
-static void Patch_Evaluate( const vec_t *p, const unsigned short *numcp, const int *tess, vec_t *dest, int comp )
+#define Patch_Evaluate(p,numcp,tess,dest, comp) Patch_EvaluateStride(p,comp,numcp,tess,dest,comp,comp)
+static void Patch_EvaluateStride(const vec_t *p, int pstride, const unsigned short *numcp, const int *tess, vec_t *dest, int deststride, int comp)
 {
 	int num_patches[2], num_tess[2];
 	int index[3], dstpitch, i, u, v, x, y;
@@ -568,14 +573,15 @@ static void Patch_Evaluate( const vec_t *p, const unsigned short *numcp, const i
 
 	if (!tess[0] || !tess[1])
 	{	//not really a patch
-		for( i = 0; i < comp*numcp[1]*numcp[0]; i++ )
-			dest[i] = p[i];
+		for( u = 0; u < numcp[1]*numcp[0]; u++, dest += deststride, p += pstride)
+			for( i = 0; i < comp; i++ )
+				dest[i] = p[i];
 		return;
 	}
 
 	num_patches[0] = numcp[0] / 2;
 	num_patches[1] = numcp[1] / 2;
-	dstpitch = ( num_patches[0] * tess[0] + 1 ) * comp;
+	dstpitch = ( num_patches[0] * tess[0] + 1 ) * deststride;
 
 	step[0] = 1.0f / (float)tess[0];
 	step[1] = 1.0f / (float)tess[1];
@@ -603,24 +609,113 @@ static void Patch_Evaluate( const vec_t *p, const unsigned short *numcp, const i
 			// current 3x3 patch control points
 			for( i = 0; i < 3; i++ )
 			{
-				pv[i][0] = &p[( index[0]+i ) * comp];
-				pv[i][1] = &p[( index[1]+i ) * comp];
-				pv[i][2] = &p[( index[2]+i ) * comp];
+				pv[i][0] = &p[( index[0]+i ) * pstride];
+				pv[i][1] = &p[( index[1]+i ) * pstride];
+				pv[i][2] = &p[( index[2]+i ) * pstride];
 			}
 
-			tvec = dest + v * tess[1] * dstpitch + u * tess[0] * comp;
+			tvec = dest + v * tess[1] * dstpitch + u * tess[0] * deststride;
 			for( y = 0, t = 0.0f; y < num_tess[1]; y++, t += step[1], tvec += dstpitch )
 			{
 				Patch_Evaluate_QuadricBezier( t, pv[0][0], pv[0][1], pv[0][2], v1, comp );
 				Patch_Evaluate_QuadricBezier( t, pv[1][0], pv[1][1], pv[1][2], v2, comp );
 				Patch_Evaluate_QuadricBezier( t, pv[2][0], pv[2][1], pv[2][2], v3, comp );
 
-				for( x = 0, tvec2 = tvec, s = 0.0f; x < num_tess[0]; x++, s += step[0], tvec2 += comp )
+				for( x = 0, tvec2 = tvec, s = 0.0f; x < num_tess[0]; x++, s += step[0], tvec2 += deststride )
 					Patch_Evaluate_QuadricBezier( s, v1, v2, v3, tvec2, comp );
 			}
 		}
 	}
 }
+#ifdef TERRAIN
+#include "gl_terrain.h"
+patchtessvert_t *PatchInfo_Evaluate(const qcpatchvert_t *cp, const unsigned short patch_cp[2], const short subdiv[2], unsigned short *size)
+{
+	int step[2], flat[2];
+	float subdivlevel;
+	unsigned int numverts;
+	patchtessvert_t *out;
+	int i;
+
+	if (subdiv[0]>=0 && subdiv[1]>=0)
+	{	//fixed
+		step[0] = subdiv[0];
+		step[1] = subdiv[1];
+	}
+	else
+	{
+		// find the degree of subdivision in the u and v directions
+		subdivlevel = bound(1, r_subdivisions.ival, 15);
+		Patch_GetFlatness ( subdivlevel, cp->v, sizeof(*cp)/sizeof(vec_t), patch_cp, flat );
+
+		step[0] = 1 << flat[0];
+		step[1] = 1 << flat[1];
+	}
+	if (!step[0] || !step[1])
+	{
+		size[0] = patch_cp[0];
+		size[1] = patch_cp[1];
+	}
+	else
+	{
+		size[0] = ( patch_cp[0] >> 1 ) * step[0] + 1;
+		size[1] = ( patch_cp[1] >> 1 ) * step[1] + 1;
+	}
+	if( size[0] <= 0 || size[1] <= 0 )
+		return NULL;
+
+	numverts = (unsigned int)size[0] * size[1];
+
+// fill in
+
+	out = BZ_Malloc(sizeof(*out) * numverts);
+	for (i = 0; i < numverts*sizeof(*out)/sizeof(vec_t); i++)
+		((vec_t *)out)[i] = -1;
+	Patch_EvaluateStride ( cp->v, sizeof(*cp)/sizeof(vec_t), patch_cp, step, out->v, sizeof(*out)/sizeof(vec_t), countof(cp->v));
+	Patch_EvaluateStride ( cp->rgba, sizeof(*cp)/sizeof(vec_t), patch_cp, step, out->rgba, sizeof(*out)/sizeof(vec_t), countof(cp->rgba));
+	Patch_EvaluateStride ( cp->tc, sizeof(*cp)/sizeof(vec_t), patch_cp, step, out->tc, sizeof(*out)/sizeof(vec_t), countof(cp->tc));
+
+	return out;
+}
+unsigned int PatchInfo_EvaluateIndexes(const unsigned short *size, index_t *out_indexes)
+{
+	int i, u, v, p;
+// compute new indexes avoiding adding invalid triangles
+	unsigned int numindexes = 0;
+	index_t	*indexes = out_indexes;
+	for (v = 0, i = 0; v < size[1]-1; v++)
+	{
+		for (u = 0; u < size[0]-1; u++, i += 6)
+		{
+			indexes[0] = p = v * size[0] + u;
+			indexes[1] = p + size[0];
+			indexes[2] = p + 1;
+
+//			if ( !VectorEquals(mesh->xyz_array[indexes[0]], mesh->xyz_array[indexes[1]]) &&
+//				!VectorEquals(mesh->xyz_array[indexes[0]], mesh->xyz_array[indexes[2]]) &&
+//				!VectorEquals(mesh->xyz_array[indexes[1]], mesh->xyz_array[indexes[2]]) )
+			{
+				indexes += 3;
+				numindexes += 3;
+			}
+
+			indexes[0] = p + 1;
+			indexes[1] = p + size[0];
+			indexes[2] = p + size[0] + 1;
+
+//			if ( !VectorEquals(mesh->xyz_array[indexes[0]], mesh->xyz_array[indexes[1]]) &&
+//				!VectorEquals(mesh->xyz_array[indexes[0]], mesh->xyz_array[indexes[2]]) &&
+//				!VectorEquals(mesh->xyz_array[indexes[1]], mesh->xyz_array[indexes[2]]) )
+			{
+				indexes += 3;
+				numindexes += 3;
+			}
+		}
+	}
+
+	return numindexes;
+}
+#endif
 
 
 #define	PLANE_NORMAL_EPSILON	0.00001
@@ -1573,6 +1668,9 @@ static qboolean CModQ2_LoadFaces (model_t *mod, qbyte *mod_base, lump_t *l, lump
 	int			ti;
 	int			style;
 
+	struct decoupled_lm_info_s *decoupledlm;
+	unsigned int dcsize, lofs;
+
 	unsigned short lmshift, lmscale;
 	char buf[64];
 	lightmapoverrides_t overrides = {0};
@@ -1604,6 +1702,12 @@ static qboolean CModQ2_LoadFaces (model_t *mod, qbyte *mod_base, lump_t *l, lump
 				lmscale >>= 1;
 		}
 	}
+
+	decoupledlm = BSPX_FindLump(bspx, mod_base, "DECOUPLED_LM", &dcsize); //RGB packed data
+	if (dcsize == count*sizeof(*decoupledlm))
+		mod->facelmvecs = ZG_Malloc(&mod->memgroup, count * sizeof(*mod->facelmvecs));	//seems good.
+	else
+		decoupledlm	= NULL;	//wrong size somehow... discard it.
 
 	for ( surfnum=0 ; surfnum<count ; surfnum++, in++, out++)
 	{
@@ -1641,11 +1745,40 @@ static qboolean CModQ2_LoadFaces (model_t *mod, qbyte *mod_base, lump_t *l, lump
 			out->lmshift = overrides.shifts[surfnum];
 		else
 			out->lmshift = lmshift;
-		CalcSurfaceExtents (mod, out);
-		if (overrides.extents)
+
+
+		if (decoupledlm)
 		{
-			out->extents[0] = overrides.extents[surfnum*2+0];
-			out->extents[1] = overrides.extents[surfnum*2+1];
+			lofs = LittleLong(decoupledlm->lmoffset);
+			out->texturemins[0] = out->texturemins[1] = 0; // should be handled by the now-per-surface vecs[][3] value.
+			out->lmshift = 0;	//redundant.
+			out->extents[0] = (unsigned short)LittleShort(decoupledlm->lmsize[0]) - 1;
+			out->extents[1] = (unsigned short)LittleShort(decoupledlm->lmsize[1]) - 1;
+			mod->facelmvecs[surfnum].lmvecs[0][0] = LittleFloat(decoupledlm->lmvecs[0][0]);
+			mod->facelmvecs[surfnum].lmvecs[0][1] = LittleFloat(decoupledlm->lmvecs[0][1]);
+			mod->facelmvecs[surfnum].lmvecs[0][2] = LittleFloat(decoupledlm->lmvecs[0][2]);
+			mod->facelmvecs[surfnum].lmvecs[0][3] = LittleFloat(decoupledlm->lmvecs[0][3]) + 0.5f; //sigh
+			mod->facelmvecs[surfnum].lmvecs[1][0] = LittleFloat(decoupledlm->lmvecs[1][0]);
+			mod->facelmvecs[surfnum].lmvecs[1][1] = LittleFloat(decoupledlm->lmvecs[1][1]);
+			mod->facelmvecs[surfnum].lmvecs[1][2] = LittleFloat(decoupledlm->lmvecs[1][2]);
+			mod->facelmvecs[surfnum].lmvecs[1][3] = LittleFloat(decoupledlm->lmvecs[1][3]) + 0.5f; //sigh
+			mod->facelmvecs[surfnum].lmvecscale[0] = 1.0f/Length(mod->facelmvecs[surfnum].lmvecs[0]);	//luxels->qu
+			mod->facelmvecs[surfnum].lmvecscale[1] = 1.0f/Length(mod->facelmvecs[surfnum].lmvecs[1]);
+			decoupledlm++;
+		}
+		else
+		{
+			if (overrides.offsets)
+				lofs = overrides.offsets[surfnum];
+			else
+				lofs = LittleLong(in->lightofs);
+
+			CalcSurfaceExtents (mod, out);
+			if (overrides.extents)
+			{
+				out->extents[0] = overrides.extents[surfnum*2+0];
+				out->extents[1] = overrides.extents[surfnum*2+1];
+			}
 		}
 
 	// lighting info
@@ -1687,16 +1820,12 @@ static qboolean CModQ2_LoadFaces (model_t *mod, qbyte *mod_base, lump_t *l, lump
 		}
 		for ( ; i<MAXCPULIGHTMAPS ; i++)
 			out->styles[i] = INVALID_LIGHTSTYLE;
-		if (overrides.offsets)
-			i = overrides.offsets[surfnum];
-		else
-			i = LittleLong(in->lightofs);
-		if (i == -1)
+		if (lofs == ~0u)
 			out->samples = NULL;
 		else if (lightofsisdouble)
-			out->samples = mod->lightdata + (i/2);
+			out->samples = mod->lightdata + (lofs/2);
 		else
-			out->samples = mod->lightdata + i;
+			out->samples = mod->lightdata + lofs;
 
 	// set the drawing flags
 
@@ -4025,7 +4154,8 @@ static qboolean CModRBSP_LoadLightgrid (model_t *loadmodel, qbyte *mod_base, lum
 #endif
 #endif
 
-#if !defined(SERVERONLY) && defined(Q2BSPS)
+#if !defined(SERVERONLY) && (defined(Q2BSPS) || defined(Q3BSPS))
+#ifdef IMAGEFMT_PCX
 qbyte *ReadPCXPalette(qbyte *buf, int len, qbyte *out);
 static int CM_GetQ2Palette (void)
 {
@@ -4043,6 +4173,7 @@ static int CM_GetQ2Palette (void)
 		FS_FreeFile(f);
 		return -1;
 	}
+
 	FS_FreeFile(f);
 
 
@@ -4070,6 +4201,7 @@ static int CM_GetQ2Palette (void)
 #endif
 	return 0;
 }
+#endif
 #endif
 
 #if 0
@@ -4123,7 +4255,7 @@ static void CM_OpenAllPortals(model_t *mod, char *ents)	//this is a compleate ha
 #endif
 
 
-#if defined(HAVE_SERVER) && defined(Q3BSPS)
+#if defined(Q3BSPS)
 static void CalcClusterPHS(cminfo_t	*prv, int cluster)
 {
 	int j, k, l, index;
@@ -4167,6 +4299,8 @@ static void CalcClusterPHS(cminfo_t	*prv, int cluster)
 	}
 	prv->phscalced[cluster>>3] |= 1<<(cluster&7);
 }
+#endif
+#if defined(HAVE_SERVER) && defined(Q3BSPS)
 static void CMQ3_CalcPHS (model_t *mod)
 {
 	cminfo_t	*prv = (cminfo_t*)mod->meshinfo;
@@ -4332,7 +4466,7 @@ static void Q2BSP_MarkLights (dlight_t *light, dlightbitmask_t bit, mnode_t *nod
 }
 
 #ifndef SERVERONLY
-static void GLR_Q2BSP_StainNode (mnode_t *node, float *parms)
+static void GLR_Q2BSP_StainNode_r (model_t *model, mnode_t *node, float *parms)
 {
 	mplane_t	*splitplane;
 	float		dist;
@@ -4347,26 +4481,30 @@ static void GLR_Q2BSP_StainNode (mnode_t *node, float *parms)
 
 	if (dist > (*parms))
 	{
-		GLR_Q2BSP_StainNode (node->children[0], parms);
+		GLR_Q2BSP_StainNode_r (model, node->children[0], parms);
 		return;
 	}
 	if (dist < (-*parms))
 	{
-		GLR_Q2BSP_StainNode (node->children[1], parms);
+		GLR_Q2BSP_StainNode_r (model, node->children[1], parms);
 		return;
 	}
 
 // mark the polygons
-	surf = cl.worldmodel->surfaces + node->firstsurface;
+	surf = model->surfaces + node->firstsurface;
 	for (i=0 ; i<node->numsurfaces ; i++, surf++)
 	{
 		if (surf->flags&~(SURF_DONTWARP|SURF_PLANEBACK))
 			continue;
-		Surf_StainSurf(surf, parms);
+		Surf_StainSurf(model, surf, parms);
 	}
 
-	GLR_Q2BSP_StainNode (node->children[0], parms);
-	GLR_Q2BSP_StainNode (node->children[1], parms);
+	GLR_Q2BSP_StainNode_r (model, node->children[0], parms);
+	GLR_Q2BSP_StainNode_r (model, node->children[1], parms);
+}
+static void GLR_Q2BSP_StainNode (model_t *model, float *parms)
+{
+	GLR_Q2BSP_StainNode_r(model, model->rootnode, parms);
 }
 #endif
 
@@ -4517,7 +4655,7 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 		return NULL;
 	}
 
-	checksum = LittleLong (Com_BlockChecksum (buf, length));
+	checksum = LittleLong (CalcHashInt(&hash_md4, buf, length));
 
 	header = *(q2dheader_t *)(buf);
 	header.ident = LittleLong(header.ident);
@@ -4820,9 +4958,9 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 			header.lumps[i].fileofs = LittleLong (header.lumps[i].fileofs);
 			i++;
 		}
-		BSPX_Setup(mod, mod_base, filelen, header.lumps, i);
+		bspx = BSPX_Setup(mod, mod_base, filelen, header.lumps, i);
 
-#ifdef HAVE_CLIENT
+#if defined(HAVE_CLIENT) && defined(IMAGEFMT_PCX)
 		if (CM_GetQ2Palette())
 			memcpy(q2_palette, host_basepal, 768);
 #endif
@@ -4873,8 +5011,6 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 			{
 				// load into heap
 				noerrors = noerrors && Mod_LoadVertexes			(mod, mod_base, &header.lumps[Q2LUMP_VERTEXES]);
-				if (header.version == BSPVERSION_Q2W)
-					/*noerrors = noerrors &&*/ Mod_LoadVertexNormals(mod, bspx, mod_base, &header.lumps[19]);
 				noerrors = noerrors && Mod_LoadEdges			(mod, mod_base, &header.lumps[Q2LUMP_EDGES], false);
 				noerrors = noerrors && Mod_LoadSurfedges		(mod, mod_base, &header.lumps[Q2LUMP_SURFEDGES]);
 				noerrors = noerrors && CModQ2_LoadSurfaces		(mod, mod_base, &header.lumps[Q2LUMP_TEXINFO]);
@@ -4883,6 +5019,7 @@ static cmodel_t *CM_LoadMap (model_t *mod, qbyte *filein, size_t filelen, qboole
 				if (noerrors)
 					Mod_LoadEntities							(mod, mod_base, &header.lumps[Q2LUMP_ENTITIES]);
 				noerrors = noerrors && CModQ2_LoadFaces			(mod, mod_base, &header.lumps[Q2LUMP_FACES], &header.lumps[Q2LUMP_LIGHTING], header.version == BSPVERSION_Q2W, bspx);
+				                       Mod_LoadVertexNormals(mod, bspx, mod_base, (header.version == BSPVERSION_Q2W)?&header.lumps[19]:NULL);
 				noerrors = noerrors && Mod_LoadMarksurfaces		(mod, mod_base, &header.lumps[Q2LUMP_LEAFFACES], false);
 				noerrors = noerrors && CModQ2_LoadVisibility	(mod, mod_base, &header.lumps[Q2LUMP_VISIBILITY]);
 				noerrors = noerrors && CModQ2_LoadBrushSides	(mod, mod_base, &header.lumps[Q2LUMP_BRUSHSIDES]);
@@ -5197,12 +5334,14 @@ static int CM_PointLeafnum_r (model_t *mod, const vec3_t p, int num)
 	return -1 - num;
 }
 
+#ifdef HAVE_SERVER
 static int CM_PointLeafnum (model_t *mod, const vec3_t p)
 {
 	if (!mod || mod->loadstate != MLS_LOADED)
 		return 0;		// sound may call this without map loaded
 	return CM_PointLeafnum_r (mod, p, 0);
 }
+#endif
 
 static int CM_PointCluster (model_t *mod, const vec3_t p, int *area)
 {
@@ -6884,6 +7023,7 @@ static qbyte	*CM_ClusterPHS (model_t *mod, int cluster, pvsbuffer_t *buffer)
 	return buffer->buffer;
 }
 
+#ifdef HAVE_SERVER
 static unsigned int  SV_Q2BSP_FatPVS (model_t *mod, const vec3_t org, pvsbuffer_t *result, qboolean merge)
 {
 	int	leafs[64];
@@ -7053,6 +7193,7 @@ static void Q23BSP_FindTouchedLeafs(model_t *model, struct pvscache_s *ent, cons
 		}
 	}
 }
+#endif
 
 /*
 ===============================================================================
@@ -7314,6 +7455,7 @@ static size_t	CM_LoadAreaPortalBlob (model_t *mod, void *ptr, size_t ptrsize)
 	return 0;
 }
 
+#ifdef HAVE_SERVER
 /*
 =============
 CM_HeadnodeVisible
@@ -7344,6 +7486,7 @@ static qboolean CM_HeadnodeVisible (model_t *mod, int nodenum, const qbyte *visb
 		return true;
 	return CM_HeadnodeVisible(mod, node->childnum[1], visbits);
 }
+#endif
 
 static unsigned int Q2BSP_PointContents(model_t *mod, const vec3_t axis[3], const vec3_t p)
 {
