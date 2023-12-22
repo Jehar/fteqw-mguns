@@ -2678,7 +2678,7 @@ static void P_ExportAllEffects_f(void)
 	if (!outf)
 	{
 		FS_NativePath(fname, FS_GAMEONLY, effect, sizeof(effect));
-		Con_Printf("Unable to open file %s\n", effect);
+		Con_TPrintf("Unable to open file %s\n", effect);
 		return;
 	}
 	for (i = 0; i < numparticletypes; i++)
@@ -3425,7 +3425,7 @@ static void P_ConvertEffectInfo_f(void)
 	if (!outf)
 	{
 		FS_NativePath(fname, FS_GAMEONLY, effect, sizeof(effect));
-		Con_Printf("Unable to open file %s\n", effect);
+		Con_TPrintf("Unable to open file %s\n", effect);
 		return;
 	}
 	for (i = 0; i < numparticletypes; i++)

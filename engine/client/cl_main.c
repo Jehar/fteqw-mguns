@@ -187,23 +187,20 @@ cvar_t  cl_gunanglex			= CVAR("cl_gunanglex", "0");
 cvar_t  cl_gunangley			= CVAR("cl_gunangley", "0");
 cvar_t  cl_gunanglez			= CVAR("cl_gunanglez", "0");
 
-#ifdef HAVE_DTLS
-extern cvar_t net_enable_dtls;
-#endif
 cvar_t	cl_proxyaddr			= CVAR("cl_proxyaddr", "");
 cvar_t	cl_sendguid				= CVARD("cl_sendguid", "", "Send a randomly generated 'globally unique' id to servers, which can be used by servers for score rankings and stuff. Different servers will see different guids. Delete the 'qkey' file in order to appear as a different user.\nIf set to 2, all servers will see the same guid. Be warned that this can show other people the guid that you're using.");
-cvar_t	cl_downloads			= CVARAFD("cl_downloads", "1", /*q3*/"cl_allowDownload", CVAR_NOTFROMSERVER, "Allows you to block all automatic downloads.");
-cvar_t	cl_download_csprogs		= CVARFD("cl_download_csprogs", "1", CVAR_NOTFROMSERVER, "Download updated client gamecode if available. Warning: If you clear this to avoid downloading vm code, you should also clear cl_download_packages.");
-cvar_t	cl_download_redirection	= CVARFD("cl_download_redirection", "2", CVAR_NOTFROMSERVER, "Follow download redirection to download packages instead of individual files. Also allows the server to send nearly arbitary download commands.\n2: allows redirection only to named packages files (and demos/*.mvd), which is a bit safer.");
-cvar_t  cl_download_mapsrc		= CVARFD("cl_download_mapsrc", "", CVAR_ARCHIVE, "Specifies an http location prefix for map downloads. EG: \"http://example.com/path/quakemaps/\"");
+cvar_t	cl_downloads			= CVARAFD("cl_downloads", "1", /*q3*/"cl_allowDownload", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Allows you to block all automatic downloads.");
+cvar_t	cl_download_csprogs		= CVARFD("cl_download_csprogs", "1", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Download updated client gamecode if available. Warning: If you clear this to avoid downloading vm code, you should also clear cl_download_packages.");
+cvar_t	cl_download_redirection	= CVARFD("cl_download_redirection", "2", CVAR_NOTFROMSERVER|CVAR_ARCHIVE, "Follow download redirection to download packages instead of individual files. Also allows the server to send nearly arbitary download commands.\n2: allows redirection only to named packages files (and demos/*.mvd), which is a bit safer.");
+cvar_t  cl_download_mapsrc		= CVARFD("cl_download_mapsrc", "", CVAR_ARCHIVE, "Specifies an http location prefix for map downloads. EG: \"http://example.com/path/gamemaps/\"");
 cvar_t	cl_download_packages	= CVARFD("cl_download_packages", "1", CVAR_NOTFROMSERVER, "0=Do not download packages simply because the server is using them. 1=Download and load packages as needed (does not affect games which do not use this package). 2=Do download and install permanently (use with caution!)");
-cvar_t	requiredownloads		= CVARFD("requiredownloads","1", CVAR_ARCHIVE, "0=join the game before downloads have even finished (might be laggy). 1=wait for all downloads to complete before joining.");
+cvar_t	requiredownloads		= CVARAFD("cl_download_wait", "1", /*old*/"requiredownloads", CVAR_ARCHIVE, "0=join the game before downloads have even finished (might be laggy). 1=wait for all downloads to complete before joining.");
 cvar_t	mod_precache			= CVARD("mod_precache","1", "Controls when models are loaded.\n0: Load them only when they're actually needed.\n1: Load them upfront.\n2: Lazily load them to shorten load times at the risk of brief stuttering during only the start of the map.");
 
 cvar_t	cl_muzzleflash			= CVAR("cl_muzzleflash", "1");
 
-cvar_t	gl_simpleitems			= CVARF("gl_simpleitems", "0", CVAR_ARCHIVE);
-cvar_t	cl_item_bobbing			= CVARF("cl_model_bobbing", "0", CVAR_ARCHIVE);
+cvar_t	gl_simpleitems			= CVARFD("gl_simpleitems", "0", CVAR_ARCHIVE, "Replace models with simpler sprites.");
+cvar_t	cl_item_bobbing			= CVARFD("cl_model_bobbing", "0", CVAR_ARCHIVE, "Makes rotating pickup items bob too.");
 cvar_t	cl_countpendingpl		= CVARD("cl_countpendingpl", "0", "If set to 1, packet loss percentages will show packets still in transit as lost, even if they might still be received.");
 
 cvar_t	cl_standardchat			= CVARFD("cl_standardchat", "0", CVAR_ARCHIVE, "Disables auto colour coding in chat messages.");
@@ -213,7 +210,7 @@ cvar_t	msg_filter_pickups		= CVARD("msg_filter_pickups", "0", "Prevents pickup m
 cvar_t  cl_standardmsg			= CVARFD("cl_standardmsg", "0", CVAR_ARCHIVE, "Disables auto colour coding in console prints.");
 cvar_t  cl_parsewhitetext		= CVARD("cl_parsewhitetext", "1", "When parsing chat messages, enable support for messages like: red{white}red");
 
-cvar_t	cl_dlemptyterminate		= CVAR("cl_dlemptyterminate", "1");
+cvar_t	cl_dlemptyterminate		= CVARD("cl_dlemptyterminate", "1", "Terminate downloads when reciving an empty download packet. This should help work around buggy mvdsv servers.");
 
 static void QDECL Cvar_CheckServerInfo(struct cvar_s *var, char *oldvalue)
 {	//values depend upon the serverinfo, so reparse for overrides.
@@ -289,15 +286,6 @@ static struct
 	int					numadr;
 	int					nextadr;
 	netadr_t			adr[8];			//addresses that we're trying to transfer to, one entry per dns result, eg both ::1 AND 127.0.0.1
-#ifdef HAVE_DTLS
-	enum
-	{	//not relevant when given a direct dtls address.
-		DTLS_DISABLE,
-		DTLS_TRY,
-		DTLS_REQUIRE,
-		DTLS_ACTIVE,
-	} dtlsupgrade;
-#endif
 	int					protocol;		//nq/qw/q2/q3. guessed based upon server replies
 	int					subprotocol;	//the monkeys are trying to eat me.
 	struct
@@ -320,13 +308,20 @@ static struct
 	enum coninfomode_e
 	{
 		CIM_DEFAULT,	//sends both a qw getchallenge and nq connect (also with postfixed getchallenge so modified servers can force getchallenge)
-		CIM_NQONLY,		//disables getchallenge (so fte servers treat us as an nq server). should not be used for dpp7 servers.
+		CIM_NQONLY,		//disables getchallenge (so fte servers treat us as an nq client). should not be used for dpp7 servers.
 		CIM_QEONLY,		//forces dtls and uses a different nq netchan version
 	}					mode;
+	enum coninfospec_e
+	{
+		CIS_DEFAULT,	//default
+		CIS_JOIN,		//force join
+		CIS_OBSERVE,	//force observe
+	}					spec;
 	int					defaultport;
 	int					tries;			//increased each try, every fourth trys nq connect packets.
 	unsigned char		guid[64];		//client->server guid (so doesn't change with transfers)
-//	qbyte				fingerprint[5*4];	//sha1 hash of accepted dtls certs
+
+	struct dtlspeercred_s peercred;
 } connectinfo;
 
 qboolean	nomaster;
@@ -536,10 +531,9 @@ char *CL_GUIDString(netadr_t *adr)
 {
 	static qbyte buf[2048];
 	static int buflen;
-	unsigned int digest[4];
+	qbyte digest[DIGEST_MAXSIZE];
 	char serveraddr[256];
-	void *blocks[2];
-	int lens[2];
+	void *ctx;
 
 	if (!*cl_sendguid.string && *connectinfo.ext.guidsalt)
 	{
@@ -587,12 +581,48 @@ char *CL_GUIDString(netadr_t *adr)
 		}
 	}
 
-	blocks[0] = buf;lens[0] = buflen;
-	blocks[1] = serveraddr;lens[1] = strlen(serveraddr);
-	Com_BlocksChecksum(2, blocks, lens, (void*)digest);
-
-	Q_snprintfz(connectinfo.guid, sizeof(connectinfo.guid), "%08x%08x%08x%08x", digest[0], digest[1], digest[2], digest[3]);
+	ctx = alloca(hash_md4.contextsize);
+	hash_md4.init(ctx);
+	hash_md4.process(ctx, buf, buflen);
+	hash_md4.process(ctx, serveraddr, strlen(serveraddr));
+	hash_md4.terminate(digest, ctx);
+	Base16_EncodeBlock(digest, hash_md4.digestsize, connectinfo.guid, sizeof(connectinfo.guid));
 	return connectinfo.guid;
+}
+
+static void CL_ConnectAbort(const char *format, ...)
+{	//stops trying to connect, doesn't affect the _current_ connection, so usable for transfers.
+	va_list		argptr;
+	char		reason[1024];
+
+	if (format)
+	{
+		va_start (argptr, format);
+		Q_vsnprintfz (reason, sizeof(reason), format,argptr);
+		va_end (argptr);
+
+		Cvar_Set(&cl_disconnectreason, reason);
+		Con_Printf (CON_ERROR"%s\n", reason);
+	}
+#ifdef HAVE_DTLS
+	while (connectinfo.numadr)
+		NET_DTLS_Disconnect(cls.sockets, &connectinfo.adr[--connectinfo.numadr]);
+#endif
+	connectinfo.numadr = 0;
+	SCR_EndLoadingPlaque();
+	connectinfo.trying = false;
+
+	if (format)
+	{
+		//try and force the menu to show again. this should force the disconnectreason to show.
+		if (!Key_Dest_Has(kdm_console))
+		{
+#ifdef MENU_DAT
+			if (!MP_Toggle(1))
+#endif
+				Menu_Prompt(NULL, NULL, reason, NULL, NULL, "Okay", true);
+		}
+	}
 }
 
 /*
@@ -658,13 +688,29 @@ static void CL_SendConnectPacket (netadr_t *to)
 
 	t1 = Sys_DoubleTime ();
 
+#ifdef HAVE_DTLS
+	if (connectinfo.peercred.hash && net_enable_dtls.ival>0)
+	{
+		char cert[8192];
+		char digest[DIGEST_MAXSIZE];
+		int sz = NET_GetConnectionCertificate(cls.sockets, to, QCERT_PEERCERTIFICATE, cert, sizeof(cert));
+		if (sz <= 0 || memcmp(connectinfo.peercred.digest, digest, CalcHash(connectinfo.peercred.hash, digest, sizeof(digest), cert, sz)))
+		{	//FIXME: we may have already pinned the bad cert, which may cause issues when reconnecting without FP info later.
+			if (NET_GetConnectionCertificate(cls.sockets, to, QCERT_ISENCRYPTED, NULL, 0)<0)
+				CL_ConnectAbort ("Fingerprint specified, but server did not report any certificate\n");
+			else
+				CL_ConnectAbort ("Server certificate does not match specified fingerprint\n");
+			return;
+		}
+	}
+#endif
+
 	if (!to)
 	{
 		to = &addr;
 		if (!NET_StringToAdr (cls.servername, PORT_DEFAULTSERVER, to))
 		{
-			Con_TPrintf ("CL_SendConnectPacket: Bad server address \"%s\"\n", cls.servername);
-			connectinfo.trying = false;
+			CL_ConnectAbort ("CL_SendConnectPacket: Bad server address \"%s\"\n", cls.servername);
 			return;
 		}
 	}
@@ -675,8 +721,7 @@ static void CL_SendConnectPacket (netadr_t *to)
 
 	if (!NET_IsClientLegal(to))
 	{
-		Con_TPrintf ("Illegal server address\n");
-		connectinfo.trying = false;
+		CL_ConnectAbort("Illegal server address\n");
 		return;
 	}
 
@@ -715,10 +760,12 @@ static void CL_SendConnectPacket (netadr_t *to)
 		Q_strncatz(data, va("\\prx\\%s", cls.servername), sizeof(data));
 		*a = '@';
 	}
+	if (connectinfo.spec==CIS_OBSERVE)
+		Q_strncatz(data, "\\spectator\\1", sizeof(data));
 	//the info itself
 	{
 		static const char *prioritykeys[] = {"name", "password", "spectator", "lang", "rate", "team", "topcolor", "bottomcolor", "skin", "_", "*", NULL};
-		static const char *ignorekeys[] = {"prx", "*z_ext", NULL};
+		const char *ignorekeys[] = {"prx", "*z_ext", (connectinfo.spec!=CIS_DEFAULT)?"spectator":NULL, NULL};
 		InfoBuf_ToString(&cls.userinfo[0], data+strlen(data), sizeof(data)-strlen(data), prioritykeys, ignorekeys, NULL, &cls.userinfosync, &cls.userinfo[0]);
 	}
 	if (connectinfo.protocol == CP_QUAKEWORLD)	//zquake extension info.
@@ -808,31 +855,17 @@ static void CL_ResolvedServer(void *vctx, void *data, size_t a, size_t b)
 
 	if (!ctx->found)
 	{
-		Cvar_Set(&cl_disconnectreason, va("Bad server address \"%s\"", ctx->servername));
-		Con_TPrintf ("Bad server address \"%s\"\n", ctx->servername);
-		connectinfo.trying = false;
-		SCR_EndLoadingPlaque();
+		CL_ConnectAbort("Unable to resolve server address \"%s\"\n", ctx->servername);
 		return;
 	}
 
 #ifdef HAVE_DTLS
 	for (i = 0; i < ctx->found; i++)
 	{
-		if (connectinfo.dtlsupgrade == DTLS_ACTIVE || connectinfo.mode==CIM_QEONLY)
+		if (net_enable_dtls.ival>=4 || connectinfo.mode==CIM_QEONLY)// || (connectinfo.peercred.hash && net_enable_dtls.ival >= 1))
 		{	//if we've already established a dtls connection, stick with it
 			if (ctx->adr[i].prot == NP_DGRAM)
 				ctx->adr[i].prot = NP_DTLS;
-		}
-		else if (connectinfo.adr[i].prot == NP_DTLS)
-		{	//dtls connections start out with regular udp, and upgrade to dtls once its established that the server supports it.
-			//FIXME: remove this block once our new netcode is better established.
-			connectinfo.dtlsupgrade = DTLS_REQUIRE;
-			ctx->adr[i].prot = NP_DGRAM;
-		}
-		else
-		{
-			//hostname didn't specify dtls. upgrade if we're allowed, but don't mandate it.
-			//connectinfo.dtlsupgrade = DTLS_TRY;
 		}
 	}
 #endif
@@ -846,11 +879,11 @@ static void CL_ResolvedServer(void *vctx, void *data, size_t a, size_t b)
 static void CL_ResolveServer(void *vctx, void *data, size_t a, size_t b)
 {
 	struct resolvectx_s *ctx = vctx;
-	const char *host = strrchr(cls.servername+1, '@');
+	const char *host = strrchr(ctx->servername+1, '@');
 	if (host)
 		host++;
 	else
-		host = cls.servername;
+		host = ctx->servername;
 
 	ctx->found = NET_StringToAdr2 (host, connectinfo.defaultport, ctx->adr, countof(ctx->adr), NULL);
 
@@ -1109,9 +1142,7 @@ void CL_CheckForResend (void)
 			connectinfo.nextadr = 0;
 			if (!connectinfo.numadr)
 			{
-				Con_TPrintf ("CL_CheckForResend: Bad server address \"%s\"\n", cls.servername);
-				connectinfo.trying = false;
-				SCR_EndLoadingPlaque();
+				CL_ConnectAbort("CL_CheckForResend: Bad server address \"%s\"\n", cls.servername);
 				return;
 			}
 			NET_AdrToString(data, sizeof(data), &connectinfo.adr[connectinfo.nextadr]);
@@ -1200,6 +1231,9 @@ void CL_CheckForResend (void)
 	else
 		connectinfo.clogged = false; //do the prints and everything.
 
+	if (!cls.sockets)	//only if its needed... we don't want to keep using a new port unless we have to
+		NET_InitClient(false);
+
 #ifdef HAVE_DTLS
 	if (connectinfo.numadr>0 && connectinfo.adr[0].prot == NP_DTLS)
 	{	//get through the handshake first, instead of waiting for a 5-sec timeout between polls.
@@ -1208,17 +1242,16 @@ void CL_CheckForResend (void)
 		case NETERR_CLOGGED:	//temporary failure
 			connectinfo.clogged = true;
 			return;
+		case NETERR_DISCONNECTED:
+			CL_ConnectAbort("DTLS Certificate Verification Failure\n");
+			break;
+		case NETERR_NOROUTE:	//not an error here, just means we need to send a new handshake.
+			break;
 		default:
 			break;
 		}
 	}
-
-	if (connectinfo.dtlsupgrade != DTLS_ACTIVE)
 #endif
-	{
-		if (!cls.sockets)	//only if its needed... we don't want to keep using a new port unless we have to
-			NET_InitClient(false);
-	}
 
 	t1 = Sys_DoubleTime ();
 	if (!connectinfo.istransfer)
@@ -1246,10 +1279,7 @@ void CL_CheckForResend (void)
 	to = &connectinfo.adr[connectinfo.nextadr%connectinfo.numadr];
 	if (!NET_IsClientLegal(to))
 	{
-		Cvar_Set(&cl_disconnectreason, va("Illegal server address"));
-		Con_TPrintf ("Illegal server address\n");
-		SCR_EndLoadingPlaque();
-		connectinfo.trying = false;
+		CL_ConnectAbort ("Illegal server address\n");
 		return;
 	}
 
@@ -1274,12 +1304,9 @@ void CL_CheckForResend (void)
 		connectinfo.clogged = false;
 
 	if (connectinfo.tries == 0 && connectinfo.nextadr < connectinfo.numadr)
-		if (!NET_EnsureRoute(cls.sockets, "conn", cls.servername, to))
+		if (!NET_EnsureRoute(cls.sockets, "conn", &connectinfo.peercred, to, true))
 		{
-			Cvar_Set(&cl_disconnectreason, va("Unable to establish connection to %s\n", cls.servername));
-			Con_Printf ("Unable to establish connection to %s\n", cls.servername);
-			connectinfo.trying = false;
-			SCR_EndLoadingPlaque();
+			CL_ConnectAbort ("Unable to establish connection to %s\n", cls.servername);
 			return;
 		}
 
@@ -1320,6 +1347,8 @@ void CL_CheckForResend (void)
 #ifdef NQPROT
 	if ((contype & 2) && !connectinfo.clogged)
 	{
+		char *e;
+		int pwd;
 		sizebuf_t sb;
 		memset(&sb, 0, sizeof(sb));
 		sb.data = data;
@@ -1339,11 +1368,18 @@ void CL_CheckForResend (void)
 			  which means it corrects for our public port if our nat uses different public ports for different remote ports
 			  thus all nq engines claim to be proquake
 			*/
-
+			if (!*password.string || !strcmp(password.string, "none"))
+				pwd = 0;
+			else
+			{
+				pwd = strtol(password.string, &e, 0);
+				if (*e)
+					pwd = CalcHashInt(&hash_md4, password.string, strlen(password.string));
+			}
 			MSG_WriteByte(&sb, 1); /*'mod'*/
 			MSG_WriteByte(&sb, 34); /*'mod' version*/
 			MSG_WriteByte(&sb, 0); /*flags*/
-			MSG_WriteLong(&sb, strtoul(password.string, NULL, 0)); /*password*/
+			MSG_WriteLong(&sb, pwd); /*password*/
 
 			/*FTE servers will detect this string and treat it as a qw challenge instead (if it allows qw clients), so protocol choice is deterministic*/
 			if (contype & 1)
@@ -1377,32 +1413,92 @@ void CL_CheckForResend (void)
 		}
 		else
 		{
-			Cvar_Set(&cl_disconnectreason, va("No route to \"%s\", giving up\n", cls.servername));
-			Con_TPrintf ("No route to host, giving up\n");
-			connectinfo.trying = false;
-			SCR_EndLoadingPlaque();
+			CL_ConnectAbort ("Unable to connect to %s, giving up\n", cls.servername);
 
 			NET_CloseClient();
 		}
 	}
 }
 
-static void CL_BeginServerConnect(const char *host, int port, qboolean noproxy, enum coninfomode_e mode)
+static void CL_BeginServerConnect(char *host, int port, qboolean noproxy, enum coninfomode_e mode, enum coninfospec_e spec)
 {
-	if (!strncmp(host, "localhost", 9))
-		noproxy = true;	//FIXME: resolve the address here or something so that we don't end up using a proxy for lan addresses.
+	const char *schemeend = strstr(host, "://");
+	char *arglist;
 
-	if (strstr(host, "://") || !*cl_proxyaddr.string || noproxy)
-		Q_strncpyz (cls.servername, host, sizeof(cls.servername));
+	Q_strncpyz(cls.serverurl, host, sizeof(cls.serverurl));
+
+	if (schemeend)
+	{
+		const char *schemestart = strchr(host, ':');
+		int schemelen;
+	//if its one of our explicit protocols then use the url as-is
+		const char *netschemes[] = {"udp", "udp4", "udp6", "ipx", "tcp", "tcp4", "tcp6", /*ipx*/"spx", "ws", "wss", "tls", "dtls", "ice", "rtc", "ices", "rtcs", "irc", "udg", "unix"};
+		int i;
+		size_t slen;
+
+		if (!schemestart || schemestart==schemeend)
+			schemestart = host;
+		else
+			schemestart++;
+		schemelen = schemeend-schemestart;
+
+		Q_strncpyz (cls.servername, "", sizeof(cls.servername));
+		for (i = 0; i < countof(netschemes); i++)
+		{
+			slen = strlen(netschemes[i]);
+			if (schemelen == slen && !strncmp(schemestart, netschemes[i], slen))
+			{
+				Q_strncpyz (cls.servername, host, sizeof(cls.servername));	//oh. will probably be okay then
+				break;
+			}
+		}
+		if (!*cls.servername)
+		{	//not some '/foo' name, not rtc:// either...
+			char *sl = strchr(schemeend+3, '/');
+			if (sl)
+			{
+				if (!strncmp(sl, "/observe", 8))
+				{
+					if (spec == CIS_DEFAULT)
+						spec = CIS_OBSERVE;
+					else if (spec != CIS_OBSERVE)
+						Con_Printf("Ignoring 'observe'\n");
+					memmove(sl, sl+8, strlen(sl+8)+1);
+				}
+				else if (!strncmp(sl, "/join", 5))
+				{
+					if (spec == CIS_DEFAULT)
+						spec = CIS_JOIN;
+					else if (spec != CIS_OBSERVE)
+						Con_Printf("Ignoring 'join'\n");
+					memmove(sl, sl+5, strlen(sl+5)+1);
+				}
+				else if (!strncmp(sl, "/", 1) && (sl[1] == 0 || sl[1]=='?'))
+				{
+					//current spectator mode
+					memmove(sl, sl+1, strlen(sl+1)+1);
+				}
+			}
+			Q_strncpyz (cls.servername, schemeend+3, sizeof(cls.servername));	//probably some game-specific mess that we don't know
+		}
+	}
 	else
-		Q_snprintfz(cls.servername, sizeof(cls.servername), "%s@%s", host, cl_proxyaddr.string);
+	{
+		if (!strncmp(host, "localhost", 9))
+			noproxy = true;	//FIXME: resolve the address here or something so that we don't end up using a proxy for lan addresses.
+
+		if (strstr(host, "://") || !*cl_proxyaddr.string || noproxy)
+			Q_strncpyz (cls.servername, host, sizeof(cls.servername));
+		else
+			Q_snprintfz(cls.servername, sizeof(cls.servername), "%s@%s", host, cl_proxyaddr.string);
+	}
+
+	arglist = strchr(cls.servername, '?');
 
 	if (!port)
 		port = cl_defaultport.value;
-#ifdef HAVE_DTLS
-	while (connectinfo.numadr)
-		NET_DTLS_Disconnect(cls.sockets, &connectinfo.adr[--connectinfo.numadr]);
-#endif
+
+	CL_ConnectAbort(NULL);
 	memset(&connectinfo, 0, sizeof(connectinfo));
 	if (*cl_disconnectreason.string)
 		Cvar_Set(&cl_disconnectreason, "");
@@ -1410,15 +1506,38 @@ static void CL_BeginServerConnect(const char *host, int port, qboolean noproxy, 
 	connectinfo.defaultport = port;
 	connectinfo.protocol = CP_UNKNOWN;
 	connectinfo.mode = mode;
+	connectinfo.spec = spec;
 
-#ifdef HAVE_DTLS
-	if (net_enable_dtls.ival >= 3)
-		connectinfo.dtlsupgrade = DTLS_REQUIRE;
-	else if (net_enable_dtls.ival >= 2)
-		connectinfo.dtlsupgrade = DTLS_TRY;
-	else
-		connectinfo.dtlsupgrade = DTLS_DISABLE;
-#endif
+	connectinfo.peercred.name = cls.servername;
+	if (arglist)
+	{
+		*arglist++ = 0;
+		while (*arglist)
+		{
+			char *e = strchr(arglist, '&');
+			if (e)
+				*e=0;
+			if (!strncasecmp(arglist, "fp=", 3))
+			{
+				size_t l = 8*Base64_DecodeBlock(arglist+3, arglist+strlen(arglist), connectinfo.peercred.digest, sizeof(connectinfo.peercred.digest));
+				if (l <= 160)
+					connectinfo.peercred.hash = &hash_sha1;
+				else if (l <= 256)
+					connectinfo.peercred.hash = &hash_sha2_256;
+				else if (l <= 512)
+					connectinfo.peercred.hash = &hash_sha2_512;
+				else
+					connectinfo.peercred.hash = NULL;
+			}
+			else
+				Con_Printf(CON_WARNING"uri arg not known: \"%s\"\n", arglist);
+
+			if (e)
+				arglist=e+1;
+			else
+				break;
+		}
+	}
 
 	SCR_SetLoadingStage(LS_CONNECTION);
 	CL_CheckForResend();
@@ -1434,9 +1553,11 @@ void CL_BeginServerReconnect(void)
 	}
 #endif
 #ifdef HAVE_DTLS
-	if (connectinfo.numadr>0)
-		NET_DTLS_Disconnect(cls.sockets, &connectinfo.adr[0]);
-	connectinfo.dtlsupgrade = 0;
+	{
+		int i;
+		for (i = 0; i < connectinfo.numadr; i++)
+			NET_DTLS_Disconnect(cls.sockets, &connectinfo.adr[i]);
+	}
 #endif
 #ifdef SUPPORT_ICE
 	while (connectinfo.numadr)	//remove any ICE addresses. probably we'll end up with no addresses left leaving us free to re-resolve giving us the original(ish) rtc connection.
@@ -1474,11 +1595,11 @@ void CL_Transfer_f(void)
 		return;
 	}
 
+	CL_ConnectAbort(NULL);
 	server = Cmd_Argv (1);
 	if (!*server)
 	{
 		//if they didn't specify a server, abort any active transfer/connection.
-		connectinfo.trying = false;
 		return;
 	}
 
@@ -1509,7 +1630,7 @@ CL_Connect_f
 ================
 */
 void CL_Connect_c(int argn, const char *partial, struct xcommandargcompletioncb_s *ctx);
-void CL_Connect_f (void)
+static void CL_Connect_f (void)
 {
 	char	*server;
 
@@ -1529,7 +1650,7 @@ void CL_Connect_f (void)
 #endif
 		CL_Disconnect_f ();
 
-	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT);
+	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT, CIS_DEFAULT);
 }
 #if defined(CL_MASTER) && defined(HAVE_PACKET)
 static void CL_ConnectBestRoute_f (void)
@@ -1564,7 +1685,7 @@ static void CL_ConnectBestRoute_f (void)
 	else
 #endif
 		CL_Disconnect_f ();
-	CL_BeginServerConnect(server, 0, true, CIM_DEFAULT);
+	CL_BeginServerConnect(server, 0, true, CIM_DEFAULT, CIS_DEFAULT);
 }
 #endif
 
@@ -1591,9 +1712,7 @@ static void CL_Join_f (void)
 
 	CL_Disconnect_f ();
 
-	Cvar_Set(&spectator, "0");
-
-	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT);
+	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT, CIS_JOIN);
 }
 
 void CL_Observe_f (void)
@@ -1621,7 +1740,7 @@ void CL_Observe_f (void)
 
 	Cvar_Set(&spectator, "1");
 
-	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT);
+	CL_BeginServerConnect(server, 0, false, CIM_DEFAULT, CIS_OBSERVE);
 }
 
 #ifdef NQPROT
@@ -1646,7 +1765,7 @@ void CLNQ_Connect_f (void)
 
 	CL_Disconnect_f ();
 
-	CL_BeginServerConnect(server, 26000, true, mode);
+	CL_BeginServerConnect(server, 26000, true, mode, CIS_DEFAULT/*doesn't really do spec/join stuff, but if the server asks for our info later...*/);
 }
 #endif
  
@@ -2242,9 +2361,7 @@ void CL_Disconnect_f (void)
 #endif
 
 	CL_Disconnect (NULL);
-
-	connectinfo.trying = false;
-
+	CL_ConnectAbort(NULL);
 	NET_CloseClient();
 
 	(void)CSQC_UnconnectedInit();
@@ -2329,21 +2446,221 @@ void CL_Users_f (void)
 	Con_TPrintf ("%i total users\n", c);
 }
 
-int CL_ParseColour(char *colt)
+
+static struct {
+	const char *name;
+	unsigned int rgb;
+} csscolours[] = {
+	//php-defined colours
+	{"aliceblue",		0xf0f8ff},
+	{"antiquewhite",	0xfaebd7},
+	{"aqua",			0x00ffff},
+	{"aquamarine",		0x7fffd4},
+	{"azure",			0xf0ffff},
+	{"beige",			0xf5f5dc},
+	{"bisque",			0xffe4c4},
+	{"black",			0x000000},
+	{"blanchedalmond",	0xffebcd},
+	{"blue",			0x0000ff},
+	{"blueviolet",		0x8a2be2},
+	{"brown",			0xa52a2a},
+	{"burlywood",		0xdeb887},
+	{"cadetblue",		0x5f9ea0},
+	{"chartreuse",		0x7fff00},
+	{"chocolate",		0xd2691e},
+	{"coral",			0xff7f50},
+	{"cornflowerblue",	0x6495ed},
+	{"cornsilk",		0xfff8dc},
+	{"crimson",			0xdc143c},
+	{"cyan",			0x00ffff},
+	{"darkblue",		0x00008b},
+	{"darkcyan",		0x008b8b},
+	{"darkgoldenrod",	0xb8860b},
+	{"darkgray",		0xa9a9a9},
+	{"darkgreen",		0x006400},
+	{"darkgrey",		0xa9a9a9},
+	{"darkkhaki",		0xbdb76b},
+	{"darkmagenta",		0x8b008b},
+	{"darkolivegreen",	0x556b2f},
+	{"darkorange",		0xff8c00},
+	{"darkorchid",		0x9932cc},
+	{"darkred",			0x8b0000},
+	{"darksalmon",		0xe9967a},
+	{"darkseagreen",	0x8fbc8f},
+	{"darkslateblue",	0x483d8b},
+	{"darkslategray",	0x2f4f4f},
+	{"darkslategrey",	0x2f4f4f},
+	{"darkturquoise",	0x00ced1},
+	{"darkviolet",		0x9400d3},
+	{"deeppink",		0xff1493},
+	{"deepskyblue",		0x00bfff},
+	{"dimgray",			0x696969},
+	{"dimgrey",			0x696969},
+	{"dodgerblue",		0x1e90ff},
+	{"firebrick",		0xb22222},
+	{"floralwhite",		0xfffaf0},
+	{"forestgreen",		0x228b22},
+	{"fuchsia",			0xff00ff},
+	{"gainsboro",		0xdcdcdc},
+	{"ghostwhite",		0xf8f8ff},
+	{"gold",			0xffd700},
+	{"goldenrod",		0xdaa520},
+	{"gray",			0x808080},
+	{"green",			0x008000},
+	{"greenyellow",		0xadff2f},
+	{"grey",			0x808080},
+	{"honeydew",		0xf0fff0},
+	{"hotpink",			0xff69b4},
+	{"indianred",		0xcd5c5c},
+	{"indigo",			0x4b0082},
+	{"ivory",			0xfffff0},
+	{"khaki",			0xf0e68c},
+	{"lavender",		0xe6e6fa},
+	{"lavenderblush",	0xfff0f5},
+	{"lawngreen",		0x7cfc00},
+	{"lemonchiffon",	0xfffacd},
+	{"lightblue",		0xadd8e6},
+	{"lightcoral",		0xf08080},
+	{"lightcyan",		0xe0ffff},
+	{"lightgoldenrodyellow",0xfafad2},
+	{"lightgray",		0xd3d3d3},
+	{"lightgreen",		0x90ee90},
+	{"lightgrey",		0xd3d3d3},
+	{"lightpink",		0xffb6c1},
+	{"lightsalmon",		0xffa07a},
+	{"lightseagreen",	0x20b2aa},
+	{"lightskyblue",	0x87cefa},
+	{"lightslategray",	0x778899},
+	{"lightslategrey",	0x778899},
+	{"lightsteelblue",	0xb0c4de},
+	{"lightyellow",		0xffffe0},
+	{"lime",			0x00ff00},
+	{"limegreen",		0x32cd32},
+	{"linen",			0xfaf0e6},
+	{"magenta",			0xff00ff},
+	{"maroon",			0x800000},
+	{"mediumaquamarine",0x66cdaa},
+	{"mediumblue",		0x0000cd},
+	{"mediumorchid",	0xba55d3},
+	{"mediumpurple",	0x9370db},
+	{"mediumseagreen",	0x3cb371},
+	{"mediumslateblue",	0x7b68ee},
+	{"mediumspringgreen",0x00fa9a},
+	{"mediumturquoise",	0x48d1cc},
+	{"mediumvioletred",	0xc71585},
+	{"midnightblue",	0x191970},
+	{"mintcream",		0xf5fffa},
+	{"mistyrose",		0xffe4e1},
+	{"moccasin",		0xffe4b5},
+	{"navajowhite",		0xffdead},
+	{"navy",			0x000080},
+	{"oldlace",			0xfdf5e6},
+	{"olive",			0x808000},
+	{"olivedrab",		0x6b8e23},
+	{"orange",			0xffa500},
+	{"orangered",		0xff4500},
+	{"orchid",			0xda70d6},
+	{"palegoldenrod",	0xeee8aa},
+	{"palegreen",		0x98fb98},
+	{"paleturquoise",	0xafeeee},
+	{"palevioletred",	0xdb7093},
+	{"papayawhip",		0xffefd5},
+	{"peachpuff",		0xffdab9},
+	{"peru",			0xcd853f},
+	{"pink",			0xffc0cb},
+	{"plum",			0xdda0dd},
+	{"powderblue",		0xb0e0e6},
+	{"purple",			0x800080},
+	{"red",				0xff0000},
+	{"rosybrown",		0xbc8f8f},
+	{"royalblue",		0x4169e1},
+	{"saddlebrown",		0x8b4513},
+	{"salmon",			0xfa8072},
+	{"sandybrown",		0xf4a460},
+	{"seagreen",		0x2e8b57},
+	{"seashell",		0xfff5ee},
+	{"sienna",			0xa0522d},
+	{"silver",			0xc0c0c0},
+	{"skyblue",			0x87ceeb},
+	{"slateblue",		0x6a5acd},
+	{"slategray",		0x708090},
+	{"slategrey",		0x708090},
+	{"snow",			0xfffafa},
+	{"springgreen",		0x00ff7f},
+	{"steelblue",		0x4682b4},
+	{"tan",				0xd2b48c},
+	{"teal",			0x008080},
+	{"thistle",			0xd8bfd8},
+	{"tomato",			0xff6347},
+	{"turquoise",		0x40e0d0},
+	{"violet",			0xee82ee},
+	{"wheat",			0xf5deb3},
+	{"white",			0xffffff},
+	{"whitesmoke",		0xf5f5f5},
+	{"yellow",			0xffff00},
+	{"yellowgreen",		0x9acd32},
+};
+
+int CL_ParseColour(const char *colt)
 {
+	char *e;
 	int col;
+	size_t i;
 	if (!strncmp(colt, "0x", 2))
 		col = 0xff000000|strtoul(colt+2, NULL, 16);
 	else
 	{
-		col = atoi(colt);
-		col &= 15;
-		if (col > 13)
-			col = 13;
+		col = strtoul(colt, &e, 0);
+		if (*e)
+		{
+			col = 0;
+			for (i = 0; i < countof(csscolours); i++)
+				if (!Q_strcasecmp(colt, csscolours[i].name))
+				{
+					col = 0xff000000 | csscolours[i].rgb;
+					break;
+				}
+		}
+		else
+		{
+			col &= 15;
+			if (col > 13)
+				col = 13;
+		}
 	}
 	return col;
 }
+const char *CL_ColourName(const char *colt)
+{
+	int col = CL_ParseColour(colt);
+	size_t i;
+	if (col & 0xff000000)
+	{
+		col &= ~0xff000000;
+		for (i = 0; i < countof(csscolours); i++)
+			if (csscolours[i].rgb == col)
+				colt = csscolours[i].name;
+	}
+	return colt;
+}
 
+
+void CL_Color_c(int argn, const char *partial, struct xcommandargcompletioncb_s *ctx)
+{
+	int len;
+	size_t i;
+	if (argn == 1 || argn == 2)
+	{
+		len = strlen(partial);
+		if (*partial >= '0' && *partial <= '9')
+			;
+		else for (i = 0; i < countof(csscolours); i++)
+		{
+			if (!Q_strncasecmp(partial, csscolours[i].name, len))
+				ctx->cb(csscolours[i].name, va("^x%x%x%x%s", (csscolours[i].rgb>>20)&15, (csscolours[i].rgb>>12)&15, (csscolours[i].rgb>>4)&15, csscolours[i].name), NULL, ctx);
+		}
+	}
+}
 void CL_Color_f (void)
 {
 	// just for quake compatability...
@@ -2358,13 +2675,18 @@ void CL_Color_f (void)
 
 	if (Cmd_Argc() == 1)
 	{
-		char *t = InfoBuf_ValueForKey(&cls.userinfo[pnum], "topcolor");
-		char *b = InfoBuf_ValueForKey(&cls.userinfo[pnum], "bottomcolor");
+		const char *t = InfoBuf_ValueForKey(&cls.userinfo[pnum], "topcolor");
+		const char *b = InfoBuf_ValueForKey(&cls.userinfo[pnum], "bottomcolor");
+		t = CL_ColourName(t);
+		b = CL_ColourName(b);
 		if (!*t)
 			t = "0";
 		if (!*b)
 			b = "0";
-		Con_TPrintf ("\"color\" is \"%s %s\"\n", t, b);
+		if (!strcmp(t, b))
+			Con_TPrintf ("\"color\" is \"%s\"\n", t, b);
+		else
+			Con_TPrintf ("\"color\" is \"%s %s\"\n", t, b);
 		Con_TPrintf ("usage: color <0xRRGGBB> [0xRRGGBB]\n");
 		return;
 	}
@@ -2570,6 +2892,7 @@ void CL_CheckServerInfo(void)
 		cl.bunnyspeedcap = Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_bunnyspeedcap"));
 		movevars.slidefix = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_slidefix")) != 0);
 		movevars.slidyslopes = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_slidyslopes")) != 0);
+		movevars.bunnyfriction = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_bunnyfriction")) != 0);
 		movevars.airstep = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_airstep")) != 0);
 		movevars.pground = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_pground")) != 0);
 		movevars.stepdown = (Q_atof(InfoBuf_ValueForKey(&cl.serverinfo, "pm_stepdown")) != 0);
@@ -2929,6 +3252,7 @@ void CL_Packet_f (void)
 	int		i, l;
 	char	*in, *out;
 	netadr_t	adr;
+	struct dtlspeercred_s cred = {Cmd_Argv(1)};
 
 	if (Cmd_Argc() != 3)
 	{
@@ -3018,7 +3342,7 @@ void CL_Packet_f (void)
 
 	if (!cls.sockets)
 		NET_InitClient(false);
-	if (!NET_EnsureRoute(cls.sockets, "packet", Cmd_Argv(1), &adr))
+	if (!NET_EnsureRoute(cls.sockets, "packet", &cred, &adr, true))
 		return;
 	NET_SendPacket (cls.sockets, out-send, send, &adr);
 
@@ -3339,7 +3663,8 @@ void CL_ConnectionlessPacket (void)
 			{
 				if (CL_IsPendingServerAddress(&net_from))
 				{
-					if (!NET_EnsureRoute(cls.sockets, "redir", cls.servername, &adr))
+					struct dtlspeercred_s cred = {cls.servername}; //FIXME
+					if (!NET_EnsureRoute(cls.sockets, "redir", &cred, &adr, true))
 						Con_Printf (CON_ERROR"Unable to redirect to %s\n", data);
 					else
 					{
@@ -3357,29 +3682,20 @@ void CL_ConnectionlessPacket (void)
 		else if (!strcmp(s, "reject"))
 		{	//generic rejection. stop trying.
 			char *data = MSG_ReadStringLine();
-			Con_Printf ("reject\n%s\n", data);
+			Con_Printf ("reject\n");
 			if (CL_IsPendingServerAddress(&net_from))
-			{
-				Cvar_Set(&cl_disconnectreason, va("%s\n", data));
-				connectinfo.trying = false;
-			}
+				CL_ConnectAbort("%s\n", data);
 			return;
 		}
 		else if (!strcmp(s, "badname"))
 		{	//rejected purely because of player name
 			if (CL_IsPendingServerAddress(&net_from))
-			{
-				Cvar_Set(&cl_disconnectreason, va("bad player name\n"));
-				connectinfo.trying = false;
-			}
+				CL_ConnectAbort("bad player name\n");
 		}
 		else if (!strcmp(s, "badaccount"))
 		{	//rejected because username or password is wrong
 			if (CL_IsPendingServerAddress(&net_from))
-			{
-				Cvar_Set(&cl_disconnectreason, va("invalid username or password\n"));
-				connectinfo.trying = false;
-			}
+				CL_ConnectAbort("invalid username or password\n");
 		}
 		
 		Con_Printf ("f%s\n", s);
@@ -3605,40 +3921,50 @@ void CL_ConnectionlessPacket (void)
 		}
 
 #ifdef HAVE_DTLS
-		if (candtls && net_from.prot == NP_DGRAM && (connectinfo.dtlsupgrade || candtls > 1) && !NET_IsEncrypted(&net_from))
+		if ((candtls && net_enable_dtls.ival) && net_from.prot == NP_DGRAM && (net_enable_dtls.ival>1 || candtls > 1) && !NET_IsEncrypted(&net_from))
 		{
-			//c2s getchallenge
-			//s2c c%u\0DTLS=$candtls
+			//c2s getchallenge			<no client details
+			//s2c c%u\0DTLS=$candtls	<may leak server details>
 			//<<YOU ARE HERE>>
-			//c2s dtlsconnect %u
-			//s2c dtlsopened
+			//c2s dtlsconnect %u [REALTARGET]	<FIXME: target server is plain text, not entirely unlike tls1.2, but still worse than a vpn and could be improved>
+			//s2c dtlsopened			<no details at all, other than that the server is now willing to accept dtls handshakes etc>
 			//c2s DTLS(getchallenge)
 			//DTLS(etc)
 
-			//NOTE: the dtlsconnect/dtlsopened parts are redundant and the non-dtls parts are entirely optional (and should be skipped the client requries/knows the server supports dtls)
+			//NOTE: the dtlsconnect/dtlsopened parts are redundant and the non-dtls parts are now entirely optional (and should be skipped if the client requries/knows the server supports dtls)
 			//the challenge response includes server capabilities, so we still need the getchallenge/response part of the handshake despite dtls making the actual challenge part redundant.
 
 			//getchallenge has to be done twice, with the outer one only reporting whether dtls can/should be used.
 			//this means the actual connect packet is already over dtls, which protects the user's userinfo.
 			//FIXME: do rcon via dtls too, but requires tracking pending rcon packets until the handshake completes.
 
-			//server says it can do dtls, but will still need to ask it to allocate extra resources for us.
+			//server says it can do dtls, but will still need to ask it to allocate extra resources for us (I hadn't gotten dtls cookies working properly at that point).
 
-			char *pkt;
-			//qwfwd proxy routing
-			char *at;
-			if ((at = strrchr(cls.servername, '@')))
+			if (net_enable_dtls.ival>0)
 			{
-				*at = 0;
-				pkt = va("%c%c%c%c""dtlsconnect %i %s", 255, 255, 255, 255, connectinfo.challenge, cls.servername);
-				*at = '@';
+				char *pkt;
+				//qwfwd proxy routing. it doesn't support it yet, but hey, if its willing to forward the dtls packets its all good.
+				char *at;
+				if ((at = strrchr(cls.servername, '@')))
+				{
+					*at = 0;
+					pkt = va("%c%c%c%c""dtlsconnect %i %s", 255, 255, 255, 255, connectinfo.challenge, cls.servername);
+					*at = '@';
+				}
+				else
+					pkt = va("%c%c%c%c""dtlsconnect %i", 255, 255, 255, 255, connectinfo.challenge);
+				NET_SendPacket (cls.sockets, strlen(pkt), pkt, &net_from);
+				return;
 			}
-			else
-				pkt = va("%c%c%c%c""dtlsconnect %i", 255, 255, 255, 255, connectinfo.challenge);
-			NET_SendPacket (cls.sockets, strlen(pkt), pkt, &net_from);
-			return;
+			else if (candtls >= 3)
+			{
+				Cvar_Set(&cl_disconnectreason, va("DTLS is disabled, but server requires it. not connecting\n"));
+				connectinfo.trying = false;
+				Con_Printf("DTLS is disabled, but server requires it. Set ^[/net_enable_dtls 1^] before connecting again.\n");
+				return;
+			}
 		}
-		if (connectinfo.dtlsupgrade == DTLS_REQUIRE && !NET_IsEncrypted(&net_from))
+		if (net_enable_dtls.ival>=3 && !NET_IsEncrypted(&net_from))
 		{
 			Cvar_Set(&cl_disconnectreason, va("Server does not support/allow dtls. not connecting\n"));
 			connectinfo.trying = false;
@@ -3801,10 +4127,9 @@ void CL_ConnectionlessPacket (void)
 				return;
 
 			memset(&cred, 0, sizeof(cred));
-			cred.peer.name = cls.servername;
-			if (NET_DTLS_Create(cls.sockets, &net_from, &cred))
+			cred.peer = connectinfo.peercred;
+			if (NET_DTLS_Create(cls.sockets, &net_from, &cred, true))
 			{
-				connectinfo.dtlsupgrade = DTLS_ACTIVE;
 				connectinfo.numadr = 1;	//fixate on this resolved address.
 				connectinfo.adr[0] = net_from;
 				connectinfo.adr[0].prot = NP_DTLS;
@@ -3812,11 +4137,7 @@ void CL_ConnectionlessPacket (void)
 				connectinfo.time = 0;	//send a new challenge NOW.
 			}
 			else
-			{
-				if (connectinfo.dtlsupgrade == DTLS_TRY)
-					connectinfo.dtlsupgrade = DTLS_DISABLE;
-				Con_Printf ("unable to establish dtls route\n");
-			}
+				CL_ConnectAbort("Unable to initialise dtls driver. You may need to adjust tls_provider or disable dtls with ^[/net_enable_dtls 0^]\n");	//this is a local issue, and not a result on remote packets.
 #else
 			Con_Printf ("dtlsopened (unsupported)\n");
 #endif
@@ -3853,15 +4174,6 @@ client_connect:	//fixme: make function
 				Con_TPrintf ("ignoring connection\n");
 			return;
 		}
-		if (net_from.type != NA_LOOPBACK)
-		{
-			Con_TPrintf (S_COLOR_GRAY"connection\n");
-
-#ifdef HAVE_SERVER
-			if (sv.state && sv.state != ss_clustermode)
-				SV_UnspawnServer();
-#endif
-		}
 
 		if (cls.state >= ca_connected)
 		{
@@ -3878,6 +4190,15 @@ client_connect:	//fixme: make function
 					Con_TPrintf ("Dup connect received.  Ignored.\n");
 				return;
 			}
+		}
+		if (net_from.type != NA_LOOPBACK)
+		{
+//			Con_TPrintf (S_COLOR_GRAY"connection\n");
+
+#ifdef HAVE_SERVER
+			if (sv.state && sv.state != ss_clustermode)
+				SV_UnspawnServer();
+#endif
 		}
 		connectinfo.trying = false;
 		cl.splitclients = 0;
@@ -4058,31 +4379,36 @@ void CLNQ_ConnectionlessPacket(void)
 		}
 		else
 		{
-			port = htons((unsigned short)MSG_ReadLong());
-			//this is the port that we're meant to respond to.
+			port = htons((unsigned short)MSG_ReadLong()); //this is the port that we're meant to respond to...
+			if (msg_badread)	//qe has no port specified. and that's fine when its over dtls anyway.
+				port = 0;
 
-			if (port && !msg_badread)
-			{
-				char buf[256];
-				net_from.port = port;
-				Con_DPrintf("redirecting to port %s\n", NET_AdrToString(buf, sizeof(buf), &net_from));
-			}
 
 			cls.proquake_angles_hack = false;
 			cls.protocol_nq = CPNQ_ID;
 			if (MSG_ReadByte() == 1)	//a proquake server adds a little extra info
 			{
 				int ver = MSG_ReadByte();
+				int flags = MSG_ReadByte();
 				Con_DPrintf("ProQuake server %i.%i\n", ver/10, ver%10);
 
 //				if (ver >= 34)
 				cls.proquake_angles_hack = true;
-				if (MSG_ReadByte() == 1)
+				if (flags & 1)
 				{
 					//its a 'pure' server.
 					Con_Printf("pure ProQuake server\n");
 					return;
 				}
+				if (flags & 0x80)
+					port = 0;	//don't force the port.
+			}
+
+			if (port && port != net_from.port)
+			{
+				char buf[256];
+				net_from.port = port;
+				Con_Printf("redirecting to port %s\n", NET_AdrToString(buf, sizeof(buf), &net_from));
 			}
 		}
 
@@ -4111,7 +4437,7 @@ void CLNQ_ConnectionlessPacket(void)
 		else
 		{
 			//send a dummy packet.
-			//this makes our local nat think we initialised the conversation, so that we can receive the.
+			//this makes our local firewall think we initialised the conversation, so that we can receive their packets. however this only works if our nat uses the same public port for private ports.
 			Netchan_Transmit(&cls.netchan, 1, "\x01", 2500);
 		}
 		return;
@@ -4293,10 +4619,6 @@ void CL_ReadPackets (void)
 	}
 	else
 		NET_ReadPackets(cls.sockets);
-
-#ifdef HAVE_DTLS
-	NET_DTLS_Timeouts(cls.sockets);
-#endif
 
 	//
 	// check timeout
@@ -5032,6 +5354,7 @@ void CL_Init (void)
 	size_t seat;
 
 	cls.state = ca_disconnected;
+	cls.demotrack = -1;
 
 #ifdef SVNREVISION
 	if (strcmp(STRINGIFY(SVNREVISION), "-"))
@@ -5337,7 +5660,7 @@ void CL_Init (void)
 	Cmd_AddCommand ("setinfo", CL_SetInfo_f);
 	Cmd_AddCommand ("fullinfo", CL_FullInfo_f);
 
-	Cmd_AddCommand ("color", CL_Color_f);
+	Cmd_AddCommandAD ("color", CL_Color_f, CL_Color_c, NULL);
 #if defined(NQPROT) && defined(HAVE_LEGACY)
 	Cmd_AddCommand ("curl",	CL_Curl_f);
 #endif
@@ -5408,7 +5731,7 @@ NORETURN void VARGS Host_EndGame (const char *message, ...)
 	char		string[1024];
 
 	va_start (argptr,message);
-	vsnprintf (string,sizeof(string)-1, message,argptr);
+	vsnprintf (string,sizeof(string)-1, localtext(message),argptr);
 	va_end (argptr);
 
 	COM_AssertMainThread(string);
@@ -5421,9 +5744,9 @@ NORETURN void VARGS Host_EndGame (const char *message, ...)
 	SCR_EndLoadingPlaque();
 
 	CL_Disconnect (string);
+	CL_ConnectAbort(NULL);
 
 	SV_UnspawnServer();
-	connectinfo.trying = false;
 
 	Cvar_Set(&cl_shownet, "0");
 
@@ -5448,7 +5771,7 @@ void VARGS Host_Error (const char *error, ...)
 	inerror = true;
 
 	va_start (argptr,error);
-	vsnprintf (string,sizeof(string)-1, error,argptr);
+	vsnprintf (string,sizeof(string)-1, localtext(error),argptr);
 	va_end (argptr);
 	COM_AssertMainThread(string);
 	Con_TPrintf ("Host_Error: %s\n", string);
@@ -5990,7 +6313,7 @@ done:
 	else if (f->flags & HRF_MODEL)
 	{
 		if (!FS_FixupGamedirForExternalFile(f->fname, loadcommand, sizeof(loadcommand)))
-			Con_Printf("%s is not within the current gamedir\n", f->fname);
+			Con_TPrintf("%s is not within the current gamedir\n", f->fname);
 		else
 			Cbuf_AddText(va("modelviewer \"%s\"\n", loadcommand), RESTRICT_LOCAL);
 		goto done;
@@ -6017,7 +6340,7 @@ done:
 		if (!(f->flags & HRF_ACTION))
 		{
 			Key_Dest_Remove(kdm_console);
-			Menu_Prompt(Host_RunFilePrompted, f, va("Exec %s?\n", COM_SkipPath(f->fname)), "Yes", NULL, "Cancel", true);
+			Menu_Prompt(Host_RunFilePrompted, f, va(localtext("Exec %s?\n"), COM_SkipPath(f->fname)), "Yes", NULL, "Cancel", true);
 			return;
 		}
 		if (f->flags & HRF_OPENED)
@@ -6065,7 +6388,7 @@ done:
 
 	if (!f->srcfile)
 	{
-		Con_Printf("Unable to open %s\n", f->fname);
+		Con_TPrintf("Unable to open %s\n", f->fname);
 		goto done;
 	}
 
@@ -6128,17 +6451,17 @@ done:
 		Key_Dest_Remove(kdm_console);
 		if (haschanged)
 		{
-			Menu_Prompt(Host_RunFilePrompted, f, va("File already exists.\nWhat would you like to do?\n%s\n", displayname), "Overwrite", "Run old", "Cancel", true);
+			Menu_Prompt(Host_RunFilePrompted, f, va(localtext("File already exists.\nWhat would you like to do?\n%s\n"), displayname), "Overwrite", "Run old", "Cancel", true);
 			return;
 		}
 		else if (isnew)
 		{
-			Menu_Prompt(Host_RunFilePrompted, f, va("File appears new.\nWould you like to install\n%s\n", displayname), "Install!", "", "Cancel", true);
+			Menu_Prompt(Host_RunFilePrompted, f, va(localtext("File appears new.\nWould you like to install\n%s\n"), displayname), "Install!", "", "Cancel", true);
 			return;
 		}
 		else
 		{
-			Menu_Prompt(NULL, NULL, va("File is already installed\n%s\n", displayname), NULL, NULL, "Cancel", true);
+			Menu_Prompt(NULL, NULL, va(localtext("File is already installed\n%s\n"), displayname), NULL, NULL, "Cancel", true);
 			f->flags |= HRF_ABORT;
 		}
 	}
@@ -6214,7 +6537,7 @@ qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 			//	"quake2:rtc://broker:port/game"
 			//	"qw://[stream@]host[:port]/COMMAND" join, spectate, qtvplay
 			//we'll chop off any non-auth prefix, its just so we can handle multiple protocols via a single uri scheme.
-			char *t, *cmd;
+			char *t, *cmd, *args;
 			const char *url;
 			char buffer[8192];
 			const char *schemestart = strchr(fname, ':');
@@ -6260,6 +6583,15 @@ qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 			t[urilen] = 0;
 			url = t+schemelen;
 
+			*buffer = 0;
+			for (args = t+schemelen; *args; args++)
+			{
+				if (*args == '?')
+				{
+					*args++ = 0;
+					break;
+				}
+			}
 			for (cmd = t+schemelen; *cmd; cmd++)
 			{
 				if (*cmd == '/')
@@ -6298,7 +6630,7 @@ qboolean Host_RunFile(const char *fname, int nlen, vfsfile_t *file)
 	if (file)
 		f->flags |= HRF_OPENED;
 
-	Con_Printf("Opening external file: %s\n", f->fname);
+	Con_TPrintf("Opening external file: %s\n", f->fname);
 
 	Host_DoRunFile(f);
 	return true;
@@ -6893,7 +7225,7 @@ void CL_ArgumentOverrides(void)
 }
 
 //note that this does NOT include commandline.
-void CL_ExecInitialConfigs(char *resetcommand)
+void CL_ExecInitialConfigs(char *resetcommand, qboolean fullvidrestart)
 {
 #ifndef QUAKETC
 	int qrc, hrc;
@@ -6972,7 +7304,9 @@ void CL_ExecInitialConfigs(char *resetcommand)
 	com_parseutf8.ival = com_parseutf8.value;
 
 	//if the renderer is already up and running, be prepared to reload content to match the new conback/font/etc
-	if (qrenderer != QR_NONE)
+	if (fullvidrestart)
+		Cbuf_AddText ("vid_restart\n", RESTRICT_LOCAL);
+	else if (qrenderer != QR_NONE)
 		Cbuf_AddText ("vid_reload\n", RESTRICT_LOCAL);
 //	if (Key_Dest_Has(kdm_menu))
 //		Cbuf_AddText ("closemenu\ntogglemenu\n", RESTRICT_LOCAL);	//make sure the menu has the right content loaded.
@@ -7062,7 +7396,7 @@ void Host_FinishLoading(void)
 #endif
 	}
 
-	if (PM_IsApplying(true))
+	if (PM_IsApplying() == 1)
 	{
 #ifdef MULTITHREAD
 		Sys_Sleep(0.1);
@@ -7092,7 +7426,7 @@ void Host_FinishLoading(void)
 			char *scheme = Sys_URIScheme_NeedsRegistering();
 			if (scheme)
 			{
-				Menu_Prompt(Host_URIPrompt, NULL, va("The URI scheme %s:// is not configured.\nRegister now?", scheme), "Register", NULL, "No", true);
+				Menu_Prompt(Host_URIPrompt, NULL, va(localtext("The URI scheme %s:// is not configured.\nRegister now?"), scheme), "Register", NULL, "No", true);
 				Z_Free(scheme);
 			}
 		}

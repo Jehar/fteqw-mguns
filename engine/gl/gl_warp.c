@@ -74,7 +74,10 @@ void R_SetSky(const char *sky)
 	int i;
 	const char *shadername;
 	extern cvar_t r_skyboxname;
-	Q_strncpyz(cl.skyname, sky, sizeof(cl.skyname));
+	if (sky)
+		Q_strncpyz(cl.skyname, sky, sizeof(cl.skyname));
+	else
+		sky = cl.skyname;
 	if (qrenderer <= QR_NONE)
 		return;	//not ready yet...
 	if (*r_skyboxname.string)	//override it with the user's preference
@@ -259,7 +262,7 @@ static void R_ForceSky_f(void)
 }
 void QDECL R_SkyBox_Changed (struct cvar_s *var, char *oldvalue)
 {
-	R_SetSky(var->string);
+	R_SetSky(NULL);
 //	Shader_NeedReload(false);
 }
 
@@ -397,7 +400,7 @@ qboolean R_DrawSkyChain (batch_t *batch)
 			return true;
 		}
 
-		if (forcedsky->numpasses && !forcedsky->skydome)
+		if (forcedsky->numpasses && !forcedsky->skydome && batch->mesh[0]->xyz_array)
 		{	//cubemap skies!
 			//this is just a simple pass. we use glsl/texgen for any actual work
 			batch_t b = *batch;
@@ -468,7 +471,7 @@ qboolean R_DrawSkyChain (batch_t *batch)
 	else if (batch->meshes)
 	{	//skys are weird.
 		//they're the one type of surface with implicit nodraw when there's no passes.
-		if (batch->shader->skydome || batch->shader->numpasses)
+		if ((skyboxtex&&*skyboxtex) || batch->shader->numpasses)
 			R_DrawFastSky(batch);
 		return true;	//depth will always be drawn with this pathway... or we were not drawing anything anyway...
 	}
@@ -1343,8 +1346,8 @@ void R_Sky_Register(void)
 	Cvar_Register (&r_skybox_orientation,	groupname);
 	Cvar_Register (&gl_skyboxdist,			groupname);
 
-	Cmd_AddCommandAD("sky", R_ForceSky_f, R_ForceSky_c, "For compat with Quakespasm");	//QS compat
-	Cmd_AddCommandAD("loadsky", R_ForceSky_f, R_ForceSky_c, "For compat with DP");
-	Cmd_AddCommand ("listskyboxes", R_ListSkyBoxes_f);
+	Cmd_AddCommandAD("sky", R_ForceSky_f, R_ForceSky_c, "For compat with Quakespasm, please use r_skybox.");	//QS compat
+	Cmd_AddCommandAD("loadsky", R_ForceSky_f, R_ForceSky_c, "For compat with DarkPlaces, please use r_skybox.");
+	Cmd_AddCommandD ("listskyboxes", R_ListSkyBoxes_f, "Displays a list of available custom skyboxes that can be set with r_skybox, type or click an entry.");
 }
 #endif

@@ -31,9 +31,15 @@ void QDECL joyaxiscallback(cvar_t *var, char *oldvalue)
 {
 	int sign;
 	char *end;
-	strtol(var->string, &end, 0);
-	if (!*end)	//okay, its missing or an actual number.
+	sign = strtol(var->string, &end, 0);
+	if (!*end)
+	{
+		//okay, its missing or an actual number.
+		if (sign >= -6  &&  sign <= 6) {
+			var->ival = sign;
+		}
 		return;
+	}
 
 	end = var->string;
 	if (*end == '-')
@@ -63,7 +69,7 @@ void QDECL joyaxiscallback(cvar_t *var, char *oldvalue)
 	else if (!Q_strcasecmp(end, "right") || !Q_strcasecmp(end, "turnright"))
 		var->ival = 4*sign;
 	else if (!Q_strcasecmp(end, "left") || !Q_strcasecmp(end, "turnleft"))
-		var->ival = 4*sign*1;
+		var->ival = 4*sign*-1;
 	else if (!Q_strcasecmp(end, "up") || !Q_strcasecmp(end, "moveup"))
 		var->ival = 5*sign;
 	else if (!Q_strcasecmp(end, "down") || !Q_strcasecmp(end, "movedown"))
@@ -144,6 +150,8 @@ void joy_radialdeadzone_cb(cvar_t *var, char *oldvalue)
 }
 #endif
 static cvar_t joy_radialdeadzone = CVARCD("joyradialdeadzone", "", joy_radialdeadzone_cb, "Treat controller dead zones as a pair, rather than per-axis.");
+
+cvar_t in_skipplayerone = CVARD("in_skipplayerone", "1", "Do not auto-assign joysticks/game-controllers to the first player. Requires in_restart to take effect.");	//FIXME: this needs to be able to change deviceids when changed. until then menus will need to in_restart.
 
 
 #define EVENTQUEUELENGTH 1024
@@ -374,6 +382,7 @@ void IN_Init(void)
 	}
 	Cvar_Register (&joy_exponent, "input controls");
 	Cvar_Register (&joy_radialdeadzone, "input controls");
+	Cvar_Register (&in_skipplayerone, "input controls");
 
 	Cmd_AddCommand ("in_deviceids", IN_DeviceIDs_f);
 
@@ -745,8 +754,10 @@ void IN_MoveMouse(struct mouse_s *mouse, float *movements, int pnum, float frame
 			mx *= 1.75;
 			my *= 1.75;
 
+#ifdef QUAKESTATS
 			if (IN_WeaponWheelAccumulate(pnum, mx, my, 0))
-					mx = my = 0;
+				mx = my = 0;
+#endif
 		}
 	}
 	else
@@ -1017,10 +1028,12 @@ void IN_MoveJoystick(struct joy_s *joy, float *movements, int pnum, float framet
 		}
 	}
 
+#ifdef QUAKESTATS
 	if (IN_WeaponWheelAccumulate(joy->qdeviceid, jstrafe[1]*50, -jstrafe[0]*50, 20))
 		jstrafe[0] = jstrafe[1] = 0;
 	if (IN_WeaponWheelAccumulate(joy->qdeviceid, jlook[1]*50, jlook[0]*50, 20))
 		jlook[0] = jlook[1] = 0;
+#endif
 
 	if (Key_Dest_Has(~kdm_game))
 	{

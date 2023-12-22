@@ -187,6 +187,7 @@ typedef struct player_info_s
 
 	qboolean ignored;
 	qboolean vignored;
+	unsigned int chatstate;
 
 	// skin information
 	unsigned int		rtopcolor;	//real, according to their userinfo
@@ -491,7 +492,8 @@ typedef struct
 	infobuf_t	userinfo[MAX_SPLITS];
 	infosync_t	userinfosync;
 
-	char		servername[MAX_OSPATH];	// name of server from original connect
+	char		serverurl[MAX_OSPATH*4];	// eg qw://foo:27500/join?fp=blah
+	char		servername[MAX_OSPATH];		// internal parsing, eg dtls://foo:27500
 
 	struct ftenet_connections_s *sockets;
 
@@ -516,6 +518,7 @@ typedef struct
 	qboolean	demohadkeyframe;	//q2 needs to wait for a packet with a key frame, supposedly.
 	qboolean	demoseeking;
 	float		demoseektime;
+	int			demotrack;
 	qboolean	timedemo;
 	char		lastdemoname[MAX_OSPATH];
 	qboolean	lastdemowassystempath;
@@ -654,6 +657,7 @@ struct playerview_s
 #ifdef HEXEN2
 	int			sb_hexen2_cur_item;//hexen2 hud
 	float		sb_hexen2_item_time;
+	float		sb_hexen2_extra_info_lines;
 	qboolean	sb_hexen2_extra_info;//show the extra stuff
 	qboolean	sb_hexen2_infoplaque;
 #endif
@@ -1146,7 +1150,7 @@ void CL_SetInfoBlob (int pnum, const char *key, const char *value, size_t values
 
 char *CL_TryingToConnect(void);
 
-void CL_ExecInitialConfigs(char *defaultexec);
+void CL_ExecInitialConfigs(char *defaultexec, qboolean fullvidrestart);
 
 extern	int				cl_framecount;	//number of times the entity lists have been cleared+reset.
 extern	int				cl_numvisedicts;
@@ -1451,7 +1455,7 @@ qboolean CL_MayLerp(void);
 //
 #ifdef CSQC_DAT
 qboolean CSQC_Inited(void);
-void	 CSQC_RendererRestarted(void);
+void	 CSQC_RendererRestarted(qboolean initing);
 qboolean CSQC_UnconnectedOkay(qboolean inprinciple);
 qboolean CSQC_UnconnectedInit(void);
 qboolean CSQC_CheckDownload(const char *name, unsigned int checksum, size_t checksize);	//reports whether we already have a usable csprogs.dat

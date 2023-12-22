@@ -399,6 +399,15 @@ void M_ToggleMenu_f (void)
 #endif
 
 #ifndef NOBUILTINMENUS
+	{
+		extern cvar_t cl_disconnectreason;
+		if (*cl_disconnectreason.string)
+		{
+			Menu_Prompt(NULL, NULL, cl_disconnectreason.string, NULL, NULL, "Okay", true);
+			Cvar_Set(&cl_disconnectreason, "");
+		}
+	}
+
 	M_Menu_Main_f ();
 	Key_Dest_Remove(kdm_console|kdm_cwindows);
 #endif
@@ -616,6 +625,13 @@ void Menu_Prompt (void (*callback)(void *, promptbutton_t), void *ctx, const cha
 	promptmenu_t *m;
 	char *t;
 	conchar_t message[8192], *e;
+
+	if (optionyes)
+		optionyes = localtext(optionyes);
+	if (optionno)
+		optionno = localtext(optionno);
+	if (optioncancel)
+		optioncancel = localtext(optioncancel);
 
 	e = COM_ParseFunString(CON_WHITEMASK, messages, message, sizeof(message)-sizeof(conchar_t), false);
 
@@ -965,7 +981,7 @@ void M_Menu_Keys_f (void)
 			"4"
 #endif
 		};
-		MC_AddCvarCombo(menu, 16, 170, y, "Force client", &cl_forceseat, (const char **)texts, (const char **)values);
+		MC_AddCvarCombo(menu, 16, 170, y, localtext("Force client"), &cl_forceseat, (const char **)texts, (const char **)values);
 		y+=8;
 	}
 #endif
@@ -997,7 +1013,7 @@ void M_Menu_Keys_f (void)
 	MC_AddFrameStart(menu, 48+8);
 	while (bindnames->name)
 	{
-		MC_AddBind(menu, 16, 170, y, bindnames->name, bindnames->command, NULL);
+		MC_AddBind(menu, 16, 170, y, localtext(bindnames->name), bindnames->command, NULL);
 		y += 8;
 		bindnames++;
 	}
@@ -1081,7 +1097,7 @@ void M_Help_Draw (emenu_t *m)
 		R2D_ScalePic ((vid.width-width)/2, (vid.height-height)/2, width, height, pic);
 	}
 }
-qboolean M_Help_Key (int key, emenu_t *m)
+qboolean M_Help_Key (struct emenu_s *m, int key, unsigned int unicode)
 {
 	switch (key)
 	{
@@ -1292,10 +1308,10 @@ void M_Menu_Quit_f (void)
 #endif
 		break;
 	case 2:
-		Menu_Prompt (M_Menu_DoQuitSave, NULL, "You have unsaved settings\nWould you like to\nsave them now?", "Yes", "No", "Cancel", true);
+		Menu_Prompt (M_Menu_DoQuitSave, NULL, localtext("You have unsaved settings\nWould you like to\nsave them now?"), "Yes", "No", "Cancel", true);
 		break;
 	case 1:
-		Menu_Prompt (M_Menu_DoQuit, NULL, quitMessage[rand()%countof(quitMessage)], "Quit", NULL, "Cancel", true);
+		Menu_Prompt (M_Menu_DoQuit, NULL, localtext(quitMessage[rand()%countof(quitMessage)]), "Quit", NULL, "Cancel", true);
 		break;
 	}
 }
@@ -1303,7 +1319,7 @@ void M_Menu_Quit_f (void)
 #ifdef HAVE_LEGACY
 void M_Menu_Credits_f (void)
 {
-	Menu_Prompt (NULL, NULL, "That's all folks!\nTry a different mod now.", NULL, NULL, "Sure!", false);
+	Menu_Prompt (NULL, NULL, localtext("That's all folks!\nTry a different mod now."), NULL, NULL, "Sure!", false);
 }
 #endif
 

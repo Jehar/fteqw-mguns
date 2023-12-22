@@ -37,7 +37,7 @@ cvar_t	cl_c2sdupe = CVARD("cl_c2sdupe", "0", "Send duplicate copies of packets t
 cvar_t	cl_c2spps = CVARD("cl_c2spps", "0", "Reduces outgoing packet rates by dropping up to a third of outgoing packets.");
 cvar_t	cl_c2sImpulseBackup = CVARD("cl_c2sImpulseBackup","3", "Prevents the cl_c2spps setting from dropping redundant packets that contain impulses, in an attempt to keep impulses more reliable.");
 static cvar_t	cl_c2sMaxRedundancy = CVARD("cl_c2sMaxRedundancy","5", "This is the maximum number of input frames to send in each input packet. Values greater than 1 provide redundancy and avoid prediction misses, though you might find cl_c2sdupe provides equivelent result and at lower latency. It is locked at 3 for vanilla quakeworld, and locked at 1 for vanilla netquake.");
-cvar_t	cl_netfps = CVARD("cl_netfps", "150", "Send up to this many packets to the server per second. The rate used is also limited by the server which usually forces a cap to this setting of 77. Low packet rates can result in extra extrapolation to try to hide the resulting latencies.");
+cvar_t	cl_netfps = CVARFD("cl_netfps", "150", CVAR_ARCHIVE, "Send up to this many packets to the server per second. The rate used is also limited by the server which usually forces a cap to this setting of 77. Low packet rates can result in extra extrapolation to try to hide the resulting latencies.");
 cvar_t  cl_queueimpulses = CVARD("cl_queueimpulses", "0", "Queues unsent impulses instead of replacing them. This avoids the need for extra wait commands (and the timing issues of such commands), but potentially increases latency and can cause scripts to be desynced with regard to buttons and impulses.");
 cvar_t	cl_smartjump = CVARD("cl_smartjump", "1", "Makes the jump button act as +moveup when in water. This is typically quieter and faster.");
 cvar_t	cl_iDrive = CVARFD("cl_iDrive", "1", CVAR_SEMICHEAT, "Effectively releases movement keys when the opposing key is pressed. This avoids dead-time when both keys are pressed. This can be emulated with various scripts, but that's messy.");
@@ -1326,22 +1326,46 @@ Send the intended movement message to the server
 */
 static void CL_BaseMove (vec3_t moves, int pnum)
 {
-	float scale;
+	float fwdspeed = cl_forwardspeed.value;
+	float sidespeed = cl_sidespeed.value;
+	float backspeed = (*cl_backspeed.string?cl_backspeed.value:cl_forwardspeed.value);
+	float upspeed = (*cl_backspeed.string?cl_backspeed.value:cl_forwardspeed.value);
+	float scale = 1;
 //
 // adjust for speed key
 //
-	scale = ((in_speed.state[pnum] & 1) ^ cl_run.ival)?cl_movespeedkey.value:1;
+#ifdef HEXEN2
+	extern qboolean	sbar_hexen2;
+	if (sbar_hexen2)
+	{	//hexen2 is a bit different. forwardspeed is treated as something of a boolean and we need to be able to cope with the boots-of-speed without forcing it always. not really sure why that's clientside instead of serverside, but oh well. evilness.
+		scale = cl.playerview[pnum].statsf[STAT_H2_HASTED];
+		if (!scale)
+			scale = 1;
+		if (((in_speed.state[pnum] & 1) ^ (cl_run.ival || fwdspeed > 200))
+			&& scale <= 1)	//don't go super fast with speed boots.
+			scale *= cl_movespeedkey.value;
+		fwdspeed = backspeed = 200;
+		sidespeed = 225;
+	}
+	else
+#endif
+	if ((in_speed.state[pnum] & 1) ^ cl_run.ival)
+		scale *= cl_movespeedkey.value;
 
 	moves[0] = 0;
 	if (! (in_klook.state[pnum] & 1) )
 	{
-		moves[0] += scale*(cl_forwardspeed.value * CL_KeyState (&in_forward, pnum, true) -
-					(*cl_backspeed.string?cl_backspeed.value:cl_forwardspeed.value) * CL_KeyState (&in_back, pnum, true));
+		moves[0] += (fwdspeed * CL_KeyState (&in_forward, pnum, true) -
+					backspeed * CL_KeyState (&in_back, pnum, true));
 	}
-	moves[1] = scale*cl_sidespeed.value * (CL_KeyState (&in_moveright, pnum, true) - CL_KeyState (&in_moveleft, pnum, true)) * (in_xflip.ival?-1:1);
+	moves[1] = sidespeed * (CL_KeyState (&in_moveright, pnum, true) - CL_KeyState (&in_moveleft, pnum, true)) * (in_xflip.ival?-1:1);
 	if (in_strafe.state[pnum] & 1)
-		moves[1] += scale*cl_sidespeed.value * (CL_KeyState (&in_right, pnum, true) - CL_KeyState (&in_left, pnum, true)) * (in_xflip.ival?-1:1);
-	moves[2] = scale*cl_upspeed.value * (CL_KeyState (&in_up, pnum, true) - CL_KeyState (&in_down, pnum, true));
+		moves[1] += sidespeed * (CL_KeyState (&in_right, pnum, true) - CL_KeyState (&in_left, pnum, true)) * (in_xflip.ival?-1:1);
+	moves[2] = upspeed * (CL_KeyState (&in_up, pnum, true) - CL_KeyState (&in_down, pnum, true));
+
+	moves[0] *= scale;
+	moves[1] *= scale;
+	moves[2] *= scale;
 }
 
 void CL_ClampPitch (int pnum, float frametime)
@@ -1392,6 +1416,9 @@ void CL_ClampPitch (int pnum, float frametime)
 		Matrix3x4_RM_ToVectors(mat2, view[0], view[1], view[2], view[3]);
 		VectorAngles(view[0], view[2], pv->viewangles, false);
 		VectorClear(pv->viewanglechange);
+
+		//fixme: in_vraim stuff
+		VectorCopy(pv->viewangles, pv->aimangles);
 
 		return;
 	}
@@ -1450,7 +1477,10 @@ void CL_ClampPitch (int pnum, float frametime)
 		if (!vang[ROLL])
 		{
 			if (!pv->viewanglechange[PITCH] && !pv->viewanglechange[YAW] && !pv->viewanglechange[ROLL])
+			{
+				VectorCopy(pv->viewangles, pv->aimangles);
 				return;
+			}
 		}
 		else
 		{
@@ -1485,6 +1515,9 @@ void CL_ClampPitch (int pnum, float frametime)
 			pv->viewangles[ROLL] += 360;
 		if (pv->viewangles[PITCH] < -180)
 			pv->viewangles[PITCH] += 360;
+
+		//fixme: in_vraim stuff
+		VectorCopy(pv->viewangles, pv->aimangles);
 		return;
 	}
 #endif

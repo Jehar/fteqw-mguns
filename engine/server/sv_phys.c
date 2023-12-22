@@ -67,19 +67,21 @@ cvar_t	dpcompat_noretouchground	= CVARD( "dpcompat_noretouchground", "0", "Preve
 cvar_t	sv_sound_watersplash = CVAR( "sv_sound_watersplash", "misc/h2ohit1.wav");
 cvar_t	sv_sound_land		 = CVAR( "sv_sound_land", "demon/dland2.wav");
 cvar_t	sv_stepheight		 = CVARAFD("pm_stepheight", "",	/*dp*/"sv_stepheight", CVAR_SERVERINFO, "If empty, the value "STRINGIFY(PM_DEFAULTSTEPHEIGHT)" will be used instead. This is the size of the step you can step up or down.");
+extern cvar_t sv_nqplayerphysics;
 
 cvar_t	pm_ktjump			 = CVARF("pm_ktjump", "", CVAR_SERVERINFO);
 cvar_t	pm_bunnyspeedcap	 = CVARFD("pm_bunnyspeedcap", "", CVAR_SERVERINFO, "0 or 1, ish. If the player is traveling faster than this speed while turning, their velocity will be gracefully reduced to match their current maxspeed. You can still rocket-jump to gain high velocity, but turning will reduce your speed back to the max. This can be used to disable bunny hopping.");
 cvar_t	pm_watersinkspeed	 = CVARFD("pm_watersinkspeed", "", CVAR_SERVERINFO, "This is the speed that players will sink at while inactive in water. Empty means 60.");
 cvar_t	pm_flyfriction		= CVARFD("pm_flyfriction", "", CVAR_SERVERINFO, "Amount of friction that applies in fly or 6dof mode. Empty means 4.");
 cvar_t	pm_slidefix			 = CVARFD("pm_slidefix", "", CVAR_SERVERINFO, "Fixes an issue when walking down slopes (ie: so they act more like slopes and not a series of steps)");
-cvar_t	pm_slidyslopes		 = CVARFD("pm_slidyslopes", "", CVAR_SERVERINFO, "Replicates NQ behaviour, where players will slowly slide down ramps");
+cvar_t	pm_slidyslopes		 = CVARFD("pm_slidyslopes", "", CVAR_SERVERINFO, "Replicates NQ behaviour, where players will slowly slide down ramps. Generally requires 'pm_noround 1' too, otherwise the effect rounds to nothing.");
+cvar_t	pm_bunnyfriction	= CVARFD("pm_bunnyfriction", "", CVAR_SERVERINFO, "Replicates NQ behaviour, ensuring that there's at least a frame of friction while jumping - friction is proportional to tick rate.");
 cvar_t	pm_autobunny		= CVARFD("pm_autobunny", "", CVAR_SERVERINFO, "Players will continue jumping without needing to release the jump button.");
 cvar_t	pm_airstep			 = CVARAFD("pm_airstep", "", /*dp*/"sv_jumpstep", CVAR_SERVERINFO, "Allows players to step up while jumping. This makes stairs more graceful but also increases potential jump heights.");
 cvar_t	pm_pground			 = CVARFD("pm_pground", "", CVAR_SERVERINFO, "Use persisten onground state instead of recalculating every frame."CON_WARNING"Do NOT use with nq mods, as most nq mods will interfere with onground state, resulting in glitches.");
 cvar_t	pm_stepdown			 = CVARFD("pm_stepdown", "", CVAR_SERVERINFO, "Causes physics to stick to the ground, instead of constantly losing traction whiloe going down steps.");
 cvar_t	pm_walljump			 = CVARFD("pm_walljump", "", CVAR_SERVERINFO, "Allows the player to bounce off walls while arborne.");
-cvar_t	pm_edgefriction		 = CVARAFD("pm_edgefriction", "", /*nq*/"edgefriction", CVAR_SERVERINFO, "Default value of 2");
+cvar_t	pm_edgefriction		 = CVARAFD("pm_edgefriction", "", /*nq*/"edgefriction", CVAR_SERVERINFO, "Increases friction when about to walk over a cliff, so you're less likely to plummet by mistake. When empty defaults to 2, but uses a tracebox instead of a traceline to detect the drop.");
 
 #define cvargroup_serverphysics  "server physics variables"
 void WPhys_Init(void)
@@ -153,8 +155,6 @@ void WPhys_CheckVelocity (world_t *w, wedict_t *ent)
 {
 	int		i;
 #ifdef HAVE_SERVER
-	extern cvar_t sv_nqplayerphysics;
-
 	if (sv_nqplayerphysics.ival)
 	{	//bound axially (like vanilla)
 		for (i=0 ; i<3 ; i++)
@@ -649,6 +649,32 @@ static trace_t WPhys_PushEntity (world_t *w, wedict_t *ent, vec3_t push, unsigne
 			trace.ent = w->edicts;
 		}
 	}
+#if defined(HAVE_SERVER) && defined(HEXEN2)
+	else if (ent->v->solid == SOLID_PHASEH2 && progstype == PROG_H2 && w == &sv.world && trace.fraction != 1 && trace.ent &&
+		(((int)((wedict_t*)trace.ent)->v->flags & FL_MONSTER) || (int)((wedict_t*)trace.ent)->v->movetype == MOVETYPE_WALK))
+	{	//hexen2's SOLID_PHASEH2 ents should pass through players+monsters, yet still trigger impacts. I would use MOVE_ENTCHAIN but that would corrupt .chain, perhaps that's okay though?
+
+		//continue the trace on to where we wold be if there had been no impact
+		trace_t trace2 = World_Move (w, trace.endpos, ent->v->mins, ent->v->maxs, end, traceflags|MOVE_NOMONSTERS|MOVE_MISSILE|MOVE_RESERVED/*Don't fuck up in the face of dp's MOVE_WORLDONLY*/, (wedict_t*)ent);
+
+		//do the first non-world impact
+	//	if (trace.ent)
+	//		VectorMA(trace.endpos, sv_impactpush.value, trace.plane.normal, ent->v->origin);
+	//	else
+			VectorCopy (trace.endpos, ent->v->origin);
+		World_LinkEdict (w, ent, true);
+
+		if (trace.ent)
+		{
+			WPhys_Impact (w, ent, &trace);
+			if (ent->ereftype != ER_ENTITY)
+				return trace;	//someone remove()d it. don't do weird stuff.
+		}
+
+		//and use our regular impact logic for the rest of it.
+		trace = trace2;
+	}
+#endif
 
 //	if (trace.ent)
 //		VectorMA(trace.endpos, sv_impactpush.value, trace.plane.normal, ent->v->origin);
@@ -689,9 +715,9 @@ static qboolean WPhys_PushAngles (world_t *w, wedict_t *pusher, vec3_t move, vec
 	//float oldsolid;
 	pushed_t	*p;
 	vec3_t		org, org2, move2, forward, right, up;
-	short yawchange;
-
-	yawchange = (amove[PITCH]||amove[ROLL])?0:ANGLE2SHORT(amove[YAW]);
+#ifdef HAVE_SERVER
+	short yawchange = (amove[PITCH]||amove[ROLL])?0:ANGLE2SHORT(amove[YAW]);
+#endif
 
 	pushed_p = pushed;
 
@@ -770,8 +796,10 @@ static qboolean WPhys_PushAngles (world_t *w, wedict_t *pusher, vec3_t move, vec
 			// try moving the contacted entity
 			VectorAdd (check->v->origin, move, check->v->origin);
 			VectorAdd (check->v->angles, amove, check->v->angles);
-			if (check->entnum>0&&(check->entnum)<=sv.allocated_client_slots)
+#ifdef HAVE_SERVER
+			if (w == &sv.world && check->entnum>0&&(check->entnum)<=sv.allocated_client_slots)
 				svs.clients[check->entnum-1].baseangles[YAW] += yawchange;
+#endif
 
 			// figure movement due to the pusher's amove
 			VectorSubtract (check->v->origin, pusher->v->origin, org);
@@ -873,8 +901,10 @@ static qboolean WPhys_PushAngles (world_t *w, wedict_t *pusher, vec3_t move, vec
 			VectorCopy (p->angles, p->ent->v->angles);
 			World_LinkEdict (w, p->ent, false);
 
-			if (p->ent->entnum>0&&(p->ent->entnum)<=sv.allocated_client_slots)
+#ifdef HAVE_SERVER
+			if (w==&sv.world && p->ent->entnum>0&&(p->ent->entnum)<=sv.allocated_client_slots)
 				svs.clients[p->ent->entnum-1].baseangles[YAW] -= yawchange;
+#endif
 		}
 		return false;
 	}
@@ -1221,8 +1251,10 @@ A moving object that doesn't obey physics
 static void WPhys_Physics_Noclip (world_t *w, wedict_t *ent)
 {
 	vec3_t end;
+#ifdef HAVE_SERVER
 	trace_t trace;
 	wedict_t *impact;
+#endif
 
 // regular thinking
 	if (!WPhys_RunThink (w, ent))
@@ -1231,7 +1263,7 @@ static void WPhys_Physics_Noclip (world_t *w, wedict_t *ent)
 	VectorMA (ent->v->angles, host_frametime, ent->v->avelocity, ent->v->angles);
 	VectorMA (ent->v->origin, host_frametime, ent->v->velocity, end);
 
-#ifndef CLIENTONLY
+#ifdef HAVE_SERVER
 	//allow spectators to no-clip through portals without bogging down sock's mods.
 	if (ent->entnum > 0 && ent->entnum <= sv.allocated_client_slots && w == &sv.world)
 	{
@@ -1424,7 +1456,7 @@ static void WPhys_Physics_Toss (world_t *w, wedict_t *ent)
 		if (ent->xv->bouncefactor)
 			backoff = 1 + ent->xv->bouncefactor;
 //		else if (progstype == PROG_H2 && ent->v->solid == SOLID_PHASEH2 && ((int)((wedict_t*)trace.ent)->v->flags & (FL_MONSTER|FL_CLIENT)))
-//			backoff = 0;
+//			backoff = 0;	//don't bounce/slide, just pass straight through.
 		else
 			backoff = w->remasterlogic?1.5/*gib...*/:2;
 	}
@@ -1519,6 +1551,11 @@ static void WPhys_Physics_Step (world_t *w, wedict_t *ent)
 
 		if ( (int)ent->v->flags & FL_ONGROUND )	// just hit ground
 		{
+#ifdef HEXEN2
+			if (progstype == PROG_H2 && ((int)ent->v->flags & FL_MONSTER))
+				;	//hexen2 monsters do not make landing sounds.
+			else
+#endif
 			if (hitsound && *sv_sound_land.string)
 			{
 				w->Event_Sound(NULL, ent, 0, sv_sound_land.string, 255, 1, 0, 0, 0);
@@ -2420,7 +2457,6 @@ void World_Physics_Frame(world_t *w)
 	int i;
 	qboolean retouch;
 	wedict_t *ent;
-	extern cvar_t sv_nqplayerphysics;
 
 	w->framenum++;
 
@@ -2460,7 +2496,7 @@ void World_Physics_Frame(world_t *w)
 		if (retouch)
 			World_LinkEdict (w, ent, true);	// force retouch even for stationary
 
-#ifndef CLIENTONLY
+#ifdef HAVE_SERVER
 		if (i > 0 && i <= sv.allocated_client_slots && w == &sv.world)
 		{
 			if (!svs.clients[i-1].isindependant)
@@ -2509,7 +2545,7 @@ void World_Physics_Frame(world_t *w)
 		*w->g.force_retouch-=1;
 }
 
-#ifndef CLIENTONLY
+#ifdef HAVE_SERVER
 /*
 ================
 SV_Physics
@@ -2524,7 +2560,6 @@ qboolean SV_Physics (void)
 	double trueframetime = host_frametime;
 	double maxtic = sv_maxtic.value;
 	double mintic = sv_mintic.value;
-	extern cvar_t sv_nqplayerphysics;
 	if (sv_nqplayerphysics.ival)
 		if (mintic < 0.013)
 			mintic = 0.013;	//NQ physics can't cope with low rates and just generally bugs out.
