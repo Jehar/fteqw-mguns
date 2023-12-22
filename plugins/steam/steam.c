@@ -712,13 +712,20 @@ void MSG_SendToClient(client_t *client, qboolean reliable, sizebuf_t *msgbuf)
 
 void Steam_SetName(void)
 {
-	Con_Printf("Steam: Set Name\n");
-
+	char currentname[MAX_STRING];
 	char name[MAX_STRING];
 	PIPE_ReadString(name);
+	Con_Printf("Steam: Set Name\n");
+
+	cvarfuncs->SetString("steam_name", name);
+	cvarfuncs->GetString("name", currentname, sizeof(currentname));
 
 
-	Con_Printf("New Name: %s\n", name);
+	if (!stricmp("player", currentname))
+	{
+		cvarfuncs->SetString("name", name);
+		Con_Printf("New Name: %s\n", name);
+	}
 }
 
 
