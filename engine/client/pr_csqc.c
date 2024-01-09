@@ -7613,6 +7613,7 @@ static struct {
 //DP_QC_URI_GET
 	{"uri_get",					PF_uri_get,					513},	// #513 float(string uril, float id) uri_get
 	{"uri_post",				PF_uri_get,					513},	// #513 float(string uril, float id) uri_post
+	{"uri_post_ptr",			PF_uri_post_ptr,			0},
 
 	{"tokenize_console",		PF_tokenize_console,		514},
 	{"argv_start_index",		PF_argv_start_index,		515},

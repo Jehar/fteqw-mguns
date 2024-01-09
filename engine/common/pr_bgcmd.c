@@ -5997,6 +5997,71 @@ void QCBUILTIN PF_uri_get  (pubprogfuncs_t *prinst, struct globalvars_s *pr_glob
 		G_FLOAT(OFS_RETURN) = 0;
 #endif
 }
+void QCBUILTIN PF_uri_post_ptr  (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+#ifndef WEBCLIENT
+	Con_Printf("PF_uri_post_ptr is not implemented in this build\n");
+	G_FLOAT(OFS_RETURN) = 0;
+#else
+	world_t *w = prinst->parms->user;
+	struct dl_download *dl = NULL;
+
+	const unsigned char *url = PR_GetStringOfs(prinst, OFS_PARM0);
+	float id = G_FLOAT(OFS_PARM1);
+	const char *mimetype = PR_GetStringOfs(prinst, OFS_PARM2);
+	int data_ptr = G_INT(OFS_PARM3);
+	int data_sz = G_INT(OFS_PARM4);
+
+	if (data_ptr < 0 || data_ptr+data_sz >= prinst->stringtablesize)
+	{
+		PR_BIError(prinst, "PF_uri_post_ptr: invalid dest\n");
+		G_FLOAT(OFS_RETURN) = 0;
+		return;
+	}
+
+	if (!*mimetype)
+	{
+		PR_BIError(prinst, "PF_uri_post_ptr: null mimetype\n");
+		G_FLOAT(OFS_RETURN) = 0;
+		return;
+	}
+
+	if (!pr_enable_uriget.ival)
+	{
+		Con_Printf("%s: blocking \"%s\"\n", pr_enable_uriget.name, url);
+		G_FLOAT(OFS_RETURN) = 0;
+		return;
+	}
+
+	if (HTTP_CL_GetActiveDownloads() > 32)
+	{
+		//don't spam. I don't like it when you spam.
+		Con_Printf("PF_uri_post_ptr(\"%s\",%g): too many pending downloads\n", url, id);
+		G_FLOAT(OFS_RETURN) = 0;
+		return;
+	}
+
+	Con_DPrintf("PF_uri_post_ptr(%s,%g)\n", url, id);
+	//simple data post.
+	dl = HTTP_CL_Put(url, mimetype, prinst->stringtable + data_ptr, data_sz, PR_uri_get_callback);
+
+	if (dl)
+	{
+		dl->user_ctx = w;
+		dl->user_float = id;
+		dl->user_num = *w->g.self;
+		dl->user_sequence = w->spawncount;
+		dl->isquery = true;
+
+#ifdef MULTITHREAD
+		DL_CreateThread(dl, NULL, NULL);
+#endif
+		G_FLOAT(OFS_RETURN) = 1;
+	}
+	else
+		G_FLOAT(OFS_RETURN) = 0;
+#endif
+}
 void QCBUILTIN PF_netaddress_resolve(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
 {
 	const char *address = PR_GetStringOfs(prinst, OFS_PARM0);

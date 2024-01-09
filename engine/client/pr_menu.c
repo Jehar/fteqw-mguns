@@ -2663,6 +2663,7 @@ static struct {
 	{"num_for_edict",			PF_etof,					512},
 	{"uri_get",					PF_uri_get,					513},
 	{"uri_post",				PF_uri_get,					513},
+	{"uri_post_ptr",			PF_uri_post_ptr,			0},
 	{"tokenize_console",		PF_tokenize_console,		514},
 	{"argv_start_index",		PF_argv_start_index,		515},
 	{"argv_end_index",			PF_argv_end_index,			516},
