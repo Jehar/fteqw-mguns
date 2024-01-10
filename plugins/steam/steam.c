@@ -433,7 +433,6 @@ void FragPacket_Finalize(fragpacket_t *packet)
 		Con_Printf("finalizing svc frag packet %i\n", packet->id & 255);
 #endif
 
-
 	byte *data = corefuncs->Malloc(packet->totalpieces * FP_MAXCHUNK);
 	sizebuf_t msgbuf;
 	memset(&msgbuf, 0, sizeof(sizebuf_t));
@@ -464,10 +463,15 @@ void FragPacket_Finalize(fragpacket_t *packet)
 	msgfuncs->BeginReading(&msgbuf, msg_nullnetprim);
 	if (packet->id & FP_ID_CLC)
 	{
-		if (worldfuncs)
+		client_t client;
+		if (worldfuncs->GetClient)
+		{	
 			Network_ReadCLC(worldfuncs->GetClient(packet->id >> 16));
+		}
 		else
+		{
 			Con_Printf("no worldfuncs\n");
+		}
 		//Network_ReadCLC(0);
 	}
 	else
@@ -1489,7 +1493,7 @@ qboolean Plug_Init(void)
 	clientfuncs = (plugclientfuncs_t*)plugfuncs->GetEngineInterface(plugclientfuncs_name, sizeof(*clientfuncs));
 	fsfuncs = (plugfsfuncs_t*)plugfuncs->GetEngineInterface(plugfsfuncs_name, sizeof(*fsfuncs));
 	msgfuncs = (plugmsgfuncs_t*)plugfuncs->GetEngineInterface(plugmsgfuncs_name, sizeof(*msgfuncs));
-	worldfuncs = (plugworldfuncs_t*)plugfuncs->GetEngineInterface(plugworldfuncs_name, 128);
+	worldfuncs = (plugworldfuncs_t*)plugfuncs->GetEngineInterface(plugworldfuncs_name, sizeof(*worldfuncs));
 
 	plugfuncs->ExportFunction("Tick", Steam_Tick);
 	plugfuncs->ExportFunction("ExecuteCommand", Steam_ExecuteCommand);

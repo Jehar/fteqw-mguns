@@ -1655,7 +1655,9 @@ void CL_SendDataCommand(qboolean reliable, void *data, int length)
 
 client_t* Plug_SV_GetClient(int slot)
 {
-	return &svs.clients[slot];
+	return svs.clients;
+	slot = bound(0, slot, svs.allocated_client_slots - 1);
+	return &(svs.clients[slot]);
 }
 
 int Plug_SV_GetSlot(client_t *cl)
@@ -2170,12 +2172,14 @@ static void *QDECL PlugBI_GetEngineInterface(const char *interfacename, size_t s
 			Info_SetValueForStarKey,
 
 #ifdef HAVE_SERVER
-			SV_DropClient,
 			Plug_SV_GetClient,
 			Plug_SV_GetSlot,
+			SV_DropClient,
 			SV_ExtractFromUserinfo,
 			SV_ChallengePasses,
 #else
+			NULL,
+			NULL,
 			NULL,
 			NULL,
 			NULL,
