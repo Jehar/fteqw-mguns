@@ -858,13 +858,13 @@ void Steam_Inventory_ItemList(void)
 		item = &inventoryArray[i];
 		item->itemInstance = PIPE_ReadLongLong();
 		item->itemDefinition = PIPE_ReadLong();
-
+		
 		//Q_snprintf(cmd, MAX_STRING, "steam_igame_itemlist %lu %llu\n", item->itemDefinition, item->itemInstance);
 		//cmdfuncs->AddText(cmd, false);
-		Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemlist %lu %llu\n", item->itemDefinition, item->itemInstance);
+		Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemlist %i %li\n", (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
 		cmdfuncs->AddText(cmd, false);
 
-		Con_Printf("^xff9Item #%i: %lu %llu\n", i, item->itemDefinition, item->itemInstance);
+		Con_Printf("^xff9Item #%i: %i %li\n", i, (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
 	}
 }
 
@@ -882,13 +882,13 @@ void Steam_Inventory_ItemProperty(void)
 	//Con_Printf("%s: %s\n", propertyname, propertyvalue);
 
 	char cmd[MAX_STRING];
-	Q_snprintf(cmd, MAX_STRING, "sv_cmd steam_igame_itemproperty %lu %s \"%s\"\n", itemid, propertyname, propertyvalue);
+	Q_snprintf(cmd, MAX_STRING, "sv_cmd steam_igame_itemproperty %u %s \"%s\"\n", itemid, propertyname, propertyvalue);
 	cmdfuncs->AddText(cmd, false);
 
-	Q_snprintf(cmd, MAX_STRING, "cl_cmd steam_igame_itemproperty %lu %s \"%s\"\n", itemid, propertyname, propertyvalue);
+	Q_snprintf(cmd, MAX_STRING, "cl_cmd steam_igame_itemproperty %u %s \"%s\"\n", itemid, propertyname, propertyvalue);
 	cmdfuncs->AddText(cmd, false);
 
-	Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemproperty %lu %s \"%s\"\n", itemid, propertyname, propertyvalue);
+	Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemproperty %u %s \"%s\"\n", itemid, propertyname, propertyvalue);
 	cmdfuncs->AddText(cmd, false);
 }
 
@@ -985,7 +985,7 @@ void Steam_Inventory_LoadoutUpdated()
 {
 	char cmd[MAX_STRING];
 	int clientNum = PIPE_ReadByte();
-	Q_snprintf(cmd, MAX_STRING, "sv_cmd steam_igame_loadoutupdated %lu\n", clientNum);
+	Q_snprintf(cmd, MAX_STRING, "sv_cmd steam_igame_loadoutupdated %u\n", clientNum);
 	cmdfuncs->AddText(cmd, false);
 }
 
