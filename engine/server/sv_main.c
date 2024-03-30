@@ -1292,9 +1292,12 @@ static void SVC_Status (void)
 }
 
 #if 1//def NQPROT
-const char *SV_GetProtocolVersionString(void)
+const char *SV_GetProtocolVersionString(int dpmasterbullshit)
 {
 	char *ret = va("%i", com_protocolversion.ival);	//for compat with DP, this is basically locked at 3. our pexts allow this to be mostly graceful.
+	
+	if (dpmasterbullshit) // early out to not break dpmaster
+		return ret;
 
 	switch(svs.gametype)
 	{
@@ -1384,7 +1387,7 @@ static void SVC_GetInfo (const char *challenge, int fullstatus)
 		*resp = 0;
 		Info_SetValueForKey(resp, "challenge", challenge, sizeof(response) - (resp-response));	//the challenge can be important for the master protocol to prevent poisoning
 		Info_SetValueForKey(resp, "gamename", protocolname, sizeof(response) - (resp-response));//distinguishes it from other types of games
-		Info_SetValueForKey(resp, "protocol", SV_GetProtocolVersionString(), sizeof(response) - (resp-response));
+		Info_SetValueForKey(resp, "protocol", SV_GetProtocolVersionString(true), sizeof(response) - (resp-response));
 		Info_SetValueForKey(resp, "modname", FS_GetGamedir(true), sizeof(response) - (resp-response));
 		Info_SetValueForKey(resp, "clients", va("%d", numclients), sizeof(response) - (resp-response));
 		Info_SetValueForKey(resp, "sv_maxclients", maxclients.string, sizeof(response) - (resp-response));
