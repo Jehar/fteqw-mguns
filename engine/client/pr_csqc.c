@@ -7413,6 +7413,7 @@ static struct {
 	{"memsetval",				PF_memsetval,				389},
 	{"memptradd",				PF_memptradd,				390},
 	{"memstrsize",				PF_memstrsize,				0},
+	{"memcmp",					PF_memcmp,					0},
 	{"base64encode",			PF_base64encode,			0},
 	{"base64decode",			PF_base64decode,			0},
 

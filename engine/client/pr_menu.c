@@ -2561,6 +2561,7 @@ static struct {
 	{"memsetval",				PF_memsetval,				389},
 	{"memptradd",				PF_memptradd,				390},
 	{"memstrsize",				PF_memstrsize,				0},
+	{"memcmp",					PF_memcmp,					0},
 	{"con_getset",				PF_SubConGetSet,			391},
 	{"con_printf",				PF_SubConPrintf,			392},
 	{"con_draw",				PF_SubConDraw,				393},

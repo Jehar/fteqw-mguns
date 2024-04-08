@@ -2074,6 +2074,26 @@ void QCBUILTIN PF_memstrsize(pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 	G_FLOAT(OFS_RETURN) = strlen(PR_GetStringOfs(prinst, OFS_PARM0));
 }
 
+void QCBUILTIN PF_memcmp (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals)
+{
+	int s1 = G_INT(OFS_PARM0);
+	int s2 = G_INT(OFS_PARM1);
+	int size = G_INT(OFS_PARM2);
+	if (size < 0 || size > prinst->stringtablesize)
+		PR_BIError(prinst, "PF_memcmp: invalid size\n");
+	else if (s1 < 0 || s1+size > prinst->stringtablesize)
+		PR_BIError(prinst, "PF_memcmp: invalid s1\n");
+	else if (s2 < 0 || s2+size > prinst->stringtablesize)
+		PR_BIError(prinst, "PF_memcmp: invalid s2\n");
+	else
+	{
+		G_INT(OFS_RETURN) = memcmp(prinst->stringtable + s1, prinst->stringtable + s2, size);
+		return;
+	}
+
+	G_INT(OFS_RETURN) = 0;
+}
+
 //memory stuff
 ////////////////////////////////////////////////////
 //hash table stuff

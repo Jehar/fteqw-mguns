@@ -587,6 +587,7 @@ void QCBUILTIN PF_memgetval	(pubprogfuncs_t *prinst, struct globalvars_s *pr_glo
 void QCBUILTIN PF_memsetval	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memptradd	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_memstrsize(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
+void QCBUILTIN PF_memcmp 	(pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 
 void QCBUILTIN PF_soundlength (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
 void QCBUILTIN PF_calltimeofday (pubprogfuncs_t *prinst, struct globalvars_s *pr_globals);
