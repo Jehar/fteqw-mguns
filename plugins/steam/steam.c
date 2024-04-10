@@ -388,11 +388,11 @@ int PIPE_WriteCharArray(char *dat, unsigned long size)
 #define FP_ID_CLC		0x0100
 typedef struct fragpacket_s
 {
-	int				id;				// which uid is this fragmented packet
+	uint32_t		id;				// which uid is this fragmented packet
 	byte			totalpieces;	// how many pieces do we need to fully read it
 	byte			transmitted;	// how many have we recieved?
 	void*			chunks[0xFF];
-	int				chunks_size[0xFF];
+	uint32_t		chunks_size[0xFF];
 	struct fragpacket_s	*next;
 } fragpacket_t;
 
@@ -463,10 +463,12 @@ void FragPacket_Finalize(fragpacket_t *packet)
 	msgfuncs->BeginReading(&msgbuf, msg_nullnetprim);
 	if (packet->id & FP_ID_CLC)
 	{
-		client_t client;
+		client_t *client;
 		if (worldfuncs->GetClient)
 		{	
-			Network_ReadCLC(worldfuncs->GetClient(packet->id >> 16));
+			client = worldfuncs->GetClient(packet->id >> 16);
+			Con_Printf("frag packet client (%s): %i vs %i\n", client->name, worldfuncs->GetSlot(client), packet->id >> 16);
+			Network_ReadCLC(client);
 		}
 		else
 		{
@@ -1262,7 +1264,7 @@ void Network_ReadCLC(client_t *client) // server reading message from client
 	int sz;
 	char steamid[64];
 	int msg = msgfuncs->ReadByte();
-	Con_Printf("steam clc %i\n", msg);
+	Con_Printf("steam clc %i from %i (%s)\n", msg, worldfuncs->GetSlot(client) + 1, client->name);
 	switch (msg)
 	{
 	case clcsteam_fragpacket:;
@@ -1271,7 +1273,7 @@ void Network_ReadCLC(client_t *client) // server reading message from client
 		int id;
 		
 		id = msgfuncs->ReadByte() | FP_ID_CLC;
-		id |= (worldfuncs->GetSlot(client)) << 16; // encode player slot into id
+		id |= (uint32_t)(worldfuncs->GetSlot(client)) << 16u; // encode player slot into id
 		chunkindex = msgfuncs->ReadByte();
 		
 		packet = FragPacket_Find(id);
