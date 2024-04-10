@@ -69,19 +69,19 @@ enum svcommands
 
 
 float PIPE_ReadFloat(void);
-signed long PIPE_ReadLong(void);
-long long PIPE_ReadLongLong(void);
-signed short PIPE_ReadShort(void);
-unsigned char PIPE_ReadByte(void);
+uint32_t PIPE_ReadLong(void);
+uint64_t PIPE_ReadLongLong(void);
+int16_t PIPE_ReadShort(void);
+uint8_t PIPE_ReadByte(void);
 int PIPE_ReadString(char *buff);
-void PIPE_ReadCharArray(char *into, unsigned long *size);
+void PIPE_ReadCharArray(char *into, uint32_t *size);
 int PIPE_WriteFloat(float dat_float);
-int PIPE_WriteLong(signed long dat);
-int PIPE_WriteLongLong(long long dat);
-int PIPE_WriteShort(signed short dat);
-int PIPE_WriteByte(unsigned char dat);
+int PIPE_WriteLong(uint32_t dat);
+int PIPE_WriteLongLong(uint64_t dat);
+int PIPE_WriteShort(int16_t dat);
+int PIPE_WriteByte(uint8_t dat);
 int PIPE_WriteString(char* str);
-int PIPE_WriteCharArray(char *dat, unsigned long size);
+int PIPE_WriteCharArray(char *dat, uint32_t size);
 
 
 

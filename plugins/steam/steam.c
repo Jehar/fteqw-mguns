@@ -126,7 +126,7 @@ static PipeType GPipeWrite = NULLPIPE;
 static int initPipes(void)
 {
 	char buf[64];
-	unsigned long long val;
+	uint64_t val;
 
 	if (!getEnvVar("STEAMSHIM_READHANDLE", buf, sizeof(buf)))
 	{
@@ -181,7 +181,7 @@ pipebuff_t pipeSendBuffer;
 
 int PIPE_SendData()
 {
-	unsigned long bytes_written;
+	uint32_t bytes_written;
 	int succ = writePipe(GPipeWrite, pipeSendBuffer.data, pipeSendBuffer.cursize);
 
 	if (succ)
@@ -204,9 +204,9 @@ float PIPE_ReadFloat()
 }
 
 
-signed long PIPE_ReadLong()
+uint32_t PIPE_ReadLong()
 {
-	signed long dat;
+	uint32_t dat;
 	int succ = readPipe(GPipeRead, &dat, 4);
 	if (!succ)
 	{
@@ -217,9 +217,9 @@ signed long PIPE_ReadLong()
 }
 
 
-long long PIPE_ReadLongLong()
+uint64_t PIPE_ReadLongLong()
 {
-	long long dat;
+	uint64_t dat;
 	int succ = readPipe(GPipeRead, &dat, 8);
 	if (!succ)
 	{
@@ -230,9 +230,9 @@ long long PIPE_ReadLongLong()
 }
 
 
-signed short PIPE_ReadShort()
+int16_t PIPE_ReadShort()
 {
-	signed short dat;
+	int16_t dat;
 	int succ = readPipe(GPipeRead, &dat, 2);
 	if (!succ)
 	{
@@ -258,7 +258,7 @@ byte PIPE_ReadByte()
 
 int PIPE_ReadString(char *buff)
 {
-	unsigned long amount_written;
+	uint32_t amount_written;
 
 	int i;
 	for (i = 0; i < MAX_STRING; i++)
@@ -273,7 +273,7 @@ int PIPE_ReadString(char *buff)
 }
 
 
-void PIPE_ReadCharArray(char *into, unsigned long *size)
+void PIPE_ReadCharArray(char *into, uint32_t *size)
 {
 	*size = (unsigned long)PIPE_ReadShort();
 	int succ = readPipe(GPipeRead, into, *size);
@@ -289,8 +289,8 @@ void PIPE_ReadCharArray(char *into, unsigned long *size)
 
 int PIPE_WriteFloat(float dat_float)
 {
-	long dat;
-	memcpy(&dat, &dat_float, sizeof(long));
+	int32_t dat;
+	memcpy(&dat, &dat_float, sizeof(int32_t));
 
 	int seek = pipeSendBuffer.cursize;
 	pipeSendBuffer.data[seek] = dat & 0xFF;
@@ -304,7 +304,7 @@ int PIPE_WriteFloat(float dat_float)
 }
 
 
-int PIPE_WriteLong(signed long dat)
+int PIPE_WriteLong(uint32_t dat)
 {
 	int seek = pipeSendBuffer.cursize;
 	pipeSendBuffer.data[seek] = dat & 0xFF;
@@ -318,7 +318,7 @@ int PIPE_WriteLong(signed long dat)
 }
 
 
-int PIPE_WriteLongLong(long long dat)
+int PIPE_WriteLongLong(uint64_t dat)
 {
 	int seek = pipeSendBuffer.cursize;
 	pipeSendBuffer.data[seek] = dat & 0xFF;
@@ -336,7 +336,7 @@ int PIPE_WriteLongLong(long long dat)
 }
 
 
-int PIPE_WriteShort(signed short dat)
+int PIPE_WriteShort(int16_t dat)
 {
 	int seek = pipeSendBuffer.cursize;
 	pipeSendBuffer.data[seek] = dat & 0xFF;
@@ -348,7 +348,7 @@ int PIPE_WriteShort(signed short dat)
 }
 
 
-int PIPE_WriteByte(unsigned char dat)
+int PIPE_WriteByte(uint8_t dat)
 {
 	int seek = pipeSendBuffer.cursize;
 	pipeSendBuffer.data[seek] = dat;
@@ -372,9 +372,9 @@ int PIPE_WriteString(char* str)
 }
 
 
-int PIPE_WriteCharArray(char *dat, unsigned long size)
+int PIPE_WriteCharArray(char *dat, uint32_t size)
 {
-	PIPE_WriteShort((signed short)size);
+	PIPE_WriteShort((int16_t)size);
 
 	int seek = pipeSendBuffer.cursize;
 	memcpy(&(pipeSendBuffer.data[seek]), dat, size);
@@ -401,7 +401,7 @@ fragpacket_t *fragpacketlist;
 byte sv_fragid[MAX_CLIENTS];
 byte cl_fragid;
 
-fragpacket_t* FragPacket_Find(unsigned long id)
+fragpacket_t* FragPacket_Find(uint32_t id)
 {
 	fragpacket_t *list, *newfp;
 	for (list = fragpacketlist; list; list = list->next)
@@ -758,7 +758,7 @@ extern qboolean VARGS Q_snprintfz(char *dest, size_t size, const char *fmt, ...)
 void Steam_Auth_Retrieved(void)
 {
 	char token[1024];
-	unsigned long sz;
+	uint32_t sz;
 	PIPE_ReadCharArray(token, &sz);
 
 	Con_Printf("Auth ticket of %i size recieved\n", (int)sz);
@@ -827,8 +827,8 @@ void Steam_Print(void)
 
 typedef struct
 {
-	unsigned long long itemInstance;
-	unsigned long itemDefinition;
+	uint64_t itemInstance;
+	uint32_t itemDefinition;
 } inventoryItem_t;
 
 unsigned short inventoryArraySize;
@@ -863,10 +863,10 @@ void Steam_Inventory_ItemList(void)
 		
 		//Q_snprintf(cmd, MAX_STRING, "steam_igame_itemlist %lu %llu\n", item->itemDefinition, item->itemInstance);
 		//cmdfuncs->AddText(cmd, false);
-		Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemlist %i %li\n", (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
+		Q_snprintf(cmd, MAX_STRING, "menu_cmd steam_imenu_itemlist %u %llu\n", (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
 		cmdfuncs->AddText(cmd, false);
 
-		Con_Printf("^xff9Item #%i: %i %li\n", i, (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
+		Con_Printf("^xff9Item #%i: %u %llu\n", i, (uint32_t)item->itemDefinition, (uint64_t)item->itemInstance);
 	}
 }
 
@@ -908,9 +908,9 @@ void Steam_Inventory_InstanceProperty(void)
 	//Con_Printf("%s: %s\n", propertyname, propertyvalue);
 }
 
-char inv_clientSerial[4096];
-unsigned long inv_clientSerialSize;
-unsigned long long inv_clientLoadout[MAX_LOADOUT];
+uint8_t inv_clientSerial[4096];
+uint32_t inv_clientSerialSize;
+uint64_t inv_clientLoadout[MAX_LOADOUT];
 byte inv_clientLoadoutSize;
 void Inventory_FlushLoadout(void)
 {
@@ -918,7 +918,7 @@ void Inventory_FlushLoadout(void)
 	inv_clientLoadoutSize = 0;
 }
 
-void Inventory_AddToLoadout(unsigned long long instanceid)
+void Inventory_AddToLoadout(uint64_t instanceid)
 {
 	int i = 0;
 	do
@@ -950,7 +950,7 @@ void Steam_Inventory_LocalSerial(void)
 	PIPE_ReadCharArray(inv_clientSerial, &inv_clientSerialSize);
 	Con_Printf("serial recieved of size %lu\n", inv_clientSerialSize);
 
-	byte data[2048];
+	byte data[8192] = {0};
 	sizebuf_t message;
 	memset(&message, 0, sizeof(sizebuf_t));
 	message.allowoverflow = false;
@@ -976,8 +976,8 @@ void Steam_Invetory_SetClientLoadout(void)
 
 	for (int i = 0; i < arraySize; i++)
 	{
-		unsigned long int itm = PIPE_ReadLong();
-		unsigned long long inst = PIPE_ReadLongLong();
+		uint32_t itm = PIPE_ReadLong();
+		uint64_t inst = PIPE_ReadLongLong();
 		Q_snprintf(cmd, MAX_STRING, "sv_cmd steam_igame_loadoutadd %i %lu %llu\n", clientNum, itm, inst);
 		cmdfuncs->AddText(cmd, false);
 	}
@@ -994,7 +994,7 @@ void Steam_Inventory_LoadoutUpdated()
 void Steam_Inventory_NewItem()
 {
 	char cmd[MAX_STRING];
-	unsigned long itemid;
+	uint32_t itemid;
 	char itemName[MAX_STRING];
 
 	itemid = PIPE_ReadLong();
@@ -1337,7 +1337,7 @@ void Network_ReadCLC(client_t *client) // server reading message from client
 		PIPE_WriteByte(CL_INV_UPDATECLIENT);
 		PIPE_WriteByte(worldfuncs->GetSlot(client) + 1);
 		PIPE_WriteCharArray(dat, sz);
-
+		
 		Con_Printf("got clcsteam_loadoutserial with %i bytes of data\n", sz);
 		Con_Printf("sending CL_INV_UPDATECLIENT for %i\n", worldfuncs->GetSlot(client) + 1);
 		break;
