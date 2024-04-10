@@ -1655,7 +1655,6 @@ void CL_SendDataCommand(qboolean reliable, void *data, int length)
 
 client_t* Plug_SV_GetClient(int slot)
 {
-	return svs.clients;
 	slot = bound(0, slot, svs.allocated_client_slots - 1);
 	return &(svs.clients[slot]);
 }
