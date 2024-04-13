@@ -601,8 +601,9 @@ void MSG_SendToServer(qboolean reliable, sizebuf_t *msgbuf)
 		return;
 	}
 
-	byte data[2048];
+	byte data[512];
 	sizebuf_t message;
+	memset(&message, 0, sizeof(sizebuf_t));
 	message.allowoverflow = true;
 	message.maxsize = sizeof(data);
 	message.data = data;
@@ -950,17 +951,18 @@ void Steam_Inventory_LocalSerial(void)
 	PIPE_ReadCharArray(inv_clientSerial, &inv_clientSerialSize);
 	Con_Printf("serial recieved of size %lu\n", inv_clientSerialSize);
 
-	byte data[8192] = {0};
+	byte *data = malloc(inv_clientSerialSize + 8);
 	sizebuf_t message;
 	memset(&message, 0, sizeof(sizebuf_t));
 	message.allowoverflow = false;
-	message.maxsize = sizeof(data);
+	message.maxsize = inv_clientSerialSize + 8;
 	message.data = data;
 
 	msgfuncs->WriteByte(&message, clcsteam_loadoutserial);
 	msgfuncs->WriteShort(&message, inv_clientSerialSize);
 	msgfuncs->WriteData(&message, &inv_clientSerial, inv_clientSerialSize);
 	MSG_SendToServer(true, &message);
+	free(data);
 }
 
 void Steam_Invetory_SetClientLoadout(void)
