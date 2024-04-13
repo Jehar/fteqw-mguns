@@ -26,6 +26,7 @@ enum cl_packets
 	CL_INV_CLIENTLOADOUT,
 	CL_INV_GRANTITEM,
 	CL_INV_TIMEDROP,
+	CL_RICHPRESCENSE,
 	CL_MAX,
 };
 
@@ -66,7 +67,22 @@ enum svcommands
 	svcsteam_playtimedrop,
 };
 
+enum richpresencetypes
+{
+	RP_STATE,
+	RP_SCORE,
+	RP_SERVER,
+};
 
+enum richpresencestates
+{
+	RPSTATE_MENU,
+	RPSTATE_MULTIPLAYER,
+	RPSTATE_MULTIPLAYER_WARMUP,
+	RPSTATE_MULTIPLAYER_RANKED,
+	RPSTATE_SINGLEPLAYER,
+	RPSTATE_COOP,
+};
 
 float PIPE_ReadFloat(void);
 uint32_t PIPE_ReadLong(void);

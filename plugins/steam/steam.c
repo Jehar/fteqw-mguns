@@ -1247,6 +1247,45 @@ void Steam_ExecuteCommand()
 		Con_Printf("sending CL_INV_GRANTITEM\n");
 		return;
 	}
+	else if (!strcmp(cmd, "steam_richsetstate"))
+	{
+		char buf[64];
+		PIPE_WriteByte(CL_RICHPRESCENSE);
+		PIPE_WriteByte(RP_STATE);
+
+		cmdfuncs->Argv(1, buf, sizeof(buf));
+		PIPE_WriteByte(atoi(buf));
+	}
+	else if (!strcmp(cmd, "steam_richsetscore"))
+	{
+		char buf[64];
+		PIPE_WriteByte(CL_RICHPRESCENSE);
+		PIPE_WriteByte(RP_SCORE);
+
+		cmdfuncs->Argv(1, buf, sizeof(buf));
+		PIPE_WriteShort(atoi(buf));
+
+		cmdfuncs->Argv(2, buf, sizeof(buf));
+		PIPE_WriteShort(atoi(buf));
+	}
+	else if (!strcmp(cmd, "steam_richsetserver"))
+	{
+		char buf[128];
+		PIPE_WriteByte(CL_RICHPRESCENSE);
+		PIPE_WriteByte(RP_SERVER);
+
+		cmdfuncs->Argv(1, buf, sizeof(buf));
+		PIPE_WriteString(buf);
+
+		cmdfuncs->Argv(2, buf, sizeof(buf));
+		PIPE_WriteByte(atoi(buf));
+
+		cmdfuncs->Argv(3, buf, sizeof(buf));
+		PIPE_WriteString(buf);
+
+		cmdfuncs->Argv(4, buf, sizeof(buf));
+		PIPE_WriteString(buf);
+	}
 }
 
 
@@ -1520,6 +1559,9 @@ qboolean Plug_Init(void)
 	cmdfuncs->AddCommand("steam_iloadout_getserial", Steam_ExecuteCommand, NULL);
 	cmdfuncs->AddCommand("steam_igame_getloadout", Steam_ExecuteCommand, NULL);
 	cmdfuncs->AddCommand("steam_igrantitem", Steam_ExecuteCommand, NULL);
+	cmdfuncs->AddCommand("steam_richsetstate", Steam_ExecuteCommand, NULL);
+	cmdfuncs->AddCommand("steam_richsetscore", Steam_ExecuteCommand, NULL);
+	cmdfuncs->AddCommand("steam_richsetserver", Steam_ExecuteCommand, NULL);
 
 	char cmd[256];
 	Q_snprintf(cmd, MAX_STRING, "set steam_connected \"1\"\n");
