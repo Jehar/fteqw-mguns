@@ -358,13 +358,23 @@ int PIPE_WriteByte(uint8_t dat)
 }
 
 
-int PIPE_WriteString(char* str)
+int PIPE_WriteString(const char* str, size_t maxsz)
 {
-	int str_length = strlen(str);
+	int str_length = strnlen(str, maxsz);
+	if (str_length <= 0)
+	{
+		PIPE_WriteByte(0);
+		return false;
+	}
+
+	// write string to out buffer
 	memcpy(&(pipeSendBuffer.data[pipeSendBuffer.cursize]), str, str_length);
 
-	if (str[str_length - 1] != NULL)
-		pipeSendBuffer.data[pipeSendBuffer.cursize + str_length] = NULL; str_length++;
+	if (str[str_length - 1] != 0)
+	{
+		pipeSendBuffer.data[pipeSendBuffer.cursize + str_length] = 0;
+		str_length++;
+	}
 
 	pipeSendBuffer.cursize += str_length;
 
@@ -372,7 +382,7 @@ int PIPE_WriteString(char* str)
 }
 
 
-int PIPE_WriteCharArray(char *dat, uint32_t size)
+int PIPE_WriteCharArray(const char *dat, uint32_t size)
 {
 	PIPE_WriteShort((int16_t)size);
 
@@ -1081,7 +1091,7 @@ void Steam_ExecuteCommand()
 
 		PIPE_WriteByte(CL_CONNECTSERVER);
 		PIPE_WriteByte(1);
-		PIPE_WriteString(steamid);
+		PIPE_WriteString(steamid, sizeof(steamid));
 		Con_Printf("sending CL_CONNECTSERVER\n");
 
 		
@@ -1131,7 +1141,7 @@ void Steam_ExecuteCommand()
 
 				PIPE_WriteByte(CL_AUTH_VALIDATE);
 				PIPE_WriteByte(entnum);
-				PIPE_WriteString(steamid);
+				PIPE_WriteString(steamid, sizeof(steamid));
 				Con_Printf("sending CL_AUTH_VALIDATE\n");
 
 				PIPE_WriteCharArray(dat, length);
@@ -1154,20 +1164,8 @@ void Steam_ExecuteCommand()
 		cmdfuncs->Argv(1, steamid, sizeof(steamid));
 
 		PIPE_WriteByte(CL_PLAYINGWITH);
-		PIPE_WriteString(steamid);
-		Con_Printf("sending CL_PLAYINGWITH\n");
-
-
-		return;
-	}
-	else if (!strcmp(cmd, "steam_playingwith"))
-	{
-		char steamid[64];
-		cmdfuncs->Argv(1, steamid, sizeof(steamid));
-
-		PIPE_WriteByte(CL_PLAYINGWITH);
-		PIPE_WriteString(steamid);
-		Con_Printf("sending CL_PLAYINGWITH\n");
+		PIPE_WriteString(steamid, sizeof(steamid));
+		Con_Printf("sending CL_PLAYINGWITH %s\n", steamid);
 
 
 		return;
@@ -1187,7 +1185,7 @@ void Steam_ExecuteCommand()
 		PIPE_WriteLong(atoi(buf));
 
 		cmdfuncs->Argv(2, buf, sizeof(buf));
-		PIPE_WriteString(buf);
+		PIPE_WriteString(buf, sizeof(buf));
 
 		Con_Printf("sending CL_INV_GETPROPERTY\n");
 		return;
@@ -1203,7 +1201,7 @@ void Steam_ExecuteCommand()
 		PIPE_WriteLongLong(atoll(buf));
 
 		cmdfuncs->Argv(2, buf, sizeof(buf));
-		PIPE_WriteString(buf);
+		PIPE_WriteString(buf, sizeof(buf));
 
 		Con_Printf("sending CL_INV_GETINSTANCEPROPERTY\n");
 		return;
@@ -1271,20 +1269,21 @@ void Steam_ExecuteCommand()
 	else if (!strcmp(cmd, "steam_richsetserver"))
 	{
 		char buf[128];
+		memset(buf, 0, sizeof(buf));
 		PIPE_WriteByte(CL_RICHPRESCENSE);
 		PIPE_WriteByte(RP_SERVER);
-
+		
 		cmdfuncs->Argv(1, buf, sizeof(buf));
-		PIPE_WriteString(buf);
+		PIPE_WriteString(buf, sizeof(buf));
 
 		cmdfuncs->Argv(2, buf, sizeof(buf));
 		PIPE_WriteByte(atoi(buf));
 
 		cmdfuncs->Argv(3, buf, sizeof(buf));
-		PIPE_WriteString(buf);
+		PIPE_WriteString(buf, sizeof(buf));
 
 		cmdfuncs->Argv(4, buf, sizeof(buf));
-		PIPE_WriteString(buf);
+		PIPE_WriteString(buf, sizeof(buf));
 	}
 }
 
@@ -1351,7 +1350,7 @@ void Network_ReadCLC(client_t *client) // server reading message from client
 		break;
 
 	case clcsteam_steamid:;
-		PIPE_WriteString(steamid);
+		PIPE_WriteString(steamid, sizeof(steamid));
 		break;
 
 	case clcsteam_auth:;
@@ -1364,7 +1363,7 @@ void Network_ReadCLC(client_t *client) // server reading message from client
 		///*
 		PIPE_WriteByte(CL_AUTH_VALIDATE);
 		PIPE_WriteByte(worldfuncs->GetSlot(client) + 1);
-		PIPE_WriteString(steamid);
+		PIPE_WriteString(steamid, sizeof(steamid));
 		PIPE_WriteCharArray(dat, sz);
 		Con_Printf("sending CL_AUTH_VALIDATE for %i\n", worldfuncs->GetSlot(client) + 1);
 		//*/
@@ -1425,7 +1424,7 @@ void Network_ReadSVC() // client reading message from server
 
 		PIPE_WriteByte(CL_CONNECTSERVER);
 		PIPE_WriteByte(1);
-		PIPE_WriteString(steamid);
+		PIPE_WriteString(steamid, sizeof(steamid));
 		Con_Printf("sending CL_CONNECTSERVER\n");
 
 

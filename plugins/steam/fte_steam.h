@@ -96,8 +96,8 @@ int PIPE_WriteLong(uint32_t dat);
 int PIPE_WriteLongLong(uint64_t dat);
 int PIPE_WriteShort(int16_t dat);
 int PIPE_WriteByte(uint8_t dat);
-int PIPE_WriteString(char* str);
-int PIPE_WriteCharArray(char *dat, uint32_t size);
+int PIPE_WriteString(const char *str, size_t maxsz);
+int PIPE_WriteCharArray(const char *dat, uint32_t size);
 
 
 
