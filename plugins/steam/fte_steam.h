@@ -1,7 +1,7 @@
 #pragma once
 
 
-#define MAX_BUFFSIZE	8192
+#define MAX_BUFFSIZE	16384
 #define MAX_STRING		256
 
 #define MAX_LOADOUT		16

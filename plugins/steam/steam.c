@@ -183,9 +183,7 @@ int PIPE_SendData()
 {
 	uint32_t bytes_written;
 	int succ = writePipe(GPipeWrite, pipeSendBuffer.data, pipeSendBuffer.cursize);
-
-	if (succ)
-		pipeSendBuffer.cursize = 0;
+	pipeSendBuffer.cursize = 0;
 
 	return succ;
 }
@@ -370,13 +368,9 @@ int PIPE_WriteString(const char* str, size_t maxsz)
 	// write string to out buffer
 	memcpy(&(pipeSendBuffer.data[pipeSendBuffer.cursize]), str, str_length);
 
-	if (str[str_length - 1] != 0)
-	{
-		pipeSendBuffer.data[pipeSendBuffer.cursize + str_length] = 0;
-		str_length++;
-	}
-
 	pipeSendBuffer.cursize += str_length;
+	if (str_length >= maxsz) // make sure we null terminate
+		pipeSendBuffer.data[pipeSendBuffer.cursize - 1] = 0;
 
 	return true;
 }
