@@ -183,7 +183,9 @@ int PIPE_SendData()
 {
 	uint32_t bytes_written;
 	int succ = writePipe(GPipeWrite, pipeSendBuffer.data, pipeSendBuffer.cursize);
-	pipeSendBuffer.cursize = 0;
+	
+	//if (succ)
+		pipeSendBuffer.cursize = 0;
 
 	return succ;
 }
@@ -358,19 +360,14 @@ int PIPE_WriteByte(uint8_t dat)
 
 int PIPE_WriteString(const char* str, size_t maxsz)
 {
-	int str_length = strnlen(str, maxsz);
-	if (str_length <= 0)
+	int slength = strnlen(str, maxsz);
+	int i;
+	for(i = 0; i < slength; i++)
 	{
-		PIPE_WriteByte(0);
-		return false;
+		pipeSendBuffer.data[pipeSendBuffer.cursize + i] = str[i];
 	}
-
-	// write string to out buffer
-	memcpy(&(pipeSendBuffer.data[pipeSendBuffer.cursize]), str, str_length);
-
-	pipeSendBuffer.cursize += str_length;
-	if (str_length >= maxsz) // make sure we null terminate
-		pipeSendBuffer.data[pipeSendBuffer.cursize - 1] = 0;
+	pipeSendBuffer.data[pipeSendBuffer.cursize + i] = 0;
+	pipeSendBuffer.cursize += slength + 1;
 
 	return true;
 }
@@ -1050,6 +1047,8 @@ void Steam_Tick(int *args)
 		unsigned char index = PIPE_ReadByte();
 		while (index != 255)
 		{
+			//Con_Printf("reading server command %i\n", (int)index);
+
 			if (index < SV_MAX)
 			{
 				func_readarray[index]();
@@ -1059,7 +1058,7 @@ void Steam_Tick(int *args)
 		}
 	}
 	
-
+	
 	// this we can just do as needed, shouldn't be too bad.
 	if (pipeSendBuffer.cursize)
 	{
@@ -1172,7 +1171,7 @@ void Steam_ExecuteCommand()
 	}
 	else if (!strcmp(cmd, "steam_ifetchproperty"))
 	{
-		char buf[64];
+		char buf[128];
 		PIPE_WriteByte(CL_INV_GETPROPERTY);
 
 		cmdfuncs->Argv(1, buf, sizeof(buf));
