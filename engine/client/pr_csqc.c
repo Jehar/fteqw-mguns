@@ -9388,6 +9388,21 @@ qboolean CSQC_ConsoleLink(char *text, char *info)
 	return G_FLOAT(OFS_RETURN);
 }
 
+const char* CSQC_ParseSay(int seat, const char *msg)
+{
+	void *pr_globals;
+	if (!csqcprogs || !csqcg.CSQC_ParseSay)
+		return msg;
+
+	pr_globals = PR_globals(csqcprogs, PR_CURRENT);
+	(((string_t *)pr_globals)[OFS_PARM0] = PR_TempString(csqcprogs, msg));
+
+	PR_ExecuteProgram(csqcprogs, csqcg.CSQC_ParseSay);
+
+	const char *parsedmsg = PR_GetStringOfs(csqcprogs, OFS_RETURN);
+	return parsedmsg;
+}
+
 qboolean CSQC_ConsoleCommand(int seat, const char *cmd)
 {
 	void *pr_globals;

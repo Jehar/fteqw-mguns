@@ -1482,6 +1482,7 @@ void	 CSQC_Input_Frame(int seat, usercmd_t *cmd);
 void	 CSQC_WorldLoaded(void);
 qboolean CSQC_ParseTempEntity(void);
 qboolean CSQC_ConsoleCommand(int seat, const char *cmd);
+const char* CSQC_ParseSay(int seat, const char *message);
 qboolean CSQC_KeyPress(int key, int unicode, qboolean down, unsigned int devid);
 qboolean CSQC_MouseMove(float xdelta, float ydelta, unsigned int devid);
 qboolean CSQC_MousePosition(float xabs, float yabs, unsigned int devid);

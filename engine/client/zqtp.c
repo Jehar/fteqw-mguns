@@ -676,7 +676,7 @@ static char *Macro_Powerups (void)
 
 static char *Macro_Location (void)
 {
-	return TP_LocationName (cl.playerview[SP].simorg);
+	return TP_LocationName (cl.playerview[SP].audio.origin);
 }
 
 #ifdef QUAKESTATS
@@ -3762,7 +3762,7 @@ void CL_PrintChat(player_info_t *plr, char *msg, int plrflags);
 void CL_Say (qboolean team, char *extra)
 {
 	extern cvar_t cl_fakename;
-	char	text[2048], sendtext[2048], *s;
+	char	text[2048], sendtext[2048], *s, *s_csqc;
 	playerview_t *pv = &cl.playerview[CL_TargettedSplit(false)];
 
 	if (Cmd_Argc() < 2)
@@ -3779,8 +3779,9 @@ void CL_Say (qboolean team, char *extra)
 	}
 
 	suppress = false;
-
-	s = TP_ParseMacroString (Cmd_Args());
+	
+	s_csqc = CSQC_ParseSay(CL_TargettedSplit(false), Cmd_Args());
+	s = TP_ParseMacroString (s_csqc);
 	Q_strncpyz (text, TP_ParseFunChars (s), sizeof(text));
 
 	sendtext[0] = 0;

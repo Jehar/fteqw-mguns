@@ -1065,6 +1065,7 @@ enum
 	globalfunction(CSQC_Input_Frame,		"void()")/*EXT_CSQC_1*/	\
 	globalfunction(CSQC_RendererRestarted,	"void(string rendererdescription)")	\
 	globalfunction(CSQC_ConsoleCommand,		"float(string cmd)")	\
+	globalfunction(CSQC_ParseSay,			"string(string cmd)")	\
 	globalfunction(CSQC_ConsoleLink,		"float(string text, string info)")	\
 	globalfunction(GameCommand,				"void(string cmdtext)")	/*DP extension*/\
 	\
