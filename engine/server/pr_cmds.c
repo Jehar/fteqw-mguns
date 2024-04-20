@@ -12087,6 +12087,7 @@ static BuiltinList_t BuiltinList[] = {				//nq	qw		h2		ebfs
 	{"memsetval",		PF_memsetval,		0,		0,		0,		389,	D("void(__variant *dst, float ofs, __variant val)", "Changes the 32bit value stored at the specified pointer-with-offset.")},
 	{"memptradd",		PF_memptradd,		0,		0,		0,		390,	D("__variant*(__variant *base, float ofs)", "Perform some pointer maths. Woo.")},
 	{"memstrsize",		PF_memstrsize,		0,		0,		0,		0,		D("float(string s)", "strlen, except ignores utf-8")},
+	{"memcmp",			PF_memcmp,			0,		0,		0,		0,		D("int(__variant *s1, __variant *s2, int size)", "memcmp")},
 	{"base64encode",	PF_base64encode,	0,		0,		0,		0,		D("string(__variant *ptr, int bytes, optional int offset)", "Returns a copy of a binary blob encoded as a base64 temp-string (uses + and /, so be sure to include quotes).")},
 	{"base64decode",	PF_base64decode,	0,		0,		0,		0,		D("__variant*(string base64str, __out int bytes)", "Decodes a base64, returning a new block of memory that can must be freed with memfree.")},
 
